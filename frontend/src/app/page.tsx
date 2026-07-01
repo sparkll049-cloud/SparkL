@@ -2,6 +2,8 @@ import Navbar from "@/components/layout/navbar";
 import HeroSection from "@/components/home/herosection";
 import StatsSection from "@/components/home/statsection";
 import HowItWorks from "@/components/home/howitworks";
+import TrendingTopics from "@/components/home/trendingtopics";
+import Testimonial from "@/components/home/testimonial";
 
 export default function Home() {
   return (
@@ -10,6 +12,8 @@ export default function Home() {
       <HeroSection />
       <StatsSection />
       <HowItWorks />
+      <TrendingTopics />
+      <Testimonial />
     </>
   );
 }
