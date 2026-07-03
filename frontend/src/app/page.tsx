@@ -4,6 +4,7 @@ import StatsSection from "@/components/home/statsection";
 import HowItWorks from "@/components/home/howitworks";
 import TrendingTopics from "@/components/home/trendingtopics";
 import Testimonial from "@/components/home/testimonial";
+import WhyChooseUs from "@/components/home/whychooseus";
 
 export default function Home() {
   return (
@@ -14,6 +15,7 @@ export default function Home() {
       <HowItWorks />
       <TrendingTopics />
       <Testimonial />
+      <WhyChooseUs />
     </>
   );
 }
