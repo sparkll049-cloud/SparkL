@@ -60,24 +60,28 @@ export default function Navbar() {
         </nav>
 
         {/* Desktop Button */}
-        <div className="hidden md:block">
-          <Button
-            className="
-              rounded-xl
-              bg-blue-600
-              px-6
-              py-5
-              text-base
-              font-medium
-              hover:bg-blue-700
-              transition-all
-              duration-300
-              hover:scale-105
-            "
-          >
-            Sign In
-          </Button>
-        </div>
+        {/* Desktop Button */}
+<div className="hidden md:block">
+  <Button
+    asChild
+    className="
+      rounded-xl
+      bg-blue-600
+      px-6
+      py-5
+      text-base
+      font-medium
+      transition-all
+      duration-300
+      hover:scale-105
+      hover:bg-blue-700
+    "
+  >
+    <Link href="/auth">
+      Sign In
+    </Link>
+  </Button>
+</div>
 
         {/* Mobile Menu Button */}
         <button
@@ -113,9 +117,12 @@ export default function Navbar() {
               </Link>
             ))}
 
-            <Button className="mt-2 w-full rounded-lg bg-blue-600 py-5 text-base font-medium hover:bg-blue-700">
-              Sign In
-            </Button>
+            <Button
+  asChild
+  className="rounded-xl bg-blue-600 px-6 py-5 text-base font-medium transition-all duration-300 hover:scale-105 hover:bg-blue-700"
+>
+  <Link href="/auth">Sign In</Link>
+</Button>
           </div>
         </div>
       )}
