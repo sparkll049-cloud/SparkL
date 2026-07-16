@@ -75,7 +75,7 @@ export default function AuthLayout({
           <div className="relative z-10 flex justify-center">
 
             <Image
-  src="/images/auth-illustration.jpg"
+  src="/images/auth-illustration.png"
   priority
               alt="Illustration"
               width={300}
