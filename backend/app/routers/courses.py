@@ -1,0 +1,115 @@
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.auth import get_current_user
+from app.supabase_client import supabase
+
+router = APIRouter(prefix="/api/courses", tags=["courses"])
+
+
+@router.get("")
+async def list_courses(user_id: str = Depends(get_current_user)):
+    profile_res = (
+        supabase.table("profiles")
+        .select("department_id")
+        .eq("id", user_id)
+        .single()
+        .execute()
+    )
+    department_id = (profile_res.data or {}).get("department_id")
+
+    if not department_id:
+        return {"courses": [], "department_id": None}
+
+    courses_res = (
+        supabase.table("courses")
+        .select("id, name")
+        .eq("department_id", department_id)
+        .order("name")
+        .execute()
+    )
+    courses = courses_res.data or []
+    course_ids = [c["id"] for c in courses]
+
+    counts: dict[str, int] = {}
+    if course_ids:
+        pq_res = (
+            supabase.table("past_questions")
+            .select("course_id")
+            .in_("course_id", course_ids)
+            .eq("status", "approved")
+            .execute()
+        )
+        for row in pq_res.data or []:
+            counts[row["course_id"]] = counts.get(row["course_id"], 0) + 1
+
+    uc_res = (
+        supabase.table("user_courses")
+        .select("course_id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    selected_ids = {row["course_id"] for row in (uc_res.data or [])}
+
+    result = [
+        {
+            "id": c["id"],
+            "name": c["name"],
+            "question_count": counts.get(c["id"], 0),
+            "selected": c["id"] in selected_ids,
+        }
+        for c in courses
+    ]
+
+    return {"courses": result, "department_id": department_id}
+
+
+@router.get("/{course_id}")
+async def get_course_detail(course_id: str, user_id: str = Depends(get_current_user)):
+    course_res = (
+        supabase.table("courses")
+        .select("id, name, department:departments(id, name)")
+        .eq("id", course_id)
+        .single()
+        .execute()
+    )
+
+    if not course_res.data:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    course = course_res.data
+
+    count_res = (
+        supabase.table("past_questions")
+        .select("id", count="exact")
+        .eq("course_id", course_id)
+        .eq("status", "approved")
+        .execute()
+    )
+    question_count = count_res.count or 0
+
+    questions_res = (
+        supabase.table("past_questions")
+        .select("id, title, year, created_at")
+        .eq("course_id", course_id)
+        .eq("status", "approved")
+        .order("created_at", desc=True)
+        .limit(20)
+        .execute()
+    )
+    questions = questions_res.data or []
+
+    uc_res = (
+        supabase.table("user_courses")
+        .select("course_id")
+        .eq("user_id", user_id)
+        .eq("course_id", course_id)
+        .execute()
+    )
+    is_selected = len(uc_res.data or []) > 0
+
+    return {
+        "course": course,
+        "question_count": question_count,
+        "questions": questions,
+        "is_selected": is_selected,
+    }

@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
 export default function HeroSection() {
@@ -25,40 +26,48 @@ export default function HeroSection() {
             </p>
 
             <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:justify-center lg:justify-start">
-              <Button
-                className="
-                  rounded-xl
-                  bg-blue-600
-                  px-8
-                  py-7
-                  text-base
-                  hover:bg-blue-700
-                  transition-all
-                  duration-300
-                  hover:scale-105
-                "
-              >
-                Get Started
-              </Button>
+              <Link href="/auth/signup">
+                <Button
+                  className="
+                    w-full
+                    rounded-xl
+                    bg-blue-600
+                    px-8
+                    py-7
+                    text-base
+                    hover:bg-blue-700
+                    transition-all
+                    duration-300
+                    hover:scale-105
+                    sm:w-auto
+                  "
+                >
+                  Get Started
+                </Button>
+              </Link>
 
-              <Button
-                variant="outline"
-                className="
-                  rounded-xl
-                  border-2
-                  border-blue-600
-                  px-8
-                  py-7
-                  text-base
-                  text-blue-600
-                  hover:bg-blue-50
-                  transition-all
-                  duration-300
-                  hover:scale-105
-                "
-              >
-                Explore Community
-              </Button>
+              <Link href="#community">
+                <Button
+                  variant="outline"
+                  className="
+                    w-full
+                    rounded-xl
+                    border-2
+                    border-blue-600
+                    px-8
+                    py-7
+                    text-base
+                    text-blue-600
+                    hover:bg-blue-50
+                    transition-all
+                    duration-300
+                    hover:scale-105
+                    sm:w-auto
+                  "
+                >
+                  Explore Community
+                </Button>
+              </Link>
             </div>
           </div>
 

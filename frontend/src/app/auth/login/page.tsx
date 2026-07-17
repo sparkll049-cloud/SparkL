@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   Eye,
@@ -13,9 +14,59 @@ import {
 
 import AuthLayout from "@/components/auth/AuthLayout";
 import { Button } from "@/components/ui/button";
+import { createClient } from "@/utils/supabase/client";
 
 export default function LoginPage() {
+  const router = useRouter();
+  const supabase = createClient();
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const formValid = email.trim() !== "" && password.trim() !== "";
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setErrorMsg("");
+
+    if (!formValid) return;
+
+    setLoading(true);
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      setLoading(false);
+      setErrorMsg(
+        error.message === "Invalid login credentials"
+          ? "Incorrect email or password."
+          : error.message
+      );
+      return;
+    }
+
+    if (data.user) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("onboarding_completed")
+        .eq("id", data.user.id)
+        .single();
+
+      setLoading(false);
+
+      if (profile?.onboarding_completed) {
+        router.push("/dashboard");
+      } else {
+        router.push("/onboarding");
+      }
+    }
+  }
 
   return (
     <AuthLayout>
@@ -33,7 +84,7 @@ export default function LoginPage() {
 
         {/* Form */}
 
-        <form className="mt-10 space-y-6">
+        <form onSubmit={handleSubmit} className="mt-10 space-y-6">
 
           {/* Email */}
 
@@ -69,6 +120,8 @@ export default function LoginPage() {
               <input
                 type="email"
                 placeholder="Enter your email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="
                   ml-3
                   w-full
@@ -116,6 +169,8 @@ export default function LoginPage() {
               <input
                 type={showPassword ? "text" : "password"}
                 placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 className="
                   ml-3
                   w-full
@@ -164,7 +219,7 @@ export default function LoginPage() {
             </label>
 
             <Link
-              href="#"
+              href="/auth/forgot-password"
               className="
                 text-sm
                 font-medium
@@ -177,9 +232,15 @@ export default function LoginPage() {
 
           </div>
 
+          {errorMsg && (
+            <p className="text-sm text-red-500">{errorMsg}</p>
+          )}
+
           {/* Login Button */}
 
           <Button
+            type="submit"
+            disabled={!formValid || loading}
             className="
               h-14
               w-full
@@ -192,14 +253,17 @@ export default function LoginPage() {
               transition-all
               duration-300
               hover:scale-[1.02]
+              disabled:cursor-not-allowed
+              disabled:opacity-60
+              disabled:hover:scale-100
             "
           >
 
             <span className="mr-2">
-              Log in
+              {loading ? "Logging in..." : "Log in"}
             </span>
 
-            <ArrowRight size={18} />
+            {!loading && <ArrowRight size={18} />}
 
           </Button>
 

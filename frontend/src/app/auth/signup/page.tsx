@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   User,
   Mail,
@@ -16,8 +17,12 @@ import {
 import AuthLayout from "@/components/auth/AuthLayout";
 import AuthModal from "@/components/auth/AuthModal";
 import { Button } from "@/components/ui/button";
+import { createClient } from "@/utils/supabase/client";
 
 export default function SignupPage() {
+  const router = useRouter();
+  const supabase = createClient();
+
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
 
@@ -34,6 +39,10 @@ export default function SignupPage() {
 
   const [showConfirmPassword, setShowConfirmPassword] =
     useState(false);
+
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
   const emailValid =
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -59,7 +68,8 @@ export default function SignupPage() {
     hasUpperCase &&
     hasNumber &&
     hasSpecialCharacter &&
-    passwordsMatch;
+    passwordsMatch &&
+    agreedToTerms;
 
   const getPasswordStrength = () => {
     let score = 0;
@@ -92,6 +102,37 @@ export default function SignupPage() {
     };
   };
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg("");
+
+    if (!formValid) return;
+
+    setLoading(true);
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName,
+          phone: phone,
+        },
+      },
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setErrorMsg(error.message);
+      return;
+    }
+
+    if (data.user) {
+      router.push("/onboarding");
+    }
+  };
+
   return (
   <>
   <AuthLayout>
@@ -104,7 +145,7 @@ export default function SignupPage() {
             Join SparkL and start learning together.
           </p>
 
-          <form className="mt-10 space-y-5">
+          <form onSubmit={handleSubmit} className="mt-10 space-y-5">
             {/* Full Name */}
 
             <div>
@@ -344,7 +385,14 @@ export default function SignupPage() {
             {/* Terms */}
 
             <label className="flex items-start gap-3 text-sm text-slate-600">
-              <input type="checkbox" className="mt-1" />
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={agreedToTerms}
+                onChange={(e) =>
+                  setAgreedToTerms(e.target.checked)
+                }
+              />
 
               <span>
                 I agree to the{" "}
@@ -370,19 +418,24 @@ export default function SignupPage() {
               </span>
             </label>
 
+            {errorMsg && (
+              <p className="text-sm text-red-500">{errorMsg}</p>
+            )}
+
             <Button
-              disabled={!formValid}
+              type="submit"
+              disabled={!formValid || loading}
               className={`h-14 w-full rounded-xl text-base font-semibold ${
-                formValid
+                formValid && !loading
                   ? "bg-gradient-to-r from-blue-700 to-blue-500 hover:scale-[1.02]"
                   : "cursor-not-allowed bg-slate-300"
               }`}
             >
               <span className="mr-2">
-                Create Account
+                {loading ? "Creating Account..." : "Create Account"}
               </span>
 
-              <ArrowRight size={18} />
+              {!loading && <ArrowRight size={18} />}
             </Button>
           </form>
 
@@ -399,29 +452,7 @@ export default function SignupPage() {
         </div>
     </AuthLayout>
 
-    <AuthModal
-          isOpen={showTerms}
-          onClose={() =>
-            setShowTerms(false)
-          }
-          title="Terms of Service"
-        >
-          <p>
-            Your Terms of Service content goes here.
-          </p>
-        </AuthModal>
 
-        <AuthModal
-          isOpen={showPrivacy}
-          onClose={() =>
-            setShowPrivacy(false)
-          }
-          title="Privacy Policy"
-        >
-          <p>
-            Your Privacy Policy content goes here.
-          </p>
-        </AuthModal>
   </>
     
   );

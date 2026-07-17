@@ -1,207 +1,241 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
 import {
-  User,
+  GraduationCap,
+  BookOpen,
+  School,
+  Layers,
+  Upload,
+  Loader2,
   Mail,
   Phone,
-  Building2,
-  GraduationCap,
   Pencil,
-  Save,
-  X,
-  LogOut,
-  Loader2,
 } from "lucide-react";
 
-// TODO: replace with the logged-in student's real profile row from Supabase
-const INITIAL_PROFILE = {
-  full_name: "Ijeoma Nwachukwu",
-  email: "ijeoma.n@yabatech.edu.ng",
-  phone_num: "0803 456 7890",
-  institution: "Yabatech",
-  department: "Computer Science",
-  program_type: "ND",
-  level: "ND1",
-  created_at: "June 2, 2026",
-};
+import { createClient } from "@/utils/supabase/client";
+
+interface Course {
+  id: string;
+  name: string;
+}
+
+interface Profile {
+  full_name: string | null;
+  phone: string | null;
+  institution: { name: string } | null;
+  department: { name: string } | null;
+  level: { name: string } | null;
+  study_mode: { name: string } | null;
+  courses?: Course[];
+}
+
+interface DashboardData {
+  profile: Profile;
+  stats: {
+    questions_in_courses: number;
+    my_uploads: number;
+  };
+}
 
 export default function ProfilePage() {
+  const supabase = createClient();
   const router = useRouter();
-  const [profile, setProfile] = useState(INITIAL_PROFILE);
-  const [draft, setDraft] = useState(INITIAL_PROFILE);
-  const [isEditing, setIsEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
 
-  const initials = profile.full_name
-    .split(" ")
-    .map((n) => n[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const startEditing = () => {
-    setDraft(profile);
-    setIsEditing(true);
-  };
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      setError("");
 
-  const cancelEditing = () => {
-    setDraft(profile);
-    setIsEditing(false);
-  };
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-  const saveProfile = async () => {
-    setSaving(true);
+      if (!session) {
+        router.push("/auth/login");
+        return;
+      }
 
-    // TODO: PATCH /api/profile with { full_name, phone_num }
-    // only full_name and phone_num should be editable here — institution,
-    // department, program_type, and level are set at registration and
-    // shouldn't change without an admin's involvement
-    await new Promise((res) => setTimeout(res, 900));
+      setEmail(session.user.email ?? null);
 
-    setProfile(draft);
-    setSaving(false);
-    setIsEditing(false);
-  };
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/dashboard/summary`,
+          {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          }
+        );
+
+        if (!res.ok) throw new Error("Failed to load profile.");
+
+        const json: DashboardData = await res.json();
+        setData(json);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Something went wrong.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    load();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-6 text-center">
+        <p className="text-slate-600">{error || "Profile not found."}</p>
+        <Link href="/dashboard" className="font-semibold text-blue-600 hover:underline">
+          Back to Dashboard
+        </Link>
+      </div>
+    );
+  }
+
+  const profile = data.profile ?? {};
+  const courses = Array.isArray(profile.courses) ? profile.courses : [];
+  const stats = data.stats ?? { questions_in_courses: 0, my_uploads: 0 };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-10 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-2xl">
-        {/* Header */}
-        <div className="mb-6">
-          <Image
-            src="/images/logo.jpg"
-            alt="SparkL"
-            width={50}
-            height={50}
-            priority
-            className="mb-3 object-contain"
-          />
-          <h1 className="text-2xl font-bold text-slate-900">Your profile</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Manage your personal details.
-          </p>
-        </div>
+    <div className="mx-auto max-w-3xl px-6 pb-16 pt-8">
+      <h1 className="text-2xl font-bold text-slate-900">Profile</h1>
+      <p className="mt-1 text-sm text-slate-500">
+        Your account and academic details.
+      </p>
 
-        {/* Profile card */}
-        <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
-          {/* Avatar + name */}
-          <div className="flex items-center gap-4 border-b border-slate-100 p-6">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-blue-600 text-lg font-bold text-white">
-              {initials}
-            </div>
-            <div className="min-w-0">
-              {isEditing ? (
-                <input
-                  value={draft.full_name}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, full_name: e.target.value }))
-                  }
-                  className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-base font-semibold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-              ) : (
-                <p className="truncate text-lg font-semibold text-slate-900">
-                  {profile.full_name}
-                </p>
-              )}
-              <p className="text-xs text-slate-400">
-                Member since {profile.created_at}
+      {/* Identity Card */}
+      <div className="mt-6 rounded-2xl bg-white p-6 shadow-lg">
+        <div className="flex items-center gap-4">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-blue-100 text-xl font-bold text-blue-600">
+            {(profile.full_name ?? "S").charAt(0).toUpperCase()}
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">
+              {profile.full_name ?? "Student"}
+            </h2>
+            {email && (
+              <p className="flex items-center gap-1.5 text-sm text-slate-500">
+                <Mail size={14} />
+                {email}
               </p>
-            </div>
-          </div>
-
-          {/* Fields */}
-          <div className="space-y-4 p-6">
-            <ProfileField
-              icon={<Mail className="h-4 w-4" />}
-              label="Email"
-              value={profile.email}
-              editable={false}
-            />
-            <ProfileField
-              icon={<Phone className="h-4 w-4" />}
-              label="Phone number"
-              value={isEditing ? draft.phone_num : profile.phone_num}
-              editable={isEditing}
-              onChange={(v) => setDraft((d) => ({ ...d, phone_num: v }))}
-            />
-            <ProfileField
-              icon={<Building2 className="h-4 w-4" />}
-              label="Institution"
-              value={profile.institution}
-              editable={false}
-            />
-            <ProfileField
-              icon={<GraduationCap className="h-4 w-4" />}
-              label="Department"
-              value={profile.department}
-              editable={false}
-            />
-            <div className="grid grid-cols-2 gap-4">
-              <ProfileField
-                icon={<User className="h-4 w-4" />}
-                label="Program"
-                value={profile.program_type}
-                editable={false}
-              />
-              <ProfileField
-                icon={<User className="h-4 w-4" />}
-                label="Level"
-                value={profile.level}
-                editable={false}
-              />
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
-            {isEditing ? (
-              <div className="flex w-full gap-2">
-                <button
-                  onClick={cancelEditing}
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                >
-                  <X className="h-4 w-4" />
-                  Cancel
-                </button>
-                <button
-                  onClick={saveProfile}
-                  disabled={saving}
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-blue-600 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
-                >
-                  {saving ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Save className="h-4 w-4" />
-                  )}
-                  {saving ? "Saving..." : "Save changes"}
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={startEditing}
-                className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
-              >
-                <Pencil className="h-4 w-4" />
-                Edit profile
-              </button>
+            )}
+            {profile.phone && (
+              <p className="flex items-center gap-1.5 text-sm text-slate-500">
+                <Phone size={14} />
+                {profile.phone}
+              </p>
             )}
           </div>
         </div>
+      </div>
 
-        {/* Logout */}
-        <button
-          onClick={() => {
-            // TODO: call your Supabase signOut() then redirect
-            router.push("/login");
-          }}
-          className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-red-100 py-3 text-sm font-medium text-red-600 hover:bg-red-50"
+      {/* Academic Details */}
+      <div className="mt-6 rounded-2xl bg-white p-6 shadow-lg">
+        <h2 className="text-lg font-semibold text-slate-900">
+          Academic Details
+        </h2>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <ProfileField
+            icon={<School size={18} />}
+            label="Institution"
+            value={profile.institution?.name}
+          />
+          <ProfileField
+            icon={<BookOpen size={18} />}
+            label="Department"
+            value={profile.department?.name}
+          />
+          <ProfileField
+            icon={<GraduationCap size={18} />}
+            label="Level"
+            value={profile.level?.name}
+          />
+          <ProfileField
+            icon={<Layers size={18} />}
+            label="Study Mode"
+            value={profile.study_mode?.name}
+          />
+        </div>
+      </div>
+
+      {/* Courses */}
+      <div className="mt-6 rounded-2xl bg-white p-6 shadow-lg">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Your Courses ({courses.length})
+          </h2>
+        </div>
+
+        {courses.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-400">
+            No courses selected yet.
+          </p>
+        ) : (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {courses.map((course) => (
+              <span
+                key={course.id}
+                className="rounded-full bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700"
+              >
+                {course.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Activity */}
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex items-center gap-4 rounded-2xl bg-white p-6 shadow-lg">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50">
+            <Upload size={22} className="text-blue-600" />
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-slate-900">
+              {stats.my_uploads}
+            </p>
+            <p className="text-sm text-slate-500">Your Uploads</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4 rounded-2xl bg-white p-6 shadow-lg">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50">
+            <BookOpen size={22} className="text-blue-600" />
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-slate-900">
+              {stats.questions_in_courses}
+            </p>
+            <p className="text-sm text-slate-500">
+              Past Questions Across Your Courses
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Edit link (placeholder for now) */}
+      <div className="mt-6 flex justify-center">
+        <Link
+          href="/onboarding"
+          className="flex items-center gap-1.5 text-sm font-semibold text-blue-600 hover:underline"
         >
-          <LogOut className="h-4 w-4" />
-          Log out
-        </button>
+          <Pencil size={14} />
+          Edit academic details
+        </Link>
       </div>
     </div>
   );
@@ -211,32 +245,20 @@ function ProfileField({
   icon,
   label,
   value,
-  editable,
-  onChange,
 }: {
   icon: React.ReactNode;
   label: string;
-  value: string;
-  editable: boolean;
-  onChange?: (v: string) => void;
+  value?: string | null;
 }) {
   return (
-    <div>
-      <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-500">
-        {icon}
-        {label}
-      </label>
-      {editable ? (
-        <input
-          value={value}
-          onChange={(e) => onChange?.(e.target.value)}
-          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-        />
-      ) : (
-        <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
-          {value}
+    <div className="flex items-start gap-3 rounded-xl border border-slate-100 p-3">
+      <div className="mt-0.5 text-slate-400">{icon}</div>
+      <div>
+        <p className="text-xs font-medium text-slate-500">{label}</p>
+        <p className="text-sm font-semibold text-slate-900">
+          {value ?? "Not set"}
         </p>
-      )}
+      </div>
     </div>
   );
 }

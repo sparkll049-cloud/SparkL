@@ -7,7 +7,7 @@ export default function OnboardingPage() {
       <div
         className="
           mx-auto
-          max-w-[1400px]   // Reduced from 1600px so the page doesn't feel too stretched
+          max-w-[1400px]
           grid
           min-h-screen
           lg:grid-cols-2
@@ -21,14 +21,13 @@ export default function OnboardingPage() {
             flex-col
             justify-between
             bg-[#2563EB]
-            px-14            // Reduced horizontal padding
-            py-14            // Reduced top and bottom spacing
+            px-14
+            py-14
             text-white
           "
         >
           {/* Hero Section */}
           <div>
-            {/* Flex added so we can place a rocket illustration beside the text */}
             <div className="flex items-start justify-between gap-8">
               <div>
                 <h1 className="text-5xl font-bold leading-[1.1]">
@@ -40,22 +39,19 @@ export default function OnboardingPage() {
                 </h1>
               </div>
 
-              {/* Placeholder for Rocket SVG/Image */}
               <div className="mt-4">
-                {/* Add your rocket png/svg here */}
-                {/* <Image src="/rocket.png" /> */}
                 <Image
-                          src="/images/rocket.png"
-                          alt="SparkL Logo"
-                          width={50}
-                          height={50}
-                        />
+                  src="/images/rocket.png"
+                  alt="SparkL Logo"
+                  width={50}
+                  height={50}
+                />
               </div>
             </div>
 
             <p
               className="
-                mt-6            // Reduced from mt-8
+                mt-6
                 max-w-md
                 text-base
                 text-blue-100
@@ -67,14 +63,8 @@ export default function OnboardingPage() {
           </div>
 
           {/* Features */}
-          <div
-            className="
-              space-y-5         // Slightly tighter spacing
-            "
-          >
-            {/* Feature Item */}
+          <div className="space-y-5">
             <div className="flex gap-4">
-              {/* SVG icon goes here */}
               <div className="mt-1">
                 {/* Shield Icon */}
               </div>

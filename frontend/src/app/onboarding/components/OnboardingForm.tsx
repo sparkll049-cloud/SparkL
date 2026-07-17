@@ -7,7 +7,9 @@ import { useRouter } from "next/navigation";
 import ProgressIndicator from "./ProgressIndicator";
 import InstitutionSelect from "./InstitutionSelect";
 import DepartmentSelect from "./DepartmentSelect";
+import CourseMultiSelect from "./CourseMultiSelect";
 import LevelSelect from "./LevelSelect";
+import StudyModeSelect from "./StudyModeSelect";
 
 import { useOnboarding } from "../hooks/useOnboarding";
 
@@ -15,33 +17,44 @@ export default function OnboardingForm() {
   const router = useRouter();
 
   const {
-    institution,
-    department,
-    level,
+    institutions,
+    departments,
+    courses,
+    levels,
+    studyModes,
+    institutionId,
+    departmentId,
+    courseIds,
+    levelId,
+    studyModeId,
+    setInstitutionId,
+    setDepartmentId,
+    setCourseIds,
+    setLevelId,
+    setStudyModeId,
+    fetching,
     loading,
+    error,
     completed,
-    setDepartment,
-    setLevel,
-    setLoading,
+    submitOnboarding,
   } = useOnboarding();
 
-  async function handleSubmit(
-    e: React.FormEvent
-  ) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    setLoading(true);
+    const success = await submitOnboarding();
 
-    try {
-      await new Promise((resolve) =>
-        setTimeout(resolve, 1500)
-      );
-
+    if (success) {
       router.push("/dashboard");
-    } finally {
-      setLoading(false);
     }
   }
+
+  const formValid =
+    institutionId &&
+    departmentId &&
+    courseIds.length > 0 &&
+    levelId &&
+    studyModeId;
 
   return (
     <div
@@ -49,23 +62,13 @@ export default function OnboardingForm() {
         relative
         w-full
         max-w-[620px]
-
-        /* Smaller card */
         rounded-[30px]
-
         bg-white
-
-        /* Reduced padding */
         p-5
         md:p-7
-
         shadow-xl
       "
     >
-      {/* ===================================================
-          SPARKL LOGO
-          Replaces the HandHelping icon
-      =================================================== */}
       <div
         className="
           absolute
@@ -92,98 +95,96 @@ export default function OnboardingForm() {
         />
       </div>
 
-      {/* Reduced spacing */}
       <div className="space-y-6">
-        <ProgressIndicator
-          completed={completed}
-          total={2}
-        />
+        <ProgressIndicator completed={completed} total={4} />
 
-        {/* ===================================================
-            HEADING SECTION
-        =================================================== */}
         <div>
           <div className="flex items-center gap-3">
-            <h1
-              className="
-                text-2xl
-                md:text-3xl
-                font-bold
-              "
-            >
+            <h1 className="text-2xl md:text-3xl font-bold">
               Welcome to Sparkl
             </h1>
 
-            {/* Graduation Icon */}
-            <GraduationCap
-              size={40}
-              className="text-[#2563EB]"
-            />
+            <GraduationCap size={40} className="text-[#2563EB]" />
           </div>
 
           <p className="mt-2 text-sm text-slate-500">
-            Complete your profile to personalize
-            your experience.
+            Complete your profile to personalize your experience.
           </p>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="space-y-6"
-        >
-          <InstitutionSelect
-            value={institution}
-          />
+        {fetching ? (
+          <div className="flex items-center justify-center py-10">
+            <Loader2 className="h-6 w-6 animate-spin text-[#2563EB]" />
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <InstitutionSelect
+              value={institutionId}
+              onChange={setInstitutionId}
+              options={institutions}
+            />
 
-          <DepartmentSelect
-            value={department}
-            onChange={setDepartment}
-          />
+            <DepartmentSelect
+              value={departmentId}
+              onChange={setDepartmentId}
+              options={departments}
+              disabled={!institutionId}
+            />
 
-          <LevelSelect
-            value={level}
-            onChange={setLevel}
-          />
+            <CourseMultiSelect
+              value={courseIds}
+              onChange={setCourseIds}
+              options={courses}
+              disabled={!departmentId}
+            />
 
-          <button
-            type="submit"
-            disabled={
-              !department ||
-              !level ||
-              loading
-            }
-            className="
-              flex
-              w-full
-              items-center
-              justify-center
-              gap-3
-              rounded-full
-              bg-gradient-to-r
-              from-[#1D4ED8]
-              to-[#0EA5E9]
+            <LevelSelect
+              value={levelId}
+              onChange={setLevelId}
+              options={levels}
+            />
 
-              /* Slightly shorter button */
-              py-3
+            <StudyModeSelect
+              value={studyModeId}
+              onChange={setStudyModeId}
+              options={studyModes}
+            />
 
-              text-sm
-              md:text-base
-              font-semibold
-              text-white
-              transition
-              hover:opacity-90
-              disabled:opacity-60
-            "
-          >
-            {loading && (
-              <Loader2 className="h-5 w-5 animate-spin" />
+            {error && (
+              <p className="text-sm text-red-500">{error}</p>
             )}
 
-            {loading
-              ? "Completing Setup..."
-              : "Complete Setup"}
-          </button>
-        </form>
+            <button
+              type="submit"
+              disabled={!formValid || loading}
+              className="
+                flex
+                w-full
+                items-center
+                justify-center
+                gap-3
+                rounded-full
+                bg-gradient-to-r
+                from-[#1D4ED8]
+                to-[#0EA5E9]
+                py-3
+                text-sm
+                md:text-base
+                font-semibold
+                text-white
+                transition
+                hover:opacity-90
+                disabled:opacity-60
+              "
+            >
+              {loading && (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              )}
+
+              {loading ? "Completing Setup..." : "Complete Setup"}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );
