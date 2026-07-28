@@ -130,7 +130,7 @@ export default function CourseDetailPage() {
   return (
     <div className="mx-auto max-w-3xl px-6 pb-16 pt-8">
       <Link
-        href="/courses"
+        href="/dashboard/courses"
         className="inline-flex items-center gap-1 text-sm font-medium text-slate-500 hover:text-slate-700"
       >
         <ArrowLeft size={16} />
