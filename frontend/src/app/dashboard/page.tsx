@@ -1,7 +1,8 @@
 // frontend/src/app/dashboard/page.tsx
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -52,50 +53,47 @@ interface DashboardData {
   };
 }
 
+async function fetchDashboardSummary(
+  supabase: ReturnType<typeof createClient>,
+  router: ReturnType<typeof useRouter>
+): Promise<DashboardData> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (!session) {
+    router.push("/auth/login");
+    // Throwing keeps React Query in a clean error/loading state rather
+    // than resolving with undefined while the redirect happens.
+    throw new Error("No session");
+  }
+
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_API_URL}/api/dashboard/summary`,
+    {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    }
+  );
+
+  if (!res.ok) throw new Error("Failed to load dashboard.");
+
+  return res.json();
+}
+
 export default function DashboardHomePage() {
   const supabase = createClient();
   const router = useRouter();
 
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [query, setQuery] = useState("");
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      setError("");
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        router.push("/auth/login");
-        return;
-      }
-
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/dashboard/summary`,
-          {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          }
-        );
-
-        if (!res.ok) throw new Error("Failed to load dashboard.");
-
-        const json: DashboardData = await res.json();
-        setData(json);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Something went wrong.");
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    load();
-  }, []);
+  const {
+    data,
+    isLoading: loading,
+    error,
+  } = useQuery({
+    queryKey: ["dashboard-summary"],
+    queryFn: () => fetchDashboardSummary(supabase, router),
+  });
 
   const courses = data?.profile.courses ?? [];
   const recentQuestions = data?.recent_questions ?? [];
@@ -119,7 +117,9 @@ export default function DashboardHomePage() {
   if (error || !data) {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-6 text-center">
-        <p className="text-slate-600">{error || "Couldn't load your dashboard."}</p>
+        <p className="text-slate-600">
+          {error instanceof Error ? error.message : "Couldn't load your dashboard."}
+        </p>
         <button
           onClick={() => window.location.reload()}
           className="font-semibold text-blue-600 hover:underline"
@@ -376,4 +376,4 @@ function ProfileRow({ icon: Icon, label }: { icon: React.ElementType; label: str
       <span className="truncate text-xs">{label}</span>
     </div>
   );
-                     }
+          }
