@@ -265,7 +265,7 @@ export default function DashboardHomePage() {
                   {recentQuestions.map((q) => (
                     <Link
                       key={q.id}
-                      href={`/dashboard/courses/${q.id}`}
+                      href={`/questions/${q.id}`}
                       className="flex items-center gap-3 px-5 py-3.5 transition hover:bg-slate-50"
                     >
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
@@ -376,4 +376,4 @@ function ProfileRow({ icon: Icon, label }: { icon: React.ElementType; label: str
       <span className="truncate text-xs">{label}</span>
     </div>
   );
-        }
+                     }
