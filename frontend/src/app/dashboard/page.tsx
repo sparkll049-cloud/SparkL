@@ -35,8 +35,17 @@ interface Profile {
   courses?: Course[];
 }
 
+interface RecentQuestion {
+  id: string;
+  title: string;
+  year: number | null;
+  created_at: string;
+  course: { name: string } | null;
+}
+
 interface DashboardData {
   profile: Profile;
+  recent_questions: RecentQuestion[];
   stats: {
     questions_in_courses: number;
     my_uploads: number;
@@ -89,6 +98,7 @@ export default function DashboardHomePage() {
   }, []);
 
   const courses = data?.profile.courses ?? [];
+  const recentQuestions = data?.recent_questions ?? [];
   const stats = data?.stats ?? { questions_in_courses: 0, my_uploads: 0 };
 
   const searchResults = useMemo(() => {
@@ -230,7 +240,7 @@ export default function DashboardHomePage() {
             {/* Activity */}
             <div>
               <h2 className="mb-3 text-base font-semibold text-slate-900">Recent activity</h2>
-              {stats.questions_in_courses === 0 ? (
+              {recentQuestions.length === 0 ? (
                 <div className="flex flex-col items-center rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-10 text-center">
                   <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-500">
                     <Sparkles className="h-6 w-6" />
@@ -251,8 +261,30 @@ export default function DashboardHomePage() {
                   </Link>
                 </div>
               ) : (
-                <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
-                  {/* TODO: populate once /api/dashboard/summary returns an activity feed */}
+                <div className="divide-y divide-slate-100 rounded-2xl border border-slate-100 bg-white shadow-sm">
+                  {recentQuestions.map((q) => (
+                    <Link
+                      key={q.id}
+                      href={`/dashboard/courses/${q.id}`}
+                      className="flex items-center gap-3 px-5 py-3.5 transition hover:bg-slate-50"
+                    >
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+                        <FileText className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-800">
+                          {q.title}
+                        </p>
+                        <p className="truncate text-xs text-slate-500">
+                          {q.course?.name ?? "—"}
+                          {q.year ? ` · ${q.year}` : ""}
+                        </p>
+                      </div>
+                      <p className="flex-shrink-0 text-xs text-slate-400">
+                        {new Date(q.created_at).toLocaleDateString()}
+                      </p>
+                    </Link>
+                  ))}
                 </div>
               )}
             </div>
@@ -344,4 +376,4 @@ function ProfileRow({ icon: Icon, label }: { icon: React.ElementType; label: str
       <span className="truncate text-xs">{label}</span>
     </div>
   );
-}
+        }
