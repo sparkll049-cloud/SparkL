@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user
@@ -34,24 +36,38 @@ async def list_courses(user_id: str = Depends(get_current_user)):
     courses = courses_res.data or []
     course_ids = [c["id"] for c in courses]
 
-    counts: dict[str, int] = {}
-    if course_ids:
-        pq_res = (
+    def get_question_counts():
+        if not course_ids:
+            return []
+        return (
             supabase.table("past_questions")
             .select("course_id")
             .in_("course_id", course_ids)
             .eq("status", "approved")
             .execute()
         )
+
+    def get_selected():
+        return (
+            supabase.table("user_courses")
+            .select("course_id")
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+    # These two are independent of each other — run concurrently
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pq_future = pool.submit(get_question_counts)
+        uc_future = pool.submit(get_selected)
+
+        pq_res = pq_future.result()
+        uc_res = uc_future.result()
+
+    counts: dict[str, int] = {}
+    if pq_res:
         for row in pq_res.data or []:
             counts[row["course_id"]] = counts.get(row["course_id"], 0) + 1
 
-    uc_res = (
-        supabase.table("user_courses")
-        .select("course_id")
-        .eq("user_id", user_id)
-        .execute()
-    )
     selected_ids = {row["course_id"] for row in (uc_res.data or [])}
 
     result = [
@@ -88,33 +104,47 @@ async def get_course_detail(course_id: str, user_id: str = Depends(get_current_u
 
     course = course_res.data
 
-    count_res = (
-        supabase.table("past_questions")
-        .select("id", count="exact")
-        .eq("course_id", course_id)
-        .eq("status", "approved")
-        .execute()
-    )
+    def get_count():
+        return (
+            supabase.table("past_questions")
+            .select("id", count="exact")
+            .eq("course_id", course_id)
+            .eq("status", "approved")
+            .execute()
+        )
+
+    def get_questions():
+        return (
+            supabase.table("past_questions")
+            .select("id, title, year, created_at")
+            .eq("course_id", course_id)
+            .eq("status", "approved")
+            .order("created_at", desc=True)
+            .limit(20)
+            .execute()
+        )
+
+    def get_selected():
+        return (
+            supabase.table("user_courses")
+            .select("course_id")
+            .eq("user_id", user_id)
+            .eq("course_id", course_id)
+            .execute()
+        )
+
+    # All three depend only on course_id/user_id, not on each other
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        count_future = pool.submit(get_count)
+        questions_future = pool.submit(get_questions)
+        selected_future = pool.submit(get_selected)
+
+        count_res = count_future.result()
+        questions_res = questions_future.result()
+        uc_res = selected_future.result()
+
     question_count = count_res.count or 0
-
-    questions_res = (
-        supabase.table("past_questions")
-        .select("id, title, year, created_at")
-        .eq("course_id", course_id)
-        .eq("status", "approved")
-        .order("created_at", desc=True)
-        .limit(20)
-        .execute()
-    )
     questions = questions_res.data or []
-
-    uc_res = (
-        supabase.table("user_courses")
-        .select("course_id")
-        .eq("user_id", user_id)
-        .eq("course_id", course_id)
-        .execute()
-    )
     is_selected = len(uc_res.data or []) > 0
 
     return {
