@@ -9,6 +9,7 @@ import {
   Trash2,
   ExternalLink,
   ChevronDown,
+  Pencil,
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
@@ -51,6 +52,11 @@ export default function AdminQuestionsPage() {
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<Question | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [savingTextId, setSavingTextId] = useState<string | null>(null);
+  const [textError, setTextError] = useState("");
 
   async function getToken() {
     const {
@@ -305,6 +311,68 @@ export default function AdminQuestionsPage() {
     }
   }
 
+  function startEditing(q: Question) {
+    setEditingId(q.id);
+    setEditText(q.extracted_text ?? "");
+    setTextError("");
+    // Make sure the text area is actually visible while editing.
+    setExpandedId(q.id);
+  }
+
+  function cancelEditing() {
+    setEditingId(null);
+    setEditText("");
+    setTextError("");
+  }
+
+  async function saveExtractedText(id: string) {
+    const trimmed = editText.trim();
+
+    if (!trimmed) {
+      setTextError("Extracted text cannot be empty.");
+      return;
+    }
+
+    setSavingTextId(id);
+    setTextError("");
+
+    const token = await getToken();
+
+    if (!token) {
+      setTextError("Session expired. Please log in again.");
+      setSavingTextId(null);
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/text`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ extracted_text: trimmed }),
+        }
+      );
+
+      if (!res.ok) throw new Error("Failed to save changes.");
+
+      setQuestions((prev) =>
+        prev.map((q) =>
+          q.id === id ? { ...q, extracted_text: trimmed } : q
+        )
+      );
+      setEditingId(null);
+      setEditText("");
+    } catch (err) {
+      setTextError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setSavingTextId(null);
+    }
+  }
+
   return (
     <div>
       <h1 className="text-2xl font-bold text-slate-900">Past Questions</h1>
@@ -409,25 +477,35 @@ export default function AdminQuestionsPage() {
                           </a>
                         )}
 
-                        {q.extracted_text && (
-                          <button
-                            onClick={() =>
-                              setExpandedId(
-                                expandedId === q.id ? null : q.id
-                              )
-                            }
-                            className="mt-2 flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-700"
-                          >
-                            <ChevronDown
-                              size={14}
-                              className={`transition-transform ${
-                                expandedId === q.id ? "rotate-180" : ""
-                              }`}
-                            />
-                            {expandedId === q.id
-                              ? "Hide extracted text"
-                              : "Preview extracted text"}
-                          </button>
+                        {q.extracted_text && editingId !== q.id && (
+                          <div className="mt-2 flex items-center gap-3">
+                            <button
+                              onClick={() =>
+                                setExpandedId(
+                                  expandedId === q.id ? null : q.id
+                                )
+                              }
+                              className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-700"
+                            >
+                              <ChevronDown
+                                size={14}
+                                className={`transition-transform ${
+                                  expandedId === q.id ? "rotate-180" : ""
+                                }`}
+                              />
+                              {expandedId === q.id
+                                ? "Hide extracted text"
+                                : "Preview extracted text"}
+                            </button>
+
+                            <button
+                              onClick={() => startEditing(q)}
+                              className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                            >
+                              <Pencil size={12} />
+                              Edit text
+                            </button>
+                          </div>
                         )}
 
                         {q.status === "rejected" && q.rejection_reason && (
@@ -441,9 +519,42 @@ export default function AdminQuestionsPage() {
                     <StatusPill status={q.status} />
                   </div>
 
-                  {expandedId === q.id && q.extracted_text && (
+                  {expandedId === q.id && q.extracted_text && editingId !== q.id && (
                     <div className="mt-3 max-h-64 overflow-y-auto rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
                       {q.extracted_text}
+                    </div>
+                  )}
+
+                  {editingId === q.id && (
+                    <div className="mt-3">
+                      <textarea
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        rows={10}
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      {textError && (
+                        <p className="mt-1.5 text-xs text-red-500">{textError}</p>
+                      )}
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          onClick={() => saveExtractedText(q.id)}
+                          disabled={savingTextId === q.id}
+                          className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
+                        >
+                          {savingTextId === q.id && (
+                            <Loader2 size={14} className="animate-spin" />
+                          )}
+                          Save changes
+                        </button>
+                        <button
+                          onClick={cancelEditing}
+                          disabled={savingTextId === q.id}
+                          className="rounded-lg bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </div>
                   )}
 
@@ -587,4 +698,4 @@ function StatusPill({ status }: { status: string }) {
       {status}
     </span>
   );
-}
+      }
