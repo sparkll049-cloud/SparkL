@@ -187,7 +187,7 @@ export default function CourseDetailPage() {
               No past questions uploaded for this course yet.
             </p>
             <Link
-              href="/upload"
+              href="/dashboard/upload"
               className="mt-1 text-sm font-semibold text-blue-600 hover:underline"
             >
               Upload one
