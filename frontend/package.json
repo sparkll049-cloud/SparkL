@@ -18,6 +18,7 @@
     "next": "16.2.9",
     "react": "19.2.4",
     "pdfjs-dist": "^4.0.379",
+    "@tanstack/react-query": "^5.59.0",
     "react-dom": "19.2.4",
     "react-dropzone": "^15.0.0",
     "tailwind-merge": "^3.6.0"
