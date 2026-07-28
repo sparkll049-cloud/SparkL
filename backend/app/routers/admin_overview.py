@@ -2,8 +2,11 @@ from fastapi import APIRouter, Depends
 
 from app.admin_auth import get_current_admin
 from app.supabase_client import supabase
+from app.cache import cached
 
 router = APIRouter(prefix="/api/admin/overview", tags=["admin-overview"])
+
+OVERVIEW_TTL_SECONDS = 60
 
 
 def count(table: str, **filters) -> int:
@@ -16,6 +19,10 @@ def count(table: str, **filters) -> int:
 
 @router.get("")
 async def get_overview(admin_id: str = Depends(get_current_admin)):
+    return cached("admin_overview", OVERVIEW_TTL_SECONDS, _fetch_overview)
+
+
+def _fetch_overview() -> dict:
     total_users = count("profiles")
     total_institutions = count("institutions")
     total_departments = count("departments")
