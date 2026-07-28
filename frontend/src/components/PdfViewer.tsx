@@ -21,9 +21,9 @@ export default function PdfViewer({ url }: PdfViewerProps) {
       try {
         // Loaded dynamically (client-only) since pdfjs-dist relies on
         // browser APIs that don't exist during Next.js server rendering.
-        const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf");
+        const pdfjsLib = await import("pdfjs-dist");
         pdfjsLib.GlobalWorkerOptions.workerSrc =
-          `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+          `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
         const pdf = await pdfjsLib.getDocument(url).promise;
 
