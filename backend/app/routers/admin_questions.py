@@ -10,10 +10,16 @@ router = APIRouter(prefix="/api/admin/questions", tags=["admin-questions"])
 
 STORAGE_BUCKET = "past-questions"
 
+MAX_EXTRACTED_TEXT_LENGTH = 50_000  # generous ceiling — a few dozen pages of text
+
 
 class StatusUpdate(BaseModel):
     status: str
     reason: Optional[str] = None
+
+
+class ExtractedTextUpdate(BaseModel):
+    extracted_text: str
 
 
 @router.get("")
@@ -95,6 +101,38 @@ async def update_question_status(
     return res.data[0]
 
 
+@router.patch("/{question_id}/text")
+async def update_extracted_text(
+    question_id: str,
+    payload: ExtractedTextUpdate,
+    admin_id: str = Depends(get_current_admin),
+):
+    text = payload.extracted_text.strip()
+
+    if not text:
+        raise HTTPException(status_code=400, detail="Extracted text cannot be empty.")
+    if len(text) > MAX_EXTRACTED_TEXT_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Extracted text must be under {MAX_EXTRACTED_TEXT_LENGTH} characters.",
+        )
+
+    # Admin edits are treated as fully trusted/clean — reset the quality
+    # score to 1.0 so the low-quality warning banner no longer shows on
+    # the student-facing page for a question an admin has manually fixed.
+    res = (
+        supabase.table("past_questions")
+        .update({"extracted_text": text, "extraction_quality": 1.0})
+        .eq("id", question_id)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    return res.data[0]
+
+
 @router.delete("/{question_id}")
 async def delete_question(
     question_id: str,
@@ -118,10 +156,11 @@ async def delete_question(
 
     # Best-effort cleanup — the DB row is already gone either way, so
     # don't fail the request if storage removal has an issue.
+    # file_url is now always a plain storage path (private bucket, no
+    # public URL stored), so it can be passed to remove() directly.
     if file_url:
         try:
-            storage_path = file_url.split(f"/{STORAGE_BUCKET}/")[-1]
-            supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
+            supabase.storage.from_(STORAGE_BUCKET).remove([file_url])
         except Exception:
             pass
 
