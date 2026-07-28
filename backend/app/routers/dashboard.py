@@ -2,12 +2,23 @@ from fastapi import APIRouter, Depends
 
 from app.auth import get_current_user
 from app.supabase_client import supabase
+from app.cache import cached
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+SUMMARY_TTL_SECONDS = 30
 
 
 @router.get("/summary")
 async def get_dashboard_summary(user_id: str = Depends(get_current_user)):
+    return cached(
+        f"dashboard_summary:{user_id}",
+        SUMMARY_TTL_SECONDS,
+        lambda: _fetch_summary(user_id),
+    )
+
+
+def _fetch_summary(user_id: str) -> dict:
     profile_res = (
         supabase.table("profiles")
         .select(
