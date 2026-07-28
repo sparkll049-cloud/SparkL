@@ -19,7 +19,7 @@ app = FastAPI(title="SparkL API")
 # Reads allowed origins from an env var in production (comma-separated),
 # falls back to localhost for local dev. Avoids hardcoding a URL that
 # breaks the moment the frontend is deployed somewhere new.
-default_origins = "http://localhost:3000"
+default_origins = "https://sparkl-fastapi.onrender.com/"
 allowed_origins = os.getenv("ALLOWED_ORIGINS", default_origins).split(",")
 
 app.add_middleware(
