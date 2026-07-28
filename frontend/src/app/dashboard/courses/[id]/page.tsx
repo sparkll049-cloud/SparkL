@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -28,58 +29,60 @@ interface CourseDetail {
   is_selected: boolean;
 }
 
+async function fetchCourseDetail(
+  courseId: string,
+  supabase: ReturnType<typeof createClient>,
+  router: ReturnType<typeof useRouter>
+): Promise<CourseDetail> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (!session) {
+    router.push("/auth/login");
+    throw new Error("No session");
+  }
+
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_API_URL}/api/courses/${courseId}`,
+    { headers: { Authorization: `Bearer ${session.access_token}` } }
+  );
+
+  if (!res.ok) throw new Error("Failed to load course.");
+
+  return res.json();
+}
+
 export default function CourseDetailPage() {
   const supabase = createClient();
   const router = useRouter();
   const params = useParams();
+  const queryClient = useQueryClient();
   const courseId = params?.id as string;
 
-  const [data, setData] = useState<CourseDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [toggling, setToggling] = useState(false);
 
-  useEffect(() => {
-    if (!courseId) return;
-
-    async function load() {
-      setLoading(true);
-      setError("");
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        router.push("/auth/login");
-        return;
-      }
-
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/courses/${courseId}`,
-          {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          }
-        );
-
-        if (!res.ok) throw new Error("Failed to load course.");
-
-        const json: CourseDetail = await res.json();
-        setData(json);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Something went wrong.");
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    load();
-  }, [courseId]);
+  const {
+    data,
+    isLoading: loading,
+    error,
+  } = useQuery({
+    queryKey: ["course", courseId],
+    queryFn: () => fetchCourseDetail(courseId, supabase, router),
+    enabled: !!courseId,
+  });
 
   async function toggleSelected() {
     if (!data) return;
     setToggling(true);
+
+    const nextSelected = !data.is_selected;
+
+    // Optimistic update: flip this course's cache entry immediately
+    queryClient.setQueryData(["course", courseId], {
+      ...data,
+      is_selected: nextSelected,
+    });
 
     try {
       const {
@@ -100,7 +103,14 @@ export default function CourseDetailPage() {
           .insert({ user_id: user.id, course_id: courseId });
       }
 
-      setData({ ...data, is_selected: !data.is_selected });
+      // The courses list page and dashboard both show "selected" state
+      // and course counts — invalidate them so they refetch fresh data
+      // next time they're visited, instead of showing stale info.
+      queryClient.invalidateQueries({ queryKey: ["courses"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+    } catch (err) {
+      // Roll back the optimistic update if the request failed
+      queryClient.setQueryData(["course", courseId], data);
     } finally {
       setToggling(false);
     }
@@ -117,7 +127,9 @@ export default function CourseDetailPage() {
   if (error || !data) {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-6 text-center">
-        <p className="text-slate-600">{error || "Course not found."}</p>
+        <p className="text-slate-600">
+          {error instanceof Error ? error.message : "Course not found."}
+        </p>
         <Link href="/dashboard/courses" className="font-semibold text-blue-600 hover:underline">
           Back to Courses
         </Link>
@@ -220,4 +232,4 @@ export default function CourseDetailPage() {
       </div>
     </div>
   );
-}
+        }
