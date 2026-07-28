@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 interface Course {
   id: string;
@@ -30,6 +31,11 @@ interface UserRow {
   level: { name: string } | null;
 }
 
+type PendingAction =
+  | { type: "suspend"; user: UserRow }
+  | { type: "admin"; user: UserRow }
+  | null;
+
 export default function AdminUsersPage() {
   const supabase = createClient();
 
@@ -38,6 +44,7 @@ export default function AdminUsersPage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [actioningId, setActioningId] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
 
   async function getToken() {
     const {
@@ -93,7 +100,7 @@ export default function AdminUsersPage() {
     loadUsers();
   }, []);
 
-  async function toggleSuspend(user: UserRow) {
+  async function confirmSuspend(user: UserRow) {
     setActioningId(user.id);
     setError("");
 
@@ -102,6 +109,7 @@ export default function AdminUsersPage() {
     if (!token) {
       setError("Session expired. Please log in again.");
       setActioningId(null);
+      setPendingAction(null);
       return;
     }
 
@@ -129,10 +137,11 @@ export default function AdminUsersPage() {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setActioningId(null);
+      setPendingAction(null);
     }
   }
 
-  async function toggleAdmin(user: UserRow) {
+  async function confirmAdminToggle(user: UserRow) {
     setActioningId(user.id);
     setError("");
 
@@ -141,6 +150,7 @@ export default function AdminUsersPage() {
     if (!token) {
       setError("Session expired. Please log in again.");
       setActioningId(null);
+      setPendingAction(null);
       return;
     }
 
@@ -171,6 +181,7 @@ export default function AdminUsersPage() {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setActioningId(null);
+      setPendingAction(null);
     }
   }
 
@@ -264,7 +275,7 @@ export default function AdminUsersPage() {
 
                 <div className="flex gap-2">
                   <button
-                    onClick={() => toggleAdmin(user)}
+                    onClick={() => setPendingAction({ type: "admin", user })}
                     disabled={actioningId === user.id}
                     className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
                       user.is_admin
@@ -286,7 +297,7 @@ export default function AdminUsersPage() {
                   </button>
 
                   <button
-                    onClick={() => toggleSuspend(user)}
+                    onClick={() => setPendingAction({ type: "suspend", user })}
                     disabled={actioningId === user.id}
                     className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
                       user.suspended
@@ -312,6 +323,78 @@ export default function AdminUsersPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={pendingAction?.type === "suspend"}
+        title={
+          pendingAction?.type === "suspend" && pendingAction.user.suspended
+            ? "Unsuspend this user?"
+            : "Suspend this user?"
+        }
+        description={
+          pendingAction?.type === "suspend"
+            ? pendingAction.user.suspended
+              ? `${
+                  pendingAction.user.full_name ?? "This user"
+                } will regain access to their account immediately.`
+              : `${
+                  pendingAction.user.full_name ?? "This user"
+                } will lose access to their account immediately. You can unsuspend them later.`
+            : ""
+        }
+        confirmLabel={
+          pendingAction?.type === "suspend" && pendingAction.user.suspended
+            ? "Unsuspend"
+            : "Suspend"
+        }
+        tone={
+          pendingAction?.type === "suspend" && pendingAction.user.suspended
+            ? "default"
+            : "danger"
+        }
+        loading={actioningId === (pendingAction?.user.id ?? "")}
+        onConfirm={() =>
+          pendingAction?.type === "suspend" &&
+          confirmSuspend(pendingAction.user)
+        }
+        onCancel={() => setPendingAction(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingAction?.type === "admin"}
+        title={
+          pendingAction?.type === "admin" && pendingAction.user.is_admin
+            ? "Remove admin access?"
+            : "Grant admin access?"
+        }
+        description={
+          pendingAction?.type === "admin"
+            ? pendingAction.user.is_admin
+              ? `${
+                  pendingAction.user.full_name ?? "This user"
+                } will lose access to the admin panel immediately.`
+              : `${
+                  pendingAction.user.full_name ?? "This user"
+                } will gain full admin access, including managing other users.`
+            : ""
+        }
+        confirmLabel={
+          pendingAction?.type === "admin" && pendingAction.user.is_admin
+            ? "Remove Admin"
+            : "Make Admin"
+        }
+        tone={
+          pendingAction?.type === "admin" && pendingAction.user.is_admin
+            ? "danger"
+            : "default"
+        }
+        loading={actioningId === (pendingAction?.user.id ?? "")}
+        onConfirm={() =>
+          pendingAction?.type === "admin" &&
+          confirmAdminToggle(pendingAction.user)
+        }
+        onCancel={() => setPendingAction(null)}
+      />
     </div>
   );
 }

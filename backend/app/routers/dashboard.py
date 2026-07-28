@@ -15,7 +15,8 @@ async def get_dashboard_summary(user_id: str = Depends(get_current_user)):
             "institution:institutions(name), "
             "department:departments(name), "
             "level:levels(name), "
-            "study_mode:study_modes(name)"
+            "study_mode:study_modes(name), "
+            "semester:semesters(name)"
         )
         .eq("id", user_id)
         .single()

@@ -14,6 +14,7 @@ ALLOWED_TABLES = {
     "courses",
     "levels",
     "study_modes",
+    "semesters",
 }
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Upload as UploadIcon,
@@ -26,16 +26,25 @@ interface MyUpload {
   status: "pending" | "approved" | "rejected";
   created_at: string;
   rejection_reason: string | null;
+  extraction_quality: number | null;
   course: { name: string } | null;
   semester: { name: string } | null;
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB, mirrors backend limit
 const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png"];
+const MIN_YEAR = 1990;
+const LOW_QUALITY_THRESHOLD = 0.5;
+
+function isValidYear(y: string, currentYear: number) {
+  if (!y) return true; // optional field
+  return /^\d{4}$/.test(y) && Number(y) >= MIN_YEAR && Number(y) <= currentYear + 1;
+}
 
 export default function UploadPage() {
   const supabase = createClient();
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [institutions, setInstitutions] = useState<Option[]>([]);
   const [departments, setDepartments] = useState<Option[]>([]);
@@ -61,6 +70,8 @@ export default function UploadPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
   const [fileError, setFileError] = useState("");
+
+  const currentYear = new Date().getFullYear();
 
   // ---- Initial load: institutions + levels (global) + semesters + upload history ----
   useEffect(() => {
@@ -150,6 +161,12 @@ export default function UploadPage() {
         `${process.env.NEXT_PUBLIC_API_URL}/api/upload/mine`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
+
+      if (res.status === 401) {
+        router.push("/auth/login");
+        return;
+      }
+
       if (res.ok) setMyUploads(await res.json());
     } catch {
       // Non-critical — the upload history is secondary to the form itself
@@ -190,6 +207,11 @@ export default function UploadPage() {
       return;
     }
 
+    if (year && !isValidYear(year, currentYear)) {
+      setError(`Year must be a 4-digit number between ${MIN_YEAR} and ${currentYear + 1}.`);
+      return;
+    }
+
     setSubmitting(true);
 
     const {
@@ -197,6 +219,7 @@ export default function UploadPage() {
     } = await supabase.auth.getSession();
 
     if (!session) {
+      setSubmitting(false);
       router.push("/auth/login");
       return;
     }
@@ -218,6 +241,12 @@ export default function UploadPage() {
         }
       );
 
+      if (res.status === 401) {
+        setSubmitting(false);
+        router.push("/auth/login");
+        return;
+      }
+
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? "Upload failed. Please try again.");
@@ -232,6 +261,7 @@ export default function UploadPage() {
       setCourseId("");
       setSemesterId("");
       setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
 
       await loadMyUploads(session.access_token);
     } catch (err) {
@@ -241,7 +271,8 @@ export default function UploadPage() {
     }
   }
 
-  const formValid = title.trim() && courseId && file && !fileError;
+  const formValid =
+    title.trim() && courseId && file && !fileError && isValidYear(year, currentYear);
 
   if (fetching) {
     return (
@@ -406,11 +437,17 @@ export default function UploadPage() {
               </label>
               <input
                 value={year}
-                onChange={(e) => setYear(e.target.value)}
+                onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
                 placeholder="e.g. 2023"
+                inputMode="numeric"
                 maxLength={4}
                 className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               />
+              {year && !isValidYear(year, currentYear) && (
+                <p className="mt-1.5 text-xs text-red-500">
+                  Enter a year between {MIN_YEAR} and {currentYear + 1}.
+                </p>
+              )}
             </div>
           </div>
 
@@ -426,6 +463,7 @@ export default function UploadPage() {
                 {file ? file.name : "Click to choose a PDF, JPG, or PNG (max 10MB)"}
               </span>
               <input
+                ref={fileInputRef}
                 type="file"
                 accept=".pdf,.jpg,.jpeg,.png"
                 onChange={handleFileChange}
@@ -497,6 +535,17 @@ export default function UploadPage() {
                         Reason: {u.rejection_reason}
                       </p>
                     )}
+
+                    {u.extraction_quality !== null &&
+                      u.extraction_quality < LOW_QUALITY_THRESHOLD &&
+                      u.status !== "rejected" && (
+                        <p className="mt-2 flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                          Text extraction looks unclear on this file — it's
+                          still under review, an admin may reach out if the
+                          scan needs retaking.
+                        </p>
+                      )}
                   </div>
                 ))}
               </div>

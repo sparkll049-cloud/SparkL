@@ -10,6 +10,7 @@ import DepartmentSelect from "./DepartmentSelect";
 import CourseMultiSelect from "./CourseMultiSelect";
 import LevelSelect from "./LevelSelect";
 import StudyModeSelect from "./StudyModeSelect";
+import SemesterSelect from "./SemesterSelect";
 
 import { useOnboarding } from "../hooks/useOnboarding";
 
@@ -22,16 +23,19 @@ export default function OnboardingForm() {
     courses,
     levels,
     studyModes,
+    semesters,
     institutionId,
     departmentId,
     courseIds,
     levelId,
     studyModeId,
+    semesterId,
     setInstitutionId,
     setDepartmentId,
     setCourseIds,
     setLevelId,
     setStudyModeId,
+    setSemesterId,
     fetching,
     loading,
     error,
@@ -54,7 +58,8 @@ export default function OnboardingForm() {
     departmentId &&
     courseIds.length > 0 &&
     levelId &&
-    studyModeId;
+    studyModeId &&
+    semesterId;
 
   return (
     <div
@@ -96,7 +101,7 @@ export default function OnboardingForm() {
       </div>
 
       <div className="space-y-6">
-        <ProgressIndicator completed={completed} total={4} />
+        <ProgressIndicator completed={completed} total={5} />
 
         <div>
           <div className="flex items-center gap-3">
@@ -148,6 +153,12 @@ export default function OnboardingForm() {
               value={studyModeId}
               onChange={setStudyModeId}
               options={studyModes}
+            />
+
+            <SemesterSelect
+              value={semesterId}
+              onChange={setSemesterId}
+              options={semesters}
             />
 
             {error && (

@@ -3,32 +3,46 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   LayoutDashboard,
+  Users,
+  FileText,
   School,
   BookOpen,
   GraduationCap,
   Layers,
-  FileText,
-  Users,
+  CalendarDays,
   LogOut,
   Menu,
   X,
-  Loader2,
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
 
-const navItems = [
-  { href: "/admin", label: "Overview", icon: LayoutDashboard },
-  { href: "/admin/institutions", label: "Institutions", icon: School },
-  { href: "/admin/departments", label: "Departments", icon: BookOpen },
-  { href: "/admin/courses", label: "Courses", icon: GraduationCap },
-  { href: "/admin/levels", label: "Levels", icon: Layers },
-  { href: "/admin/study-modes", label: "Study Modes", icon: Layers },
-  { href: "/admin/questions", label: "Past Questions", icon: FileText },
-  { href: "/admin/users", label: "Users", icon: Users },
+const navGroups = [
+  {
+    label: "Overview",
+    items: [{ href: "/admin", label: "Dashboard", icon: LayoutDashboard }],
+  },
+  {
+    label: "Moderation",
+    items: [
+      { href: "/admin/questions", label: "Past Questions", icon: FileText },
+      { href: "/admin/users", label: "Users", icon: Users },
+    ],
+  },
+  {
+    label: "Site Data",
+    items: [
+      { href: "/admin/institutions", label: "Institutions", icon: School },
+      { href: "/admin/departments", label: "Departments", icon: BookOpen },
+      { href: "/admin/courses", label: "Courses", icon: GraduationCap },
+      { href: "/admin/levels", label: "Levels", icon: Layers },
+      { href: "/admin/study-modes", label: "Study Modes", icon: Layers },
+      { href: "/admin/semesters", label: "Semesters", icon: CalendarDays },
+    ],
+  },
 ];
 
 export default function AdminLayout({
@@ -40,53 +54,14 @@ export default function AdminLayout({
   const router = useRouter();
   const supabase = createClient();
 
-  const [checking, setChecking] = useState(true);
-  const [authorized, setAuthorized] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => {
-    async function checkAdmin() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        router.push("/auth/login");
-        return;
-      }
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("is_admin")
-        .eq("id", user.id)
-        .single();
-
-      if (!profile?.is_admin) {
-        router.push("/dashboard");
-        return;
-      }
-
-      setAuthorized(true);
-      setChecking(false);
-    }
-
-    checkAdmin();
-  }, []);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   async function handleLogout() {
+    setLoggingOut(true);
     await supabase.auth.signOut();
     router.push("/auth/login");
   }
-
-  if (checking) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-      </div>
-    );
-  }
-
-  if (!authorized) return null;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -100,7 +75,7 @@ export default function AdminLayout({
             height={28}
             className="rounded-full"
           />
-          <span className="font-bold text-slate-900">SparkL Admin</span>
+          <span className="font-bold text-slate-900">Admin</span>
         </div>
 
         <button onClick={() => setMobileOpen(!mobileOpen)}>
@@ -116,7 +91,7 @@ export default function AdminLayout({
         {/* Sidebar */}
         <aside
           className={`
-            fixed inset-y-0 left-0 z-40 w-64 transform border-r border-slate-200
+            fixed inset-y-0 left-0 z-40 w-64 transform overflow-y-auto border-r border-slate-200
             bg-white transition-transform duration-200 ease-in-out
             lg:static lg:translate-x-0
             ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
@@ -136,55 +111,74 @@ export default function AdminLayout({
                   className="rounded-full"
                 />
                 <div>
-                  <p className="text-lg font-bold leading-tight text-slate-900">
+                  <span className="block text-lg font-bold leading-tight text-slate-900">
                     SparkL
-                  </p>
-                  <p className="text-xs font-medium text-blue-600">Admin</p>
+                  </span>
+                  <span className="block text-xs font-medium text-slate-400">
+                    Admin Panel
+                  </span>
                 </div>
               </Link>
 
-              <nav className="space-y-1">
-                {navItems.map((item) => {
-                  const active =
-                    pathname === item.href ||
-                    (item.href !== "/admin" &&
-                      pathname?.startsWith(item.href));
+              <nav className="space-y-5">
+                {navGroups.map((group) => (
+                  <div key={group.label}>
+                    <p className="px-4 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      {group.label}
+                    </p>
+                    <div className="mt-2 space-y-1">
+                      {group.items.map((item) => {
+                        const active =
+                          pathname === item.href ||
+                          (item.href !== "/admin" &&
+                            pathname?.startsWith(item.href));
 
-                  const Icon = item.icon;
+                        const Icon = item.icon;
 
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      onClick={() => setMobileOpen(false)}
-                      className={`
-                        flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium
-                        transition
-                        ${
-                          active
-                            ? "bg-blue-50 text-blue-600"
-                            : "text-slate-600 hover:bg-slate-50"
-                        }
-                      `}
-                    >
-                      <Icon size={20} />
-                      {item.label}
-                    </Link>
-                  );
-                })}
+                        return (
+                          <Link
+                            key={item.href}
+                            href={item.href}
+                            onClick={() => setMobileOpen(false)}
+                            className={`
+                              flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium
+                              transition
+                              ${
+                                active
+                                  ? "bg-blue-50 text-blue-600"
+                                  : "text-slate-600 hover:bg-slate-50"
+                              }
+                            `}
+                          >
+                            <Icon size={18} />
+                            {item.label}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </nav>
             </div>
 
-            <button
-              onClick={handleLogout}
-              className="
-                flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium
-                text-red-500 transition hover:bg-red-50
-              "
-            >
-              <LogOut size={20} />
-              Log Out
-            </button>
+            <div className="space-y-1">
+              <Link
+                href="/dashboard"
+                className="flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-slate-50"
+              >
+                <LayoutDashboard size={18} />
+                Back to Student View
+              </Link>
+
+              <button
+                onClick={handleLogout}
+                disabled={loggingOut}
+                className="flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium text-red-500 transition hover:bg-red-50 disabled:opacity-60"
+              >
+                <LogOut size={18} />
+                {loggingOut ? "Logging out..." : "Log Out"}
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -195,7 +189,9 @@ export default function AdminLayout({
           />
         )}
 
-        <main className="min-h-screen flex-1 p-6">{children}</main>
+        <main className="min-h-screen flex-1 px-4 py-6 sm:px-6 lg:px-8">
+          {children}
+        </main>
       </div>
     </div>
   );

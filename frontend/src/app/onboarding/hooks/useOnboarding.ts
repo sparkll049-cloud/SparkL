@@ -16,12 +16,14 @@ export function useOnboarding() {
   const [courses, setCourses] = useState<Option[]>([]);
   const [levels, setLevels] = useState<Option[]>([]);
   const [studyModes, setStudyModes] = useState<Option[]>([]);
+  const [semesters, setSemesters] = useState<Option[]>([]);
 
   const [institutionId, setInstitutionId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [courseIds, setCourseIds] = useState<string[]>([]);
   const [levelId, setLevelId] = useState("");
   const [studyModeId, setStudyModeId] = useState("");
+  const [semesterId, setSemesterId] = useState("");
 
   const [fetching, setFetching] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -35,15 +37,18 @@ export function useOnboarding() {
         { data: institutionsData },
         { data: levelsData },
         { data: studyModesData },
+        { data: semestersData },
       ] = await Promise.all([
         supabase.from("institutions").select("id, name").order("name"),
         supabase.from("levels").select("id, name").order("sort_order"),
         supabase.from("study_modes").select("id, name").order("name"),
+        supabase.from("semesters").select("id, name").order("name"),
       ]);
 
       setInstitutions(institutionsData ?? []);
       setLevels(levelsData ?? []);
       setStudyModes(studyModesData ?? []);
+      setSemesters(semestersData ?? []);
 
       if (institutionsData && institutionsData.length === 1) {
         setInstitutionId(institutionsData[0].id);
@@ -102,9 +107,10 @@ export function useOnboarding() {
       Number(!!departmentId) +
       Number(courseIds.length > 0) +
       Number(!!levelId) +
-      Number(!!studyModeId)
+      Number(!!studyModeId) +
+      Number(!!semesterId)
     );
-  }, [departmentId, courseIds, levelId, studyModeId]);
+  }, [departmentId, courseIds, levelId, studyModeId, semesterId]);
 
   async function submitOnboarding() {
     setError("");
@@ -128,6 +134,7 @@ export function useOnboarding() {
         department_id: departmentId,
         level_id: levelId,
         study_mode_id: studyModeId,
+        semester_id: semesterId,
         onboarding_completed: true,
         updated_at: new Date().toISOString(),
       });
@@ -137,7 +144,6 @@ export function useOnboarding() {
         return false;
       }
 
-      // Replace existing course selections with the new set
       const { error: deleteError } = await supabase
         .from("user_courses")
         .delete()
@@ -171,16 +177,19 @@ export function useOnboarding() {
     courses,
     levels,
     studyModes,
+    semesters,
     institutionId,
     departmentId,
     courseIds,
     levelId,
     studyModeId,
+    semesterId,
     setInstitutionId,
     setDepartmentId,
     setCourseIds,
     setLevelId,
     setStudyModeId,
+    setSemesterId,
     fetching,
     loading,
     error,
