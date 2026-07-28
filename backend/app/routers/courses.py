@@ -8,13 +8,17 @@ router = APIRouter(prefix="/api/courses", tags=["courses"])
 
 @router.get("")
 async def list_courses(user_id: str = Depends(get_current_user)):
-    profile_res = (
-        supabase.table("profiles")
-        .select("department_id")
-        .eq("id", user_id)
-        .single()
-        .execute()
-    )
+    try:
+        profile_res = (
+            supabase.table("profiles")
+            .select("department_id")
+            .eq("id", user_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
     department_id = (profile_res.data or {}).get("department_id")
 
     if not department_id:
@@ -65,13 +69,19 @@ async def list_courses(user_id: str = Depends(get_current_user)):
 
 @router.get("/{course_id}")
 async def get_course_detail(course_id: str, user_id: str = Depends(get_current_user)):
-    course_res = (
-        supabase.table("courses")
-        .select("id, name, department:departments(id, name)")
-        .eq("id", course_id)
-        .single()
-        .execute()
-    )
+    # .single()/.maybe_single() raise PGRST116 when zero rows match rather
+    # than returning None, so we guard the call itself and translate any
+    # failure into a clean 404 instead of letting it bubble up as a 500.
+    try:
+        course_res = (
+            supabase.table("courses")
+            .select("id, name, department:departments(id, name)")
+            .eq("id", course_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="Course not found")
 
     if not course_res.data:
         raise HTTPException(status_code=404, detail="Course not found")
