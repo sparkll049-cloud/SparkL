@@ -6,10 +6,10 @@ Extracts raw text from an uploaded past-question file (PDF, JPG, PNG).
 - PDFs: text layer extracted directly via pypdf (fast, works for
   digitally-generated PDFs).
 - Images (and PDFs with no usable text layer, i.e. scanned documents):
-  OCR via pytesseract, if installed. If OCR libraries aren't available
-  in this environment, we degrade gracefully rather than crashing the
-  server — the upload still gets stored, just with lower-confidence
-  extracted text for admin review.
+  OCR via pytesseract, if installed. If OCR libraries OR the underlying
+  Tesseract/Poppler binaries aren't available in this environment, we
+  degrade gracefully rather than crashing the server — the upload still
+  gets stored, just with lower-confidence extracted text for admin review.
 """
 
 from __future__ import annotations
@@ -51,24 +51,32 @@ def _extract_pdf_text(file_bytes: bytes) -> str:
 def _ocr_image_bytes(file_bytes: bytes) -> str:
     if not OCR_AVAILABLE:
         return ""
-    image = Image.open(io.BytesIO(file_bytes))
-    return pytesseract.image_to_string(image).strip()
+    try:
+        image = Image.open(io.BytesIO(file_bytes))
+        return pytesseract.image_to_string(image).strip()
+    except Exception:
+        # Covers TesseractNotFoundError (binary missing on this host) and
+        # any other OCR failure — never let this crash the upload request.
+        return ""
 
 
 def _ocr_pdf_pages(file_bytes: bytes) -> str:
     """OCR fallback for scanned PDFs with no text layer. Requires
-    pdf2image (+ poppler) in addition to pytesseract — if unavailable,
-    returns empty string rather than raising."""
+    pdf2image (+ poppler) in addition to pytesseract — if either the
+    Python package or the underlying binary is unavailable, returns
+    empty string rather than raising."""
     if not OCR_AVAILABLE:
         return ""
     try:
         from pdf2image import convert_from_bytes
-    except ImportError:
-        return ""
 
-    images = convert_from_bytes(file_bytes)
-    texts = [pytesseract.image_to_string(img) for img in images]
-    return "\n".join(texts).strip()
+        images = convert_from_bytes(file_bytes)
+        texts = [pytesseract.image_to_string(img) for img in images]
+        return "\n".join(texts).strip()
+    except Exception:
+        # Covers ImportError, PDFInfoNotInstalledError (poppler missing),
+        # TesseractNotFoundError, and any other OCR failure.
+        return ""
 
 
 def extract_text(filename: str, file_bytes: bytes) -> ExtractionResult:
