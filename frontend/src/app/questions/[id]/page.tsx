@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, FileText, Loader2, AlertCircle, Download } from "lucide-react";
+import { ArrowLeft, FileText, Loader2, AlertCircle, Eye, X } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
 
@@ -14,7 +14,6 @@ interface QuestionDetail {
   status: string;
   extracted_text: string | null;
   extraction_quality: number | null;
-  file_url: string;
   mime_type: string;
   created_at: string;
   course: { id: string; name: string } | null;
@@ -38,8 +37,6 @@ function formatExtractedText(text: string): string[] {
       paragraphs.push(para);
       continue;
     }
-    // Long block with no natural breaks — split on sentence boundaries
-    // in groups of ~3 to keep it readable.
     const sentences = para.split(/(?<=[.?!])\s+/);
     for (let i = 0; i < sentences.length; i += 3) {
       paragraphs.push(sentences.slice(i, i + 3).join(" "));
@@ -57,6 +54,10 @@ export default function QuestionDetailPage() {
   const [data, setData] = useState<QuestionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+  const [viewerLoading, setViewerLoading] = useState(false);
+  const [viewerError, setViewerError] = useState("");
 
   useEffect(() => {
     if (!questionId) return;
@@ -95,6 +96,36 @@ export default function QuestionDetailPage() {
     load();
   }, [questionId]);
 
+  async function openViewer() {
+    setViewerError("");
+    setViewerLoading(true);
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      router.push("/auth/login");
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}/file-url`,
+        { headers: { Authorization: `Bearer ${session.access_token}` } }
+      );
+
+      if (!res.ok) throw new Error("Couldn't open the file.");
+
+      const json: { url: string } = await res.json();
+      setViewerUrl(json.url);
+    } catch (err) {
+      setViewerError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setViewerLoading(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
@@ -117,6 +148,7 @@ export default function QuestionDetailPage() {
   const paragraphs = data.extracted_text ? formatExtractedText(data.extracted_text) : [];
   const isLowQuality =
     data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
+  const isImage = data.mime_type?.startsWith("image/");
 
   return (
     <div className="mx-auto max-w-3xl px-6 pb-16 pt-8">
@@ -141,23 +173,31 @@ export default function QuestionDetailPage() {
               {data.year ? ` · ${data.year}` : ""}
             </p>
           </div>
-          <a
-            href={data.file_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-auto flex shrink-0 items-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:opacity-90"
+          <button
+            onClick={openViewer}
+            disabled={viewerLoading}
+            className="ml-auto flex shrink-0 items-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
           >
-            <Download size={14} />
-            Original file
-          </a>
+            {viewerLoading ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Eye size={14} />
+            )}
+            View file
+          </button>
         </div>
+
+        {viewerError && (
+          <p className="mt-3 text-xs text-red-500">{viewerError}</p>
+        )}
 
         {isLowQuality && (
           <div className="mt-4 flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-xs text-amber-700">
             <AlertCircle size={14} className="mt-0.5 shrink-0" />
             <span>
               This scan wasn't very clear, so the text below may have small
-              errors — check the original file above if anything looks off.
+              errors — tap "View file" above to check the original if
+              anything looks off.
             </span>
           </div>
         )}
@@ -178,6 +218,43 @@ export default function QuestionDetailPage() {
           </div>
         )}
       </div>
+
+      {/* In-app viewer modal — deliberately not a direct <a href> link.
+          Right-click and drag are disabled to discourage casual saving;
+          this cannot stop screenshots, only make link-sharing and
+          save-as harder. */}
+      {viewerUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setViewerUrl(null)}
+        >
+          <button
+            onClick={() => setViewerUrl(null)}
+            className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
+          >
+            <X size={18} />
+          </button>
+
+          {isImage ? (
+            <img
+              src={viewerUrl}
+              alt={data.title}
+              draggable={false}
+              onContextMenu={(e) => e.preventDefault()}
+              className="max-h-full max-w-full select-none rounded-lg"
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <div
+              className="h-[85vh] w-full max-w-2xl overflow-hidden rounded-lg bg-white"
+              onClick={(e) => e.stopPropagation()}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <iframe src={viewerUrl} className="h-full w-full border-0" title={data.title} />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
-}
+           }
