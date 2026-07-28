@@ -48,21 +48,25 @@ def _fetch_summary(user_id: str) -> dict:
     ]
     course_ids = [c["id"] for c in courses]
 
-    recent_questions = []
+    # Recent activity is platform-wide — shows what's happening across
+    # every course, not just the ones this student has selected. That's
+    # deliberate: it's meant to surface new uploads students might not
+    # know to look for yet.
+    rq = (
+        supabase.table("past_questions")
+        .select("id, title, year, created_at, course:courses(name)")
+        .eq("status", "approved")
+        .order("created_at", desc=True)
+        .limit(5)
+        .execute()
+    )
+    recent_questions = rq.data or []
+
+    # "Past questions" stat stays scoped to the student's own selected
+    # courses — that's a personal relevance count, distinct from the
+    # platform-wide activity feed above.
     questions_in_courses = 0
-
     if course_ids:
-        rq = (
-            supabase.table("past_questions")
-            .select("id, title, year, created_at, course:courses(name)")
-            .in_("course_id", course_ids)
-            .eq("status", "approved")
-            .order("created_at", desc=True)
-            .limit(5)
-            .execute()
-        )
-        recent_questions = rq.data or []
-
         count_res = (
             supabase.table("past_questions")
             .select("id", count="exact")
