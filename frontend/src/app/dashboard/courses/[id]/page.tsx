@@ -118,7 +118,7 @@ export default function CourseDetailPage() {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-6 text-center">
         <p className="text-slate-600">{error || "Course not found."}</p>
-        <Link href="/courses" className="font-semibold text-blue-600 hover:underline">
+        <Link href="/dashboard/courses" className="font-semibold text-blue-600 hover:underline">
           Back to Courses
         </Link>
       </div>
