@@ -1,2 +1,0 @@
-tesseract-ocr
-poppler-utils
