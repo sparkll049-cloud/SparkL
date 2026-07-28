@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -16,6 +16,7 @@ import {
   LogOut,
   Menu,
   X,
+  Loader2,
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
@@ -56,11 +57,53 @@ export default function AdminLayout({
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    async function verifyAdmin() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        router.replace("/auth/login");
+        return;
+      }
+
+      const { data: profile, error } = await supabase
+        .from("profiles") // adjust to your actual users/profiles table name
+        .select("is_admin")
+        .eq("id", session.user.id)
+        .single();
+
+      if (error || !profile?.is_admin) {
+        router.replace("/dashboard");
+        return;
+      }
+
+      if (active) setAuthChecked(true);
+    }
+
+    verifyAdmin();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function handleLogout() {
     setLoggingOut(true);
     await supabase.auth.signOut();
     router.push("/auth/login");
+  }
+
+  if (!authChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    );
   }
 
   return (
@@ -195,4 +238,4 @@ export default function AdminLayout({
       </div>
     </div>
   );
-}
+          }
