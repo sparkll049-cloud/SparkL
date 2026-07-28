@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -50,14 +51,49 @@ interface DashboardData {
 const phoneValid = (phone: string) =>
   phone === "" || /^(\+234|0)?[789][01]\d{8}$/.test(phone);
 
+async function fetchDashboardSummary(
+  supabase: ReturnType<typeof createClient>,
+  router: ReturnType<typeof useRouter>,
+  setEmail: (email: string | null) => void
+): Promise<DashboardData> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (!session) {
+    router.push("/auth/login");
+    throw new Error("No session");
+  }
+
+  setEmail(session.user.email ?? null);
+
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_API_URL}/api/dashboard/summary`,
+    { headers: { Authorization: `Bearer ${session.access_token}` } }
+  );
+
+  if (!res.ok) throw new Error("Failed to load profile.");
+
+  return res.json();
+}
+
 export default function ProfilePage() {
   const supabase = createClient();
   const router = useRouter();
+  const queryClient = useQueryClient();
 
-  const [data, setData] = useState<DashboardData | null>(null);
   const [email, setEmail] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+
+  // Shares the same cache key as the dashboard home page — if that page
+  // was visited recently, this loads instantly with no network call.
+  const {
+    data,
+    isLoading: loading,
+    error,
+  } = useQuery({
+    queryKey: ["dashboard-summary"],
+    queryFn: () => fetchDashboardSummary(supabase, router, setEmail),
+  });
 
   // Inline identity edit
   const [editingIdentity, setEditingIdentity] = useState(false);
@@ -78,45 +114,13 @@ export default function ProfilePage() {
 
   const [signingOut, setSigningOut] = useState(false);
 
+  // Keep the edit-form fields synced once data arrives (or changes).
   useEffect(() => {
-    load();
-  }, []);
-
-  async function load() {
-    setLoading(true);
-    setError("");
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) {
-      router.push("/auth/login");
-      return;
+    if (data?.profile) {
+      setFullName(data.profile.full_name ?? "");
+      setPhone(data.profile.phone ?? "");
     }
-
-    setEmail(session.user.email ?? null);
-
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/dashboard/summary`,
-        {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        }
-      );
-
-      if (!res.ok) throw new Error("Failed to load profile.");
-
-      const json: DashboardData = await res.json();
-      setData(json);
-      setFullName(json.profile?.full_name ?? "");
-      setPhone(json.profile?.phone ?? "");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setLoading(false);
-    }
-  }
+  }, [data]);
 
   function startEditingIdentity() {
     setFullName(data?.profile?.full_name ?? "");
@@ -167,7 +171,10 @@ export default function ProfilePage() {
       return;
     }
 
-    setData((prev) =>
+    // Update the cached dashboard-summary data directly so this page
+    // (and the dashboard page, since they share the same key) reflects
+    // the change immediately without a refetch.
+    queryClient.setQueryData(["dashboard-summary"], (prev: DashboardData | undefined) =>
       prev
         ? {
             ...prev,
@@ -238,7 +245,9 @@ export default function ProfilePage() {
   if (error || !data) {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-6 text-center">
-        <p className="text-slate-600">{error || "Profile not found."}</p>
+        <p className="text-slate-600">
+          {error instanceof Error ? error.message : "Profile not found."}
+        </p>
         <Link href="/dashboard" className="font-semibold text-blue-600 hover:underline">
           Back to Dashboard
         </Link>
@@ -572,4 +581,4 @@ function ProfileField({
       </div>
     </div>
   );
-}
+               }
