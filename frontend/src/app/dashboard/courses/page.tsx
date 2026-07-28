@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { BookOpen, FileText, Loader2, CheckCircle2 } from "lucide-react";
@@ -14,49 +14,41 @@ interface CourseListItem {
   selected: boolean;
 }
 
+async function fetchCourses(
+  supabase: ReturnType<typeof createClient>,
+  router: ReturnType<typeof useRouter>
+): Promise<CourseListItem[]> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (!session) {
+    router.push("/auth/login");
+    throw new Error("No session");
+  }
+
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/courses`, {
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  });
+
+  if (!res.ok) throw new Error("Failed to load courses.");
+
+  const json = await res.json();
+  return Array.isArray(json?.courses) ? json.courses : [];
+}
+
 export default function CoursesPage() {
   const supabase = createClient();
   const router = useRouter();
 
-  const [courses, setCourses] = useState<CourseListItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      setError("");
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        router.push("/auth/login");
-        return;
-      }
-
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/courses`,
-          {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          }
-        );
-
-        if (!res.ok) throw new Error("Failed to load courses.");
-
-        const json = await res.json();
-        setCourses(Array.isArray(json?.courses) ? json.courses : []);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Something went wrong.");
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    load();
-  }, []);
+  const {
+    data: courses = [],
+    isLoading: loading,
+    error,
+  } = useQuery({
+    queryKey: ["courses"],
+    queryFn: () => fetchCourses(supabase, router),
+  });
 
   if (loading) {
     return (
@@ -73,7 +65,11 @@ export default function CoursesPage() {
         All courses in your department. Tap one to browse its past questions.
       </p>
 
-      {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
+      {error && (
+        <p className="mt-4 text-sm text-red-500">
+          {error instanceof Error ? error.message : "Something went wrong."}
+        </p>
+      )}
 
       {!error && courses.length === 0 ? (
         <div className="mt-10 flex flex-col items-center gap-2 text-center">
