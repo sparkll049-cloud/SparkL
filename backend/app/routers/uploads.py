@@ -16,7 +16,10 @@ Flow on upload:
     2. Validate file size and actual file content (not just the
        client-supplied Content-Type, which can be spoofed)
     3. Upload the raw file to Supabase Storage under a per-user path
-       with a random filename -> get file_url
+       with a random filename -> store the storage PATH (not a public
+       URL — the bucket is private, so file access always goes through
+       a short-lived signed URL generated on demand, never a permanent
+       link)
     4. Extract text from the file (OCR if it's an image/scanned PDF)
        and score how trustworthy that extraction looks
     5. Save the record with status="pending" — it stays invisible to
@@ -57,7 +60,7 @@ from app.services.text_quality import estimate_extraction_quality
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
 
 TABLE_NAME = "past_questions"
-STORAGE_BUCKET = "past-questions"  # must exist in Supabase Storage, public
+STORAGE_BUCKET = "past-questions"  # must exist in Supabase Storage, PRIVATE
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB, matches frontend + bucket limit
 MAX_TITLE_LENGTH = 150
@@ -202,7 +205,10 @@ async def upload_past_question(
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to store file.")
 
-    file_url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(storage_path)
+    # The bucket is private now — we store only the internal path, never
+    # a permanent public URL. Actual file access always goes through a
+    # short-lived signed URL generated on demand (see questions.py).
+    file_url = storage_path
 
     record = {
         "title": title,
