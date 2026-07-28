@@ -94,6 +94,15 @@ async def delete_item(
 ):
     validate_table(table)
 
+    # Check the row exists first, so a delete on a missing/already-deleted
+    # id reports 404 instead of a false "deleted": True.
+    existing = supabase.table(table).select("id").eq("id", item_id).execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Item not found")
+
     res = supabase.table(table).delete().eq("id", item_id).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Item not found")
 
     return {"deleted": True}
