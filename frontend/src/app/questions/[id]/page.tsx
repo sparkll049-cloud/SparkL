@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, FileText, Loader2, AlertCircle, Eye, X } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
+import PdfViewer from "@/components/PdfViewer";
 
 interface QuestionDetail {
   id: string;
@@ -219,10 +220,12 @@ export default function QuestionDetailPage() {
         )}
       </div>
 
-      {/* In-app viewer modal — deliberately not a direct <a href> link.
-          Right-click and drag are disabled to discourage casual saving;
-          this cannot stop screenshots, only make link-sharing and
-          save-as harder. */}
+      {/* In-app viewer modal — deliberately not a direct <a href> link
+          or native <iframe> (which would hand control to the browser's
+          own PDF viewer, complete with its own download button). Images
+          render directly with right-click/drag disabled; PDFs render
+          page-by-page onto <canvas> via PdfViewer. This cannot stop
+          screenshots, only make link-sharing and save-as harder. */}
       {viewerUrl && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
@@ -245,16 +248,12 @@ export default function QuestionDetailPage() {
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
-            <div
-              className="h-[85vh] w-full max-w-2xl overflow-hidden rounded-lg bg-white"
-              onClick={(e) => e.stopPropagation()}
-              onContextMenu={(e) => e.preventDefault()}
-            >
-              <iframe src={viewerUrl} className="h-full w-full border-0" title={data.title} />
+            <div onClick={(e) => e.stopPropagation()}>
+              <PdfViewer url={viewerUrl} />
             </div>
           )}
         </div>
       )}
     </div>
   );
-           }
+        }
