@@ -1,7 +1,11 @@
 fastapi>=0.110.0
-uvicorn[standard]>=0.28.0
+uvicorn>=0.28.0
 supabase>=2.4.0
+pydantic<2
 pypdf>=4.1.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.1
-pydantic>=2.6.0
+python-jose[cryptography]
+pytesseract
+Pillow
+pdf2image
