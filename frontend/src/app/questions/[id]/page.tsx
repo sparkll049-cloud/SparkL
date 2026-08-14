@@ -1,9 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, FileText, Loader2, AlertCircle, Eye, X } from "lucide-react";
+import {
+  ArrowLeft,
+  FileText,
+  Loader2,
+  AlertCircle,
+  Eye,
+  X,
+  Upload as UploadIcon,
+  CheckCircle2,
+  Clock,
+} from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
 import PdfViewer from "@/components/PdfViewer";
@@ -26,7 +36,18 @@ interface FormattedLine {
   indent: boolean;
 }
 
+interface AnswerSubmission {
+  id: string;
+  status: "pending" | "reviewed";
+  feedback: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+  extraction_quality: number | null;
+}
+
 const LOW_QUALITY_THRESHOLD = 0.5;
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png"];
 
 // Preserves the document's own line breaks and structure instead of
 // re-grouping text into arbitrary sentence blocks. Lines that look like
@@ -50,6 +71,7 @@ export default function QuestionDetailPage() {
   const router = useRouter();
   const params = useParams();
   const questionId = params?.id as string;
+  const answerFileInputRef = useRef<HTMLInputElement>(null);
 
   const [data, setData] = useState<QuestionDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,6 +80,13 @@ export default function QuestionDetailPage() {
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerError, setViewerError] = useState("");
+
+  const [myAnswers, setMyAnswers] = useState<AnswerSubmission[]>([]);
+  const [answerFile, setAnswerFile] = useState<File | null>(null);
+  const [answerFileError, setAnswerFileError] = useState("");
+  const [submittingAnswer, setSubmittingAnswer] = useState(false);
+  const [answerError, setAnswerError] = useState("");
+  const [answerSuccess, setAnswerSuccess] = useState(false);
 
   useEffect(() => {
     if (!questionId) return;
@@ -86,6 +115,8 @@ export default function QuestionDetailPage() {
 
         const json: QuestionDetail = await res.json();
         setData(json);
+
+        await loadMyAnswers(session.access_token);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong.");
       } finally {
@@ -95,6 +126,18 @@ export default function QuestionDetailPage() {
 
     load();
   }, [questionId]);
+
+  async function loadMyAnswers(token: string) {
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/answers/mine/${questionId}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) setMyAnswers(await res.json());
+    } catch {
+      // Non-critical — history is secondary to the rest of the page
+    }
+  }
 
   async function openViewer() {
     setViewerError("");
@@ -123,6 +166,89 @@ export default function QuestionDetailPage() {
       setViewerError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setViewerLoading(false);
+    }
+  }
+
+  function handleAnswerFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setAnswerFileError("");
+    const selected = e.target.files?.[0] ?? null;
+
+    if (!selected) {
+      setAnswerFile(null);
+      return;
+    }
+
+    if (!ALLOWED_TYPES.includes(selected.type)) {
+      setAnswerFileError("Only PDF, JPG, and PNG files are allowed.");
+      setAnswerFile(null);
+      return;
+    }
+
+    if (selected.size > MAX_FILE_SIZE) {
+      setAnswerFileError("File is too large. Maximum size is 10MB.");
+      setAnswerFile(null);
+      return;
+    }
+
+    setAnswerFile(selected);
+  }
+
+  async function handleSubmitAnswer(e: React.FormEvent) {
+    e.preventDefault();
+    setAnswerError("");
+    setAnswerSuccess(false);
+
+    if (!answerFile) {
+      setAnswerError("Please choose a file to submit.");
+      return;
+    }
+
+    setSubmittingAnswer(true);
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      setSubmittingAnswer(false);
+      router.push("/auth/login");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("question_id", questionId);
+    formData.append("file", answerFile);
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/answers`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${session.access_token}` },
+          body: formData,
+        }
+      );
+
+      if (res.status === 401) {
+        setSubmittingAnswer(false);
+        router.push("/auth/login");
+        return;
+      }
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? "Submission failed. Please try again.");
+      }
+
+      setAnswerSuccess(true);
+      setAnswerFile(null);
+      if (answerFileInputRef.current) answerFileInputRef.current.value = "";
+
+      await loadMyAnswers(session.access_token);
+    } catch (err) {
+      setAnswerError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setSubmittingAnswer(false);
     }
   }
 
@@ -218,6 +344,91 @@ export default function QuestionDetailPage() {
                 {line.text}
               </p>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* Submit an answer */}
+      <div className="mt-6 rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+        <h2 className="mb-1 text-base font-semibold text-slate-900">Submit Your Answer</h2>
+        <p className="mb-4 text-sm text-slate-500">
+          Upload a photo or scan of your written answer — an admin will
+          review it and leave feedback.
+        </p>
+
+        <form onSubmit={handleSubmitAnswer} className="space-y-4">
+          <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 px-4 py-8 text-center transition hover:border-blue-300 hover:bg-blue-50/40">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 text-blue-600">
+              <UploadIcon className="h-4 w-4" />
+            </div>
+            <span className="text-sm text-slate-500">
+              {answerFile ? answerFile.name : "Click to choose a PDF, JPG, or PNG (max 10MB)"}
+            </span>
+            <input
+              ref={answerFileInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png"
+              onChange={handleAnswerFileChange}
+              className="hidden"
+            />
+          </label>
+          {answerFileError && (
+            <p className="text-sm text-red-500">{answerFileError}</p>
+          )}
+
+          {answerError && <p className="text-sm text-red-500">{answerError}</p>}
+          {answerSuccess && (
+            <p className="flex items-center gap-1.5 text-sm text-emerald-600">
+              <CheckCircle2 className="h-4 w-4" />
+              Submitted — pending admin review.
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={!answerFile || !!answerFileError || submittingAnswer}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
+          >
+            {submittingAnswer && <Loader2 className="h-4 w-4 animate-spin" />}
+            {submittingAnswer ? "Submitting..." : "Submit Answer"}
+          </button>
+        </form>
+
+        {myAnswers.length > 0 && (
+          <div className="mt-6 border-t border-slate-100 pt-5">
+            <h3 className="mb-3 text-sm font-semibold text-slate-800">
+              Your Submissions
+            </h3>
+            <div className="space-y-3">
+              {myAnswers.map((a) => (
+                <div
+                  key={a.id}
+                  className="rounded-xl border border-slate-100 bg-slate-50 p-3.5"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs text-slate-500">
+                      {new Date(a.created_at).toLocaleDateString()}
+                    </span>
+                    {a.status === "reviewed" ? (
+                      <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                        <CheckCircle2 className="h-3 w-3" />
+                        Reviewed
+                      </span>
+                    ) : (
+                      <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
+                        <Clock className="h-3 w-3" />
+                        Pending
+                      </span>
+                    )}
+                  </div>
+                  {a.status === "reviewed" && a.feedback && (
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                      {a.feedback}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
