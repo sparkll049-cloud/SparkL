@@ -34,7 +34,17 @@ export async function updateSession(
     }
   );
 
-  await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  // If a logged-in user lands on the homepage, send them straight to
+  // their dashboard instead of showing the marketing/landing page.
+  if (user && request.nextUrl.pathname === "/") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/dashboard";
+    return NextResponse.redirect(url);
+  }
 
   return response;
 }
