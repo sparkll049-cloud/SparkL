@@ -1,4 +1,6 @@
 import os
+import asyncio
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,13 +15,23 @@ from app.routers import (
     uploads,
     questions,
 )
+from app.services.extraction_worker import run_extraction_worker
 
-app = FastAPI(title="SparkL API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start the background extraction worker once, when the app boots.
+    task = asyncio.create_task(run_extraction_worker())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="SparkL API", lifespan=lifespan)
 
 # Reads allowed origins from an env var in production (comma-separated),
 # falls back to localhost for local dev. Avoids hardcoding a URL that
 # breaks the moment the frontend is deployed somewhere new.
-default_origins = "https://sparkl-fastapi.onrender.com/"
+default_origins = "http://localhost:3000"
 allowed_origins = os.getenv("ALLOWED_ORIGINS", default_origins).split(",")
 
 app.add_middleware(
@@ -41,6 +53,5 @@ app.include_router(questions.router)
 
 
 @app.get("/")
-
 def root():
     return {"status": "SparkL API running"}
