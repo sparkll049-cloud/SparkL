@@ -3,39 +3,40 @@ text_extractor.py
 ------------------
 Extracts raw text from an uploaded past-question file (PDF, JPG, PNG).
 
-- PDFs: text layer extracted directly via pypdf (fast, works for
-  digitally-generated PDFs).
-- Images (and PDFs with no usable text layer, i.e. scanned documents):
-  OCR via pytesseract, if installed, after a Pillow-only preprocessing
-  pass (grayscale, upscale, contrast, sharpen, binarize) to improve
-  accuracy on phone-camera scans. If OCR libraries OR the underlying
-  Tesseract/Poppler binaries aren't available in this environment, we
-  degrade gracefully rather than crashing the server — the upload still
-  gets stored, just with lower-confidence extracted text for admin review.
+- PDFs with a real text layer (digitally generated): extracted directly
+  via pypdf. Fast, free, no API call needed.
+- Images, and scanned PDFs with no usable text layer: sent directly to
+  Gemini's vision model, which reads the document and returns clean
+  transcribed text in one call — no separate OCR engine or local
+  system binaries (tesseract/poppler) required.
 """
 
 from __future__ import annotations
 
 import io
+import os
 
 from pypdf import PdfReader
+from google import genai
+from google.genai import types
 
-try:
-    import pytesseract
-    from PIL import Image, ImageOps, ImageFilter
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_AVAILABLE = bool(GEMINI_API_KEY)
 
-    OCR_AVAILABLE = True
-except ImportError:
-    OCR_AVAILABLE = False
+_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_AVAILABLE else None
 
-# OEM 1 = LSTM engine (better accuracy than legacy), PSM 6 = assume a
-# single uniform block of text — matches scanned exam pages better than
-# Tesseract's default "sparse text" mode.
-TESSERACT_CONFIG = "--oem 1 --psm 6"
+# Check ai.google.dev for the current recommended free-tier model name —
+# Google renames/rotates these periodically.
+GEMINI_MODEL = "gemini-2.5-flash"
 
-# If the shorter image side is below this, upscale before OCR — small
-# phone-camera scans lose a lot of accuracy at native resolution.
-MIN_DIMENSION = 1800
+EXTRACTION_PROMPT = (
+    "This is a scanned exam/past-question paper. Transcribe all the text "
+    "in this document exactly as it appears, preserving question "
+    "numbering, structure, and formatting as closely as possible. Do not "
+    "summarize, explain, or add any commentary. If parts are illegible, "
+    "leave them out rather than guessing. Return only the transcribed "
+    "text, nothing else."
+)
 
 
 class UnsupportedFileTypeError(Exception):
@@ -59,65 +60,24 @@ def _extract_pdf_text(file_bytes: bytes) -> str:
     return "\n".join(pages_text).strip()
 
 
-def _preprocess_for_ocr(image: "Image.Image") -> "Image.Image":
-    """Pillow-only preprocessing pipeline to improve OCR accuracy on
-    photographed/scanned pages, without requiring OpenCV."""
+def _extract_with_gemini(file_bytes: bytes, mime_type: str) -> str:
+    """Sends the file directly to Gemini for transcription. Returns empty
+    string on any failure — never let this crash the upload."""
+    if not GEMINI_AVAILABLE:
+        return ""
 
-    width, height = image.size
-    shorter_side = min(width, height)
-    if shorter_side < MIN_DIMENSION:
-        scale = MIN_DIMENSION / shorter_side
-        image = image.resize(
-            (int(width * scale), int(height * scale)),
-            Image.LANCZOS,
+    try:
+        response = _client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+                EXTRACTION_PROMPT,
+            ],
         )
-
-    image = image.convert("L")
-    image = ImageOps.autocontrast(image, cutoff=1)
-    image = image.filter(ImageFilter.SHARPEN)
-
-    # Simple global threshold — cruder than adaptive thresholding (which
-    # needs OpenCV), but still helps on reasonably evenly-lit scans.
-    threshold = 160
-    image = image.point(lambda p: 255 if p > threshold else 0)
-
-    return image
-
-
-def _ocr_image_bytes(file_bytes: bytes) -> str:
-    if not OCR_AVAILABLE:
-        return ""
-    try:
-        image = Image.open(io.BytesIO(file_bytes))
-        image = _preprocess_for_ocr(image)
-        return pytesseract.image_to_string(image, config=TESSERACT_CONFIG).strip()
+        return (response.text or "").strip()
     except Exception:
-        # Covers TesseractNotFoundError (binary missing on this host) and
-        # any other OCR failure — never let this crash the upload request.
-        return ""
-
-
-def _ocr_pdf_pages(file_bytes: bytes) -> str:
-    """OCR fallback for scanned PDFs with no text layer. Requires
-    pdf2image (+ poppler) in addition to pytesseract — if either the
-    Python package or the underlying binary is unavailable, returns
-    empty string rather than raising."""
-    if not OCR_AVAILABLE:
-        return ""
-    try:
-        from pdf2image import convert_from_bytes
-
-        # Higher DPI than the pdf2image default (72) gives Tesseract a
-        # sharper source image to work with.
-        images = convert_from_bytes(file_bytes, dpi=300)
-        texts = []
-        for img in images:
-            processed = _preprocess_for_ocr(img)
-            texts.append(pytesseract.image_to_string(processed, config=TESSERACT_CONFIG))
-        return "\n".join(texts).strip()
-    except Exception:
-        # Covers ImportError, PDFInfoNotInstalledError (poppler missing),
-        # TesseractNotFoundError, and any other OCR failure.
+        # Covers rate limits, network errors, bad responses — never let
+        # extraction failures crash the upload request.
         return ""
 
 
@@ -127,10 +87,13 @@ def extract_text(filename: str, file_bytes: bytes) -> ExtractionResult:
     if lower_name.endswith(".pdf"):
         text = _extract_pdf_text(file_bytes)
         if not text:
-            # Likely a scanned PDF with no embedded text layer — try OCR.
-            text = _ocr_pdf_pages(file_bytes)
-    elif lower_name.endswith((".jpg", ".jpeg", ".png")):
-        text = _ocr_image_bytes(file_bytes)
+            # No embedded text layer — likely a scanned PDF. Send it to
+            # Gemini directly; it can read PDFs natively.
+            text = _extract_with_gemini(file_bytes, "application/pdf")
+    elif lower_name.endswith((".jpg", ".jpeg")):
+        text = _extract_with_gemini(file_bytes, "image/jpeg")
+    elif lower_name.endswith(".png"):
+        text = _extract_with_gemini(file_bytes, "image/png")
     else:
         raise UnsupportedFileTypeError(
             f"Cannot extract text from file type: {filename}"
