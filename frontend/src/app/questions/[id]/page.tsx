@@ -21,29 +21,28 @@ interface QuestionDetail {
   semester: { id: string; name: string } | null;
 }
 
+interface FormattedLine {
+  text: string;
+  indent: boolean;
+}
+
 const LOW_QUALITY_THRESHOLD = 0.5;
 
-// Splits extracted text into paragraphs on blank lines, and further
-// breaks up long unbroken blocks into sentence groups so raw OCR/PDF
-// dumps aren't shown as one giant wall of text.
-function formatExtractedText(text: string): string[] {
-  const rawParagraphs = text
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter(Boolean);
+// Preserves the document's own line breaks and structure instead of
+// re-grouping text into arbitrary sentence blocks. Lines that look like
+// sub-parts (a), (b), i), ii), etc. get a light indent so nested
+// question structure stays visually clear.
+function formatExtractedText(text: string): FormattedLine[] {
+  const subPartPattern = /^\(?[a-z]\)|^\(?[ivx]+\)/i;
 
-  const paragraphs: string[] = [];
-  for (const para of rawParagraphs) {
-    if (para.length <= 400) {
-      paragraphs.push(para);
-      continue;
-    }
-    const sentences = para.split(/(?<=[.?!])\s+/);
-    for (let i = 0; i < sentences.length; i += 3) {
-      paragraphs.push(sentences.slice(i, i + 3).join(" "));
-    }
-  }
-  return paragraphs;
+  return text
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => ({
+      text: line,
+      indent: subPartPattern.test(line),
+    }));
 }
 
 export default function QuestionDetailPage() {
@@ -146,7 +145,7 @@ export default function QuestionDetailPage() {
     );
   }
 
-  const paragraphs = data.extracted_text ? formatExtractedText(data.extracted_text) : [];
+  const lines = data.extracted_text ? formatExtractedText(data.extracted_text) : [];
   const isLowQuality =
     data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
   const isImage = data.mime_type?.startsWith("image/");
@@ -207,13 +206,16 @@ export default function QuestionDetailPage() {
       <div className="mt-6 rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-base font-semibold text-slate-900">Extracted Text</h2>
 
-        {paragraphs.length === 0 ? (
+        {lines.length === 0 ? (
           <p className="text-sm text-slate-400">No extracted text available for this file.</p>
         ) : (
-          <div className="space-y-4 text-[15px] leading-relaxed text-slate-700">
-            {paragraphs.map((para, i) => (
-              <p key={i} className="whitespace-pre-wrap">
-                {para}
+          <div className="space-y-2 text-[15px] leading-relaxed text-slate-700">
+            {lines.map((line, i) => (
+              <p
+                key={i}
+                className={`whitespace-pre-wrap ${line.indent ? "ml-4" : ""}`}
+              >
+                {line.text}
               </p>
             ))}
           </div>
@@ -256,4 +258,4 @@ export default function QuestionDetailPage() {
       )}
     </div>
   );
-        }
+}
