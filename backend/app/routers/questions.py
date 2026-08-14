@@ -4,6 +4,9 @@ questions.py
 Public-facing single past-question detail view. File access is never
 returned as a direct link — the bucket is private, so the frontend must
 call the /file-url endpoint to get a short-lived signed URL on demand.
+
+Admins can view any file (pending, rejected, or approved) for review
+purposes; regular users can only view their own uploads or approved ones.
 """
 
 from __future__ import annotations
@@ -19,6 +22,31 @@ router = APIRouter(prefix="/api/questions", tags=["Questions"])
 
 STORAGE_BUCKET = "past-questions"
 FILE_URL_EXPIRY_SECONDS = 90  # long enough to load the viewer, not to hoard
+
+
+def _is_admin(user_id: UUID) -> bool:
+    """Soft admin check — returns False on any lookup failure instead of
+    raising, since this is used as an access bypass, not a hard gate."""
+    try:
+        profile_res = (
+            supabase.table("profiles")
+            .select("is_admin")
+            .eq("id", str(user_id))
+            .single()
+            .execute()
+        )
+        profile = profile_res.data
+        return bool(profile and profile.get("is_admin"))
+    except Exception:
+        return False
+
+
+def _can_access(row: dict, user_id: UUID) -> bool:
+    if row["status"] == "approved":
+        return True
+    if row["uploaded_by"] == str(user_id):
+        return True
+    return _is_admin(user_id)
 
 
 @router.get("/{question_id}")
@@ -44,7 +72,7 @@ async def get_question(question_id: str, user_id: UUID = Depends(get_current_use
     if not row:
         raise HTTPException(status_code=404, detail="Question not found.")
 
-    if row["status"] != "approved" and row["uploaded_by"] != str(user_id):
+    if not _can_access(row, user_id):
         raise HTTPException(status_code=404, detail="Question not found.")
 
     return row
@@ -70,7 +98,7 @@ async def get_signed_file_url(
     if not row:
         raise HTTPException(status_code=404, detail="Question not found.")
 
-    if row["status"] != "approved" and row["uploaded_by"] != str(user_id):
+    if not _can_access(row, user_id):
         raise HTTPException(status_code=404, detail="Question not found.")
 
     try:
