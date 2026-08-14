@@ -9,6 +9,7 @@ export async function middleware(
 
 export const config = {
   matcher: [
+    "/",
     "/dashboard/:path*",
     "/profile/:path*",
     "/settings/:path*",
