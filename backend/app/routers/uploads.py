@@ -20,13 +20,15 @@ Flow on upload:
        URL — the bucket is private, so file access always goes through
        a short-lived signed URL generated on demand, never a permanent
        link)
-    4. Extract text from the file (OCR if it's an image/scanned PDF)
-       and score how trustworthy that extraction looks
-    5. Save the record with status="pending" — it stays invisible to
-       other students until an admin approves it via /api/admin/questions
+    4. Save the record with status="pending" and extracted_text=None —
+       text extraction now happens asynchronously via a background
+       worker (see extraction_worker.py), paced to stay under Gemini's
+       free-tier rate limit, instead of blocking the upload request.
+    5. It stays invisible to other students until an admin approves it
+       via /api/admin/questions
 
 Endpoints:
-    POST /api/upload         upload a file -> store -> extract -> save (pending)
+    POST /api/upload         upload a file -> store -> save (pending, text pending)
     GET  /api/upload/mine    the logged-in user's own uploads, any status
 """
 
@@ -47,15 +49,8 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.concurrency import run_in_threadpool
 
 from app.supabase_client import supabase
-from app.services.text_extractor import (
-    EmptyExtractionError,
-    UnsupportedFileTypeError,
-    extract_text,
-)
-from app.services.text_quality import estimate_extraction_quality
 
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
 
@@ -131,7 +126,7 @@ async def get_current_user_id(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    summary="Upload a past question — file is stored, text extracted, saved as pending",
+    summary="Upload a past question — file is stored and queued for text extraction",
 )
 async def upload_past_question(
     title: str = Form(...),
@@ -177,20 +172,6 @@ async def upload_past_question(
     # Trust the bytes, not the client's declared filename/content-type.
     mime_type, ext = detect_file_type(file_bytes)
 
-    # OCR/PDF parsing is CPU-bound and blocking — run it off the event loop
-    # so one big scanned PDF doesn't stall every other request.
-    try:
-        result = await run_in_threadpool(extract_text, file.filename, file_bytes)
-    except UnsupportedFileTypeError as e:
-        raise HTTPException(status_code=415, detail=str(e)) from e
-    except EmptyExtractionError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-
-    # Heuristic score for how trustworthy the extraction looks — not a
-    # real OCR confidence value, just enough to flag obviously garbled
-    # text for admin review / student awareness.
-    extraction_quality = estimate_extraction_quality(result.text)
-
     # Random filename under the caller's own user_id folder — never the
     # client-supplied filename. This also matches the storage.objects
     # policy that restricts uploads to path <auth.uid()>/... only.
@@ -219,8 +200,8 @@ async def upload_past_question(
         "file_url": file_url,
         "mime_type": mime_type,
         "file_size": len(file_bytes),
-        "extracted_text": result.text,
-        "extraction_quality": extraction_quality,
+        "extracted_text": None,
+        "extraction_quality": None,
         "uploaded_by": str(user_id),
     }
 
