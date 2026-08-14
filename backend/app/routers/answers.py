@@ -6,7 +6,7 @@ photo/scan of their handwritten answer to a specific question; text is
 extracted asynchronously by the same background worker used for
 past_questions (see extraction_worker.py). Admins review submissions
 and leave written feedback — no scoring, just review.
-
+ 
 Endpoints:
     POST /api/answers                     submit an answer for a question
     GET  /api/answers/mine/{question_id}   the logged-in student's own
