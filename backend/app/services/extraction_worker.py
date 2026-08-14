@@ -6,7 +6,6 @@ answer_submissions) whose text hasn't been extracted yet. Runs inside
 the same FastAPI process as an asyncio loop, paced to stay under
 Gemini's free-tier rate limit — no external queue/broker required.
 """
-
 from __future__ import annotations
 
 import asyncio
