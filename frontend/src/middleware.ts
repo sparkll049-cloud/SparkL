@@ -6,7 +6,6 @@ export async function middleware(
 ) {
   return await updateSession(request);
 }
-
 export const config = {
   matcher: [
     "/",
