@@ -8,4 +8,4 @@ python-dotenv>=1.0.1
 python-jose[cryptography]
 google-genai>=0.3.0
 Pillow
-pdf2image
+pdf2image 
