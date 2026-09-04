@@ -1,0 +1,9 @@
+def mask_email(email: str) -> str:
+    user, domain = email.split("@")
+    return user[:2] + "***@" + domain
+
+def mask_phone(phone: str) -> str:
+    return phone[:3] + "****" + phone[-2:]
+
+def mask_card_or_id(value: str) -> str:
+    return "**** **** **** " + value[-4:]
