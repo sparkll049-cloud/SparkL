@@ -1,9 +1,17 @@
-def mask_email(email: str) -> str:
-    user, domain = email.split("@")
-    return user[:2] + "***@" + domain
+def mask_name(full_name: str) -> str:
+    parts = full_name.strip().split()
+    return "".join(p[0].upper() for p in parts if p)
+
 
 def mask_phone(phone: str) -> str:
-    return phone[:3] + "****" + phone[-2:]
+    if len(phone) <= 4:
+        return "*" * len(phone)
+    return phone[:2] + "*" * (len(phone) - 4) + phone[-2:]
 
-def mask_card_or_id(value: str) -> str:
-    return "**** **** **** " + value[-4:]
+
+def mask_email(email: str) -> str:
+    local, domain = email.split("@")
+    visible = local[:4].capitalize()
+    stars = "*" * max(len(local) - 4, 3)
+    extension = "." + domain.split(".")[-1]
+    return visible + stars + extension
