@@ -1,3 +1,4 @@
+from app.data_security import mask_name, mask_phone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -13,7 +14,6 @@ class SuspendUpdate(BaseModel):
 
 class AdminUpdate(BaseModel):
     is_admin: bool
-
 
 @router.get("")
 async def list_users(admin_id: str = Depends(get_current_admin)):
@@ -32,7 +32,35 @@ async def list_users(admin_id: str = Depends(get_current_admin)):
 
     users = res.data or []
 
-    # Flatten the nested user_courses -> course structure into a plain "courses" array
+    for user in users:
+        raw = user.pop("user_courses", []) or []
+        user["courses"] = [row["course"] for row in raw if row.get("course")]
+
+        # Mask sensitive fields before sending to the admin frontend
+        if user.get("full_name"):
+            user["full_name"] = mask_name(user["full_name"])
+        if user.get("phone"):
+            user["phone"] = mask_phone(user["phone"])
+
+    return users
+
+@router.get("")
+async def list_users(admin_id: str = Depends(get_current_admin)):
+    res = (
+        supabase.table("profiles")
+        .select(
+            "id, full_name, phone, is_admin, suspended, created_at, "
+            "institution:institutions(name), "
+            "department:departments(name), "
+            "level:levels(name), "
+            "user_courses(course:courses(id, name))"
+        )
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    users = res.data or []
+
     for user in users:
         raw = user.pop("user_courses", []) or []
         user["courses"] = [row["course"] for row in raw if row.get("course")]
