@@ -1,6 +1,5 @@
-from datetime import datetime, timezone, timedelta
-
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.admin_auth import get_current_admin
@@ -28,8 +27,10 @@ def _flatten_user(user: dict) -> dict:
     raw_courses = user.pop("user_courses", []) or []
     user["courses"] = [row["course"] for row in raw_courses if row.get("course")]
 
-    # Upload count
-    raw_uploads = user.pop("past_questions", []) or []
+    # Upload count — use explicit FK key
+    raw_uploads = user.pop(
+        "past_questions!past_questions_uploaded_by_profiles_fkey", []
+    ) or []
     user["total_uploads"] = len(raw_uploads)
 
     # Total views across uploads
@@ -39,7 +40,7 @@ def _flatten_user(user: dict) -> dict:
 
     # Study mode
     sm = user.pop("study_mode", None)
-    user["study_mode"] = sm  # already {"name": ...} or None
+    user["study_mode"] = sm
 
     return user
 
@@ -58,7 +59,7 @@ async def list_users(admin_id: str = Depends(get_current_admin)):
             "level:levels(name), "
             "study_mode:study_modes(name), "
             "user_courses(course:courses(id, name)), "
-            "past_questions(view_count)"
+            "past_questions!past_questions_uploaded_by_profiles_fkey(view_count)"
         )
         .order("created_at", desc=True)
         .execute()
@@ -110,7 +111,6 @@ async def set_admin_status(
     update_payload: dict = {"is_admin": payload.is_admin}
 
     if payload.is_admin:
-        # Validate role when granting admin
         valid_roles = {"moderator", "content_manager", "super_admin"}
         role = payload.admin_role or "moderator"
         if role not in valid_roles:
@@ -120,7 +120,6 @@ async def set_admin_status(
             )
         update_payload["admin_role"] = role
     else:
-        # Always clear role when revoking admin
         update_payload["admin_role"] = None
 
     res = (
@@ -147,7 +146,6 @@ async def delete_user(
             detail="You cannot delete your own account.",
         )
 
-    # Delete from profiles table (cascades to related data via DB constraints)
     res = (
         supabase.table("profiles")
         .delete()
@@ -158,10 +156,9 @@ async def delete_user(
     if not res.data:
         raise HTTPException(status_code=404, detail="User not found.")
 
-    # Also delete from Supabase Auth
     try:
         supabase.auth.admin.delete_user(user_id)
     except Exception:
-        pass  # Auth deletion is best-effort; profile is already gone
+        pass
 
     return {"deleted": True, "user_id": user_id}
