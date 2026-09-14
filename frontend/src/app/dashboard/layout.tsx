@@ -14,9 +14,9 @@ import {
   Menu,
   X,
   Loader2,
+  Zap,
 } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-
 import { createClient } from "@/utils/supabase/client";
 
 const navItems = [
@@ -26,46 +26,32 @@ const navItems = [
   { href: "/dashboard/profile", label: "Profile", icon: User },
 ];
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClient();
 
-  // Created once per layout mount (not per render) so cached data
-  // survives navigation between dashboard pages.
   const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            staleTime: 30_000,
-            gcTime: 5 * 60_000,
-            refetchOnWindowFocus: false,
-          },
-        },
-      })
+    () => new QueryClient({
+      defaultOptions: {
+        queries: { staleTime: 30_000, gcTime: 5 * 60_000, refetchOnWindowFocus: false },
+      },
+    })
   );
 
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [userInfo, setUserInfo] = useState<{
-    name: string | null;
-    email: string | null;
-  }>({ name: null, email: null });
+  const [userInfo, setUserInfo] = useState<{ name: string | null; email: string | null }>({
+    name: null,
+    email: null,
+  });
 
   useEffect(() => {
     async function init() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
+      const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
-
       setUserInfo({ name: null, email: session.user.email ?? null });
 
       const { data: profile } = await supabase
@@ -77,21 +63,14 @@ export default function DashboardLayout({
       setUserInfo((prev) => ({ ...prev, name: profile?.full_name ?? null }));
 
       try {
-        // Reuses the same admin-only endpoint your admin overview page
-        // already calls. If this user isn't an admin, the backend should
-        // reject it (401/403), which is our real signal — not a guessed
-        // column name.
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/admin/overview`,
-          { headers: { Authorization: `Bearer ${session.access_token}` } }
-        );
-
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/admin/overview`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
         setIsAdmin(res.ok);
       } catch {
         setIsAdmin(false);
       }
     }
-
     init();
   }, [supabase]);
 
@@ -103,177 +82,160 @@ export default function DashboardLayout({
 
   const initial = (userInfo.name ?? userInfo.email ?? "S").charAt(0).toUpperCase();
 
+  const SidebarContent = ({ mobile = false }: { mobile?: boolean }) => (
+    <div className="flex h-full flex-col">
+      {/* Logo */}
+      <div className={`flex items-center gap-3 px-4 py-5 ${!mobile && !sidebarExpanded ? "justify-center px-0" : ""}`}>
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#2563EB]">
+          <Zap className="h-4 w-4 text-white" fill="white" />
+        </div>
+        {(mobile || sidebarExpanded) && (
+          <span className="text-base font-black tracking-tight text-white">SparkL</span>
+        )}
+      </div>
+
+      {/* Nav */}
+      <nav className="mt-2 flex-1 space-y-0.5 px-2">
+        {navItems.map((item) => {
+          const active = pathname === item.href || (item.href !== "/dashboard" && pathname?.startsWith(item.href));
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={() => setMobileOpen(false)}
+              title={!mobile && !sidebarExpanded ? item.label : undefined}
+              className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150
+                ${!mobile && !sidebarExpanded ? "justify-center px-2.5" : ""}
+                ${active
+                  ? "bg-[#2563EB]/15 text-[#60A5FA]"
+                  : "text-[#64748B] hover:bg-white/[0.05] hover:text-slate-200"
+                }`}
+            >
+              <Icon className={`h-[18px] w-[18px] shrink-0 transition-colors ${active ? "text-[#60A5FA]" : "text-[#475569] group-hover:text-slate-300"}`} />
+              {(mobile || sidebarExpanded) && item.label}
+            </Link>
+          );
+        })}
+
+        {isAdmin && (
+          <>
+            <div className="my-3 mx-1 border-t border-white/[0.06]" />
+            <Link
+              href="/admin"
+              onClick={() => setMobileOpen(false)}
+              title={!mobile && !sidebarExpanded ? "Admin" : undefined}
+              className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all
+                ${!mobile && !sidebarExpanded ? "justify-center px-2.5" : ""}
+                ${pathname?.startsWith("/admin")
+                  ? "bg-[#2563EB]/15 text-[#60A5FA]"
+                  : "text-[#3B82F6] hover:bg-[#2563EB]/10"
+                }`}
+            >
+              <ShieldCheck className="h-[18px] w-[18px] shrink-0" />
+              {(mobile || sidebarExpanded) && "Admin"}
+            </Link>
+          </>
+        )}
+      </nav>
+
+      {/* User section */}
+      <div className={`border-t border-white/[0.06] p-2 space-y-0.5 ${!mobile && !sidebarExpanded ? "px-2" : ""}`}>
+        <Link
+          href="/dashboard/profile"
+          onClick={() => setMobileOpen(false)}
+          className={`flex items-center gap-3 rounded-lg px-2 py-2.5 transition hover:bg-white/[0.05]
+            ${!mobile && !sidebarExpanded ? "justify-center px-2" : ""}`}
+        >
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#1E3A8A] text-xs font-bold text-blue-200">
+            {initial}
+          </div>
+          {(mobile || sidebarExpanded) && (
+            <div className="min-w-0">
+              <p className="truncate text-xs font-semibold text-slate-200">{userInfo.name ?? "Student"}</p>
+              <p className="truncate text-[10px] text-slate-500">{userInfo.email ?? ""}</p>
+            </div>
+          )}
+        </Link>
+
+        <button
+          onClick={handleLogout}
+          disabled={loggingOut}
+          title={!mobile && !sidebarExpanded ? "Log out" : undefined}
+          className={`flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-sm font-medium text-[#64748B] transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50
+            ${!mobile && !sidebarExpanded ? "justify-center px-2" : ""}`}
+        >
+          {loggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4 shrink-0" />}
+          {(mobile || sidebarExpanded) && (loggingOut ? "Logging out…" : "Log out")}
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen bg-slate-50">
-        {/* Mobile top bar */}
-        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 lg:hidden">
-          <div className="flex items-center gap-2">
-            <Image
-              src="/images/logo.jpg"
-              alt="SparkL"
-              width={28}
-              height={28}
-              className="rounded-full"
-            />
-            <span className="font-bold text-slate-900">SparkL</span>
+      <div className="flex min-h-screen bg-[#07091A]">
+
+        {/* ── Desktop sidebar (icon-only, expands on hover) ── */}
+        <aside
+          onMouseEnter={() => setSidebarExpanded(true)}
+          onMouseLeave={() => setSidebarExpanded(false)}
+          className={`
+            hidden lg:flex flex-col fixed inset-y-0 left-0 z-30
+            border-r border-white/[0.05] bg-[#0D1230]
+            transition-all duration-200 ease-out
+            ${sidebarExpanded ? "w-52" : "w-14"}
+          `}
+        >
+          <SidebarContent />
+        </aside>
+
+        {/* ── Mobile drawer ── */}
+        {mobileOpen && (
+          <div className="fixed inset-0 z-40 lg:hidden">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
+            <aside className="absolute inset-y-0 left-0 w-60 border-r border-white/[0.06] bg-[#0D1230]">
+              <SidebarContent mobile />
+            </aside>
           </div>
+        )}
 
-          <button onClick={() => setMobileOpen(!mobileOpen)}>
-            {mobileOpen ? (
-              <X size={24} className="text-slate-700" />
-            ) : (
-              <Menu size={24} className="text-slate-700" />
-            )}
-          </button>
-        </div>
+        {/* ── Main area ── */}
+        <div className={`flex flex-1 flex-col transition-all duration-200 ${sidebarExpanded ? "lg:ml-52" : "lg:ml-14"}`}>
 
-        <div className="mx-auto flex max-w-[1400px]">
-          {/* Sidebar */}
-          <aside
-            className={`
-              fixed inset-y-0 left-0 z-40 w-64 transform border-r border-slate-200
-              bg-white transition-transform duration-200 ease-in-out
-              lg:static lg:translate-x-0
-              ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
-            `}
-          >
-            <div className="flex h-full flex-col justify-between p-5">
-              <div>
-                {/* Logo (desktop) */}
-                <Link
-                  href="/dashboard"
-                  className="mb-8 hidden items-center gap-2 lg:flex"
-                >
-                  <Image
-                    src="/images/logo.jpg"
-                    alt="SparkL"
-                    width={32}
-                    height={32}
-                    className="rounded-full"
-                  />
-                  <span className="text-lg font-bold text-slate-900">
-                    SparkL
-                  </span>
-                </Link>
+          {/* Topbar */}
+          <header className="sticky top-0 z-20 flex h-12 items-center justify-between border-b border-white/[0.05] bg-[#07091A]/90 px-4 backdrop-blur-md lg:px-6">
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="rounded-lg p-1.5 text-slate-500 hover:bg-white/[0.05] hover:text-slate-300 transition lg:hidden"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
 
-                <p className="mb-2 px-4 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                  Menu
-                </p>
-
-                <nav className="space-y-1">
-                  {navItems.map((item) => {
-                    const active =
-                      pathname === item.href ||
-                      (item.href !== "/dashboard" &&
-                        pathname?.startsWith(item.href));
-
-                    const Icon = item.icon;
-
-                    return (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        onClick={() => setMobileOpen(false)}
-                        className={`
-                          relative flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium
-                          transition
-                          ${
-                            active
-                              ? "bg-blue-50 text-blue-600"
-                              : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                          }
-                        `}
-                      >
-                        {active && (
-                          <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-blue-600" />
-                        )}
-                        <Icon size={20} />
-                        {item.label}
-                      </Link>
-                    );
-                  })}
-
-                  {isAdmin && (
-                    <>
-                      <div className="my-3 border-t border-slate-100" />
-                      <p className="mb-2 px-4 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                        Administration
-                      </p>
-                      <Link
-                        href="/admin"
-                        onClick={() => setMobileOpen(false)}
-                        className={`
-                          relative flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium
-                          transition
-                          ${
-                            pathname?.startsWith("/admin")
-                              ? "bg-blue-50 text-blue-600"
-                              : "text-blue-600 hover:bg-blue-50"
-                          }
-                        `}
-                      >
-                        {pathname?.startsWith("/admin") && (
-                          <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-blue-600" />
-                        )}
-                        <ShieldCheck size={20} />
-                        Admin
-                      </Link>
-                    </>
-                  )}
-                </nav>
+            {/* Mobile logo */}
+            <div className="flex items-center gap-2 lg:hidden">
+              <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#2563EB]">
+                <Zap className="h-3.5 w-3.5 text-white" fill="white" />
               </div>
-
-              {/* User card + logout */}
-              <div className="space-y-2 border-t border-slate-100 pt-4">
-                <Link
-                  href="/dashboard/profile"
-                  onClick={() => setMobileOpen(false)}
-                  className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition hover:bg-slate-50"
-                >
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-600">
-                    {initial}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">
-                      {userInfo.name ?? "Student"}
-                    </p>
-                    <p className="truncate text-xs text-slate-400">
-                      {userInfo.email ?? ""}
-                    </p>
-                  </div>
-                </Link>
-
-                <button
-                  onClick={handleLogout}
-                  disabled={loggingOut}
-                  className="
-                    flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium
-                    text-red-500 transition hover:bg-red-50
-                    disabled:opacity-60
-                  "
-                >
-                  {loggingOut ? (
-                    <Loader2 size={20} className="animate-spin" />
-                  ) : (
-                    <LogOut size={20} />
-                  )}
-                  {loggingOut ? "Logging out..." : "Log Out"}
-                </button>
-              </div>
+              <span className="text-sm font-black text-white">SparkL</span>
             </div>
-          </aside>
 
-          {/* Overlay for mobile when sidebar open */}
-          {mobileOpen && (
-            <div
-              onClick={() => setMobileOpen(false)}
-              className="fixed inset-0 z-30 bg-black/30 lg:hidden"
-            />
-          )}
+            {/* Breadcrumb on desktop */}
+            <div className="hidden lg:block">
+              <p className="text-xs text-slate-600">
+                {navItems.find(n => pathname === n.href || (n.href !== "/dashboard" && pathname?.startsWith(n.href)))?.label ?? "Dashboard"}
+              </p>
+            </div>
 
-          {/* Main content */}
-          <main className="min-h-screen flex-1">{children}</main>
+            {/* Right side — avatar */}
+            <Link href="/dashboard/profile" className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/[0.05] transition">
+              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[#1E3A8A] text-[10px] font-bold text-blue-200">
+                {initial}
+              </div>
+            </Link>
+          </header>
+
+          <main className="flex-1">{children}</main>
         </div>
       </div>
     </QueryClientProvider>
