@@ -1,20 +1,11 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  ArrowRight,
-  Eye,
-  EyeOff,
-  Lock,
-  Mail,
-} from "lucide-react";
-
-import AuthLayout from "@/components/auth/AuthLayout";
-import { Button } from "@/components/ui/button";
+import { Eye, EyeOff, Lock, Mail, ArrowRight } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
+import { Button } from "@/components/ui/button";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -31,15 +22,10 @@ export default function LoginPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErrorMsg("");
-
     if (!formValid) return;
-
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
     if (error) {
       setLoading(false);
@@ -59,246 +45,171 @@ export default function LoginPage() {
         .single();
 
       setLoading(false);
-
-      if (profile?.onboarding_completed) {
-        router.push("/dashboard");
-      } else {
-        router.push("/onboarding");
-      }
+      router.push(profile?.onboarding_completed ? "/dashboard" : "/onboarding");
     }
   }
 
   return (
-    <AuthLayout>
-      <div className="fade-up">
+    <div className="min-h-screen bg-[#0A0F2C] flex">
+
+      {/* ── Left panel: branding ── */}
+      <div className="hidden lg:flex lg:w-1/2 relative flex-col justify-between p-14 overflow-hidden">
+
+        {/* Grid bg */}
+        <div
+          className="absolute inset-0 opacity-[0.04]"
+          style={{
+            backgroundImage:
+              "linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)",
+            backgroundSize: "60px 60px",
+          }}
+        />
+
+        {/* Glow */}
+        <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-600/20 rounded-full blur-[120px] pointer-events-none" />
 
         {/* Logo */}
-
-        <h1 className="text-4xl font-bold text-slate-900">
-          Welcome back
-        </h1>
-
-        <p className="mt-2 text-slate-500">
-          Log in to your SparkL account.
-        </p>
-
-        {/* Form */}
-
-        <form onSubmit={handleSubmit} className="mt-10 space-y-6">
-
-          {/* Email */}
-
-          <div>
-
-            <label className="mb-2 block text-sm font-semibold text-slate-700">
-              Email address
-            </label>
-
-            <div
-              className="
-                flex
-                h-14
-                items-center
-                rounded-xl
-                border
-                border-slate-200
-                bg-white
-                px-4
-                transition
-                duration-300
-                focus-within:border-blue-600
-                focus-within:ring-4
-                focus-within:ring-blue-100
-              "
-            >
-
-              <Mail
-                size={20}
-                className="text-slate-400"
-              />
-
-              <input
-                type="email"
-                placeholder="Enter your email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="
-                  ml-3
-                  w-full
-                  border-none
-                  bg-transparent
-                  outline-none
-                "
-              />
-
+        <div className="relative">
+          <Link href="/" className="inline-flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-[#2563EB] flex items-center justify-center">
+              <span className="text-white font-black text-sm">S</span>
             </div>
-
-          </div>
-
-          {/* Password */}
-
-          <div>
-
-            <label className="mb-2 block text-sm font-semibold text-slate-700">
-              Password
-            </label>
-
-            <div
-              className="
-                flex
-                h-14
-                items-center
-                rounded-xl
-                border
-                border-slate-200
-                bg-white
-                px-4
-                transition
-                duration-300
-                focus-within:border-blue-600
-                focus-within:ring-4
-                focus-within:ring-blue-100
-              "
-            >
-
-              <Lock
-                size={20}
-                className="text-slate-400"
-              />
-
-              <input
-                type={showPassword ? "text" : "password"}
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="
-                  ml-3
-                  w-full
-                  border-none
-                  bg-transparent
-                  outline-none
-                "
-              />
-
-              <button
-                type="button"
-                onClick={() =>
-                  setShowPassword(!showPassword)
-                }
-              >
-                {showPassword ? (
-                  <EyeOff
-                    size={20}
-                    className="text-slate-400"
-                  />
-                ) : (
-                  <Eye
-                    size={20}
-                    className="text-slate-400"
-                  />
-                )}
-              </button>
-
-            </div>
-
-          </div>
-
-          {/* Remember + Forgot */}
-
-          <div className="flex items-center justify-between">
-
-            <label className="flex items-center gap-2 text-sm text-slate-600">
-
-              <input
-                type="checkbox"
-                className="rounded"
-              />
-
-              Remember me
-
-            </label>
-
-            <Link
-              href="/auth/forgot-password"
-              className="
-                text-sm
-                font-medium
-                text-blue-600
-                hover:underline
-              "
-            >
-              Forgot password?
-            </Link>
-
-          </div>
-
-          {errorMsg && (
-            <p className="text-sm text-red-500">{errorMsg}</p>
-          )}
-
-          {/* Login Button */}
-
-          <Button
-            type="submit"
-            disabled={!formValid || loading}
-            className="
-              h-14
-              w-full
-              rounded-xl
-              bg-gradient-to-r
-              from-blue-700
-              to-blue-500
-              text-base
-              font-semibold
-              transition-all
-              duration-300
-              hover:scale-[1.02]
-              disabled:cursor-not-allowed
-              disabled:opacity-60
-              disabled:hover:scale-100
-            "
-          >
-
-            <span className="mr-2">
-              {loading ? "Logging in..." : "Log in"}
-            </span>
-
-            {!loading && <ArrowRight size={18} />}
-
-          </Button>
-
-        </form>
-
-        {/* Divider */}
-
-        <div className="my-8 flex items-center">
-
-          <div className="h-px flex-1 bg-slate-200" />
-
-          <span className="mx-4 text-sm text-slate-400">
-            or continue with
-          </span>
-
-          <div className="h-px flex-1 bg-slate-200" />
-
+            <span className="text-white font-bold text-xl tracking-tight">SparkL</span>
+          </Link>
         </div>
 
-        {/* Bottom */}
+        {/* Quote block */}
+        <div className="relative max-w-sm">
+          <p className="text-3xl font-extrabold text-white leading-snug mb-6">
+            Every past question you need — in one place.
+          </p>
+          <p className="text-slate-400 text-sm leading-7">
+            Thousands of Nigerian tertiary institution students are already using
+            SparkL to prepare smarter. Welcome back.
+          </p>
 
-        <p className="mt-8 text-center text-sm text-slate-500">
+          {/* Stats row */}
+          <div className="mt-10 flex gap-10">
+            <div>
+              <p className="text-2xl font-black text-white">10K+</p>
+              <p className="text-xs text-slate-500 mt-1">Students</p>
+            </div>
+            <div>
+              <p className="text-2xl font-black text-white">3K+</p>
+              <p className="text-xs text-slate-500 mt-1">Past questions</p>
+            </div>
+            <div>
+              <p className="text-2xl font-black text-white">Free</p>
+              <p className="text-xs text-slate-500 mt-1">Always</p>
+            </div>
+          </div>
+        </div>
 
-          Don't have an account?
+        {/* Footer */}
+        <p className="relative text-xs text-slate-600">
+          © {new Date().getFullYear()} SparkL. All rights reserved.
+        </p>
+      </div>
 
-          <Link
-            href="/auth/signup"
-            className="ml-2 font-semibold text-blue-600 hover:underline"
-          >
-            Sign up
+      {/* ── Right panel: form ── */}
+      <div className="w-full lg:w-1/2 flex items-center justify-center px-6 py-16 bg-[#060B1F]">
+        <div className="w-full max-w-md">
+
+          {/* Mobile logo */}
+          <Link href="/" className="inline-flex items-center gap-3 mb-10 lg:hidden">
+            <div className="h-8 w-8 rounded-xl bg-[#2563EB] flex items-center justify-center">
+              <span className="text-white font-black text-xs">S</span>
+            </div>
+            <span className="text-white font-bold text-lg">SparkL</span>
           </Link>
 
-        </p>
+          <h1 className="text-3xl font-extrabold text-white">Welcome back</h1>
+          <p className="mt-2 text-slate-400 text-sm">Log in to continue studying.</p>
 
+          <form onSubmit={handleSubmit} className="mt-10 space-y-5">
+
+            {/* Email */}
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Email address
+              </label>
+              <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
+                <Mail size={18} className="text-slate-500 shrink-0" />
+                <input
+                  type="email"
+                  placeholder="your@email.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="ml-3 w-full bg-transparent text-white placeholder:text-slate-600 outline-none text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Password */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-slate-300">Password</label>
+                <Link
+                  href="/auth/forgot-password"
+                  className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+              <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
+                <Lock size={18} className="text-slate-500 shrink-0" />
+                <input
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Enter your password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="ml-3 w-full bg-transparent text-white placeholder:text-slate-600 outline-none text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="text-slate-500 hover:text-slate-300 transition-colors"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            {/* Remember me */}
+            <label className="flex items-center gap-3 text-sm text-slate-400 cursor-pointer">
+              <input
+                type="checkbox"
+                className="rounded border-white/20 bg-white/5 accent-blue-500"
+              />
+              Keep me logged in
+            </label>
+
+            {/* Error */}
+            {errorMsg && (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3">
+                <p className="text-sm text-red-400">{errorMsg}</p>
+              </div>
+            )}
+
+            {/* Submit */}
+            <Button
+              type="submit"
+              disabled={!formValid || loading}
+              className="w-full h-13 rounded-xl bg-[#2563EB] text-sm font-semibold text-white hover:bg-blue-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {loading ? "Logging in..." : "Log in"}
+              {!loading && <ArrowRight size={16} />}
+            </Button>
+          </form>
+
+          <p className="mt-8 text-center text-sm text-slate-500">
+            Don't have an account?{" "}
+            <Link href="/auth/signup" className="text-blue-400 font-medium hover:text-blue-300 transition-colors">
+              Sign up free
+            </Link>
+          </p>
+        </div>
       </div>
-    </AuthLayout>
+    </div>
   );
 }
