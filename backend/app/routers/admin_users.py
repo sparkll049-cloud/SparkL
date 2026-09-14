@@ -1,3 +1,5 @@
+from datetime import datetime, timezone, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -7,37 +9,63 @@ from app.supabase_client import supabase
 router = APIRouter(prefix="/api/admin/users", tags=["admin-users"])
 
 
+# ── Pydantic models ─────────────────────────────────────────────────────────
+
 class SuspendUpdate(BaseModel):
     suspended: bool
 
 
 class AdminUpdate(BaseModel):
     is_admin: bool
+    admin_role: str | None = None  # "moderator" | "content_manager" | "super_admin"
 
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _flatten_user(user: dict) -> dict:
+    """Flatten nested join structures into clean fields."""
+    # Courses
+    raw_courses = user.pop("user_courses", []) or []
+    user["courses"] = [row["course"] for row in raw_courses if row.get("course")]
+
+    # Upload count
+    raw_uploads = user.pop("past_questions", []) or []
+    user["total_uploads"] = len(raw_uploads)
+
+    # Total views across uploads
+    user["total_views"] = sum(
+        (u.get("view_count") or 0) for u in raw_uploads
+    )
+
+    # Study mode
+    sm = user.pop("study_mode", None)
+    user["study_mode"] = sm  # already {"name": ...} or None
+
+    return user
+
+
+# ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.get("")
 async def list_users(admin_id: str = Depends(get_current_admin)):
     res = (
         supabase.table("profiles")
         .select(
-            "id, full_name, phone, is_admin, suspended, created_at, "
+            "id, full_name, phone, email, is_admin, admin_role, suspended, "
+            "created_at, last_active_at, subscription_plan, subscription_expires_at, "
             "institution:institutions(name), "
             "department:departments(name), "
             "level:levels(name), "
-            "user_courses(course:courses(id, name))"
+            "study_mode:study_modes(name), "
+            "user_courses(course:courses(id, name)), "
+            "past_questions(view_count)"
         )
         .order("created_at", desc=True)
         .execute()
     )
 
     users = res.data or []
-
-    # Flatten the nested user_courses -> course structure into a plain "courses" array
-    for user in users:
-        raw = user.pop("user_courses", []) or []
-        user["courses"] = [row["course"] for row in raw if row.get("course")]
-
-    return users
+    return [_flatten_user(u) for u in users]
 
 
 @router.patch("/{user_id}/suspend")
@@ -54,19 +82,15 @@ async def suspend_user(
     )
 
     if not res.data:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="User not found.")
 
     try:
         if payload.suspended:
-            supabase.auth.admin.update_user_by_id(
-                user_id, {"ban_duration": "876000h"}
-            )
+            supabase.auth.admin.update_user_by_id(user_id, {"ban_duration": "876000h"})
         else:
-            supabase.auth.admin.update_user_by_id(
-                user_id, {"ban_duration": "none"}
-            )
+            supabase.auth.admin.update_user_by_id(user_id, {"ban_duration": "none"})
     except Exception:
-        pass
+        pass  # Auth ban is best-effort; profile flag is the source of truth
 
     return res.data[0]
 
@@ -79,17 +103,65 @@ async def set_admin_status(
 ):
     if user_id == admin_id and not payload.is_admin:
         raise HTTPException(
-            status_code=400, detail="You cannot remove your own admin access."
+            status_code=400,
+            detail="You cannot remove your own admin access.",
         )
+
+    update_payload: dict = {"is_admin": payload.is_admin}
+
+    if payload.is_admin:
+        # Validate role when granting admin
+        valid_roles = {"moderator", "content_manager", "super_admin"}
+        role = payload.admin_role or "moderator"
+        if role not in valid_roles:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid admin role '{role}'. Must be one of: {', '.join(valid_roles)}.",
+            )
+        update_payload["admin_role"] = role
+    else:
+        # Always clear role when revoking admin
+        update_payload["admin_role"] = None
 
     res = (
         supabase.table("profiles")
-        .update({"is_admin": payload.is_admin})
+        .update(update_payload)
         .eq("id", user_id)
         .execute()
     )
 
     if not res.data:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="User not found.")
 
     return res.data[0]
+
+
+@router.delete("/{user_id}")
+async def delete_user(
+    user_id: str,
+    admin_id: str = Depends(get_current_admin),
+):
+    if user_id == admin_id:
+        raise HTTPException(
+            status_code=400,
+            detail="You cannot delete your own account.",
+        )
+
+    # Delete from profiles table (cascades to related data via DB constraints)
+    res = (
+        supabase.table("profiles")
+        .delete()
+        .eq("id", user_id)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    # Also delete from Supabase Auth
+    try:
+        supabase.auth.admin.delete_user(user_id)
+    except Exception:
+        pass  # Auth deletion is best-effort; profile is already gone
+
+    return {"deleted": True, "user_id": user_id}
