@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Lightbulb, Users, ShieldCheck, Rocket } from "lucide-react";
+import { ArrowRight, Lightbulb, Users, ShieldCheck, Rocket, GraduationCap, BookOpen, Target, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 // ─── DATA ────────────────────────────────────────────────────────────────────
@@ -29,31 +29,41 @@ const values = [
     icon: Rocket,
     title: "Built to scale",
     description:
-      "We started with Yabatech. But the problem we're solving exists in every polytechnic and university in Nigeria.",
+      "We started with one institution. But the problem we're solving exists in every polytechnic and university across Nigeria.",
   },
 ];
 
-const team = [
+const stats = [
+  { value: "2023", label: "Year founded" },
+  { value: "10K+", label: "Students served" },
+  { value: "50+", label: "Departments covered" },
+  { value: "Nigeria", label: "Where we're going" },
+];
+
+const pillars = [
   {
-    name: "Marvel",
-    role: "Founder & Lead Engineer",
-    bio: "Computer engineering student and the developer behind SparkL. Built the platform after seeing classmates struggle to find reliable past questions.",
-    initials: "M",
-    color: "bg-blue-500",
+    icon: GraduationCap,
+    title: "Built for Nigerian students",
+    description:
+      "SparkL is designed around how Nigerian tertiary institution students actually study — practical, exam-focused, and built around past questions.",
   },
   {
-    name: "Team Member",
-    role: "Product & Design",
-    bio: "Focuses on making SparkL easy and intuitive — because a tool students won't use is a tool that doesn't help anyone.",
-    initials: "T",
-    color: "bg-emerald-500",
+    icon: BookOpen,
+    title: "Every institution, every level",
+    description:
+      "Whether you're in ND1 at a polytechnic or 200L at a university, SparkL organizes resources around your exact level and department.",
   },
   {
-    name: "Team Member",
-    role: "Community Lead",
-    bio: "Manages the SparkL community, onboards new contributors, and makes sure students get the answers they need.",
-    initials: "T",
-    color: "bg-violet-500",
+    icon: Target,
+    title: "Exam-focused",
+    description:
+      "We don't try to replace your lecturers. We help you understand what comes up in exams — and make sure you're ready for it.",
+  },
+  {
+    icon: Globe,
+    title: "Expanding across Nigeria",
+    description:
+      "We're growing institution by institution. If your school isn't on SparkL yet, it will be — and you can help make it happen.",
   },
 ];
 
@@ -78,14 +88,15 @@ function AboutHero() {
             Who we are
           </p>
           <h1 className="text-5xl font-extrabold leading-tight text-white md:text-6xl">
-            We built the platform
+            Built by students,
             <br />
-            we wished existed.
+            for every student.
           </h1>
           <p className="mt-7 text-lg leading-8 text-slate-400 max-w-xl">
-            SparkL started as a simple idea — what if every Yabatech student
-            could find their department's past questions in under 30 seconds?
-            That idea became a platform. The platform became a community.
+            SparkL is a past questions and study platform built specifically
+            for Nigerian tertiary institution students — polytechnics,
+            universities, and colleges of education. One platform, every
+            department, completely free.
           </p>
         </div>
       </div>
@@ -106,10 +117,10 @@ function AboutMission() {
             </h2>
             <div className="space-y-5 text-slate-400 text-[15px] leading-8">
               <p>
-                Every semester, thousands of Nigerian polytechnic students sit exams
-                with no structured way to prepare. Past questions — the single most
-                reliable study tool — are scattered across WhatsApp chats, sold in
-                printout shops, or simply unavailable.
+                Every semester, thousands of Nigerian tertiary institution students
+                sit exams with no structured way to prepare. Past questions — the
+                single most reliable study tool — are scattered across WhatsApp
+                chats, sold in printout shops, or simply unavailable.
               </p>
               <p>
                 Students waste hours hunting for materials that should take seconds
@@ -117,8 +128,8 @@ function AboutMission() {
                 are left behind before the exam even starts.
               </p>
               <p>
-                SparkL fixes that. One platform, every department, all in one place —
-                free.
+                SparkL fixes that. One platform, every institution, every department,
+                all in one place — free.
               </p>
             </div>
 
@@ -128,7 +139,7 @@ function AboutMission() {
                 "We didn't build SparkL to be a startup. We built it because
                 students needed it and nobody else was doing it."
               </p>
-              <footer className="mt-3 text-sm text-slate-500">— Marvel, Founder</footer>
+              <footer className="mt-3 text-sm text-slate-500">— SparkL Team</footer>
             </blockquote>
           </div>
 
@@ -139,25 +150,15 @@ function AboutMission() {
             </p>
             <p className="text-2xl font-bold text-white leading-9 mb-8">
               Make quality exam preparation accessible to every student in Nigeria —
-              regardless of their department, level, or budget.
+              regardless of their institution, department, level, or budget.
             </p>
             <div className="grid grid-cols-2 gap-6 pt-6 border-t border-white/10">
-              <div>
-                <p className="text-3xl font-black text-white">2023</p>
-                <p className="text-sm text-slate-500 mt-1">Year founded</p>
-              </div>
-              <div>
-                <p className="text-3xl font-black text-white">Yabatech</p>
-                <p className="text-sm text-slate-500 mt-1">Where it started</p>
-              </div>
-              <div>
-                <p className="text-3xl font-black text-white">10K+</p>
-                <p className="text-sm text-slate-500 mt-1">Students served</p>
-              </div>
-              <div>
-                <p className="text-3xl font-black text-white">Nigeria</p>
-                <p className="text-sm text-slate-500 mt-1">Where we're going</p>
-              </div>
+              {stats.map((stat) => (
+                <div key={stat.label}>
+                  <p className="text-3xl font-black text-white">{stat.value}</p>
+                  <p className="text-sm text-slate-500 mt-1">{stat.label}</p>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -171,9 +172,14 @@ function AboutValues() {
   return (
     <section className="bg-[#0A0F2C] py-24 border-t border-white/10">
       <div className="mx-auto max-w-7xl px-6 lg:px-12">
-        <h2 className="text-3xl font-extrabold text-white md:text-4xl mb-14">
-          What we stand for
-        </h2>
+        <div className="mb-14">
+          <p className="text-xs font-semibold tracking-widest text-blue-400 uppercase mb-3">
+            Our principles
+          </p>
+          <h2 className="text-3xl font-extrabold text-white md:text-4xl">
+            What we stand for
+          </h2>
+        </div>
 
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {values.map((v) => {
@@ -197,36 +203,41 @@ function AboutValues() {
   );
 }
 
-function AboutTeam() {
+function AboutPillars() {
   return (
     <section className="bg-[#060B1F] py-24 border-t border-white/10">
       <div className="mx-auto max-w-7xl px-6 lg:px-12">
         <div className="mb-14">
+          <p className="text-xs font-semibold tracking-widest text-blue-400 uppercase mb-3">
+            How we think
+          </p>
           <h2 className="text-3xl font-extrabold text-white md:text-4xl">
-            The people behind SparkL
+            Why SparkL is different
           </h2>
           <p className="mt-4 text-slate-400 text-[15px] max-w-lg">
-            A small team of students and builders who know exactly what
-            it feels like to sit an exam underprepared.
+            There are other study platforms. But none of them were built
+            specifically around the Nigerian tertiary education system.
           </p>
         </div>
 
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {team.map((member) => (
-            <div
-              key={member.name}
-              className="rounded-xl border border-white/10 bg-white/[0.03] p-7"
-            >
-              {/* Avatar */}
-              <div className={`h-14 w-14 rounded-xl ${member.color} flex items-center justify-center mb-6`}>
-                <span className="text-white text-xl font-black">{member.initials}</span>
+        <div className="grid gap-6 sm:grid-cols-2">
+          {pillars.map((pillar) => {
+            const Icon = pillar.icon;
+            return (
+              <div
+                key={pillar.title}
+                className="rounded-xl border border-white/10 bg-white/[0.03] p-8 flex gap-6"
+              >
+                <div className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400">
+                  <Icon size={22} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white mb-3">{pillar.title}</h3>
+                  <p className="text-sm leading-7 text-slate-400">{pillar.description}</p>
+                </div>
               </div>
-
-              <h3 className="text-lg font-bold text-white">{member.name}</h3>
-              <p className="text-xs text-blue-400 font-medium mt-1 mb-4">{member.role}</p>
-              <p className="text-sm leading-7 text-slate-400">{member.bio}</p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </section>
@@ -242,8 +253,8 @@ function AboutCTA() {
             Ready to study smarter?
           </h2>
           <p className="text-slate-400 text-lg max-w-lg mx-auto mb-10">
-            Join thousands of Yabatech students already using SparkL to
-            prepare for exams — for free.
+            Join thousands of students across Nigerian tertiary institutions
+            already using SparkL to prepare for exams — for free.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link href="/auth/signup">
@@ -267,6 +278,6 @@ function AboutCTA() {
   );
 }
 
-// ─── DEFAULT EXPORT (all sections together for easy import) ──────────────────
+// ─── EXPORTS ─────────────────────────────────────────────────────────────────
 
-export { AboutHero, AboutMission, AboutValues, AboutTeam, AboutCTA };
+export { AboutHero, AboutMission, AboutValues, AboutPillars, AboutCTA };
