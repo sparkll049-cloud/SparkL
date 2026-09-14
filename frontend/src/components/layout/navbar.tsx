@@ -12,8 +12,8 @@ export default function Navbar() {
   const navLinks = [
     { name: "Courses", href: "#courses" },
     { name: "How It Works", href: "#how-it-works" },
-    { name: "Community", href: "#community" },
-    { name: "About", href: "#about" },
+    { name: "Community", href: "community" },
+    { name: "About", href: "about" },
   ];
 
   return (
