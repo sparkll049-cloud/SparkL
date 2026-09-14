@@ -190,6 +190,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <SidebarContent />
         </aside>
 
+        {/* ── Mobile floating menu button ── */}
+        <button
+          onClick={() => setMobileOpen(true)}
+          className="fixed bottom-6 left-4 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-[#2563EB] shadow-lg transition hover:bg-blue-500 lg:hidden"
+        >
+          <Menu className="h-5 w-5 text-white" />
+        </button>
+
         {/* ── Mobile drawer ── */}
         {mobileOpen && (
           <div className="fixed inset-0 z-40 lg:hidden">
@@ -200,7 +208,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         )}
 
-        {/* ── Main area (topbar removed) ── */}
+        {/* ── Main area ── */}
         <div className={`flex flex-1 flex-col transition-all duration-200 ${sidebarExpanded ? "lg:ml-52" : "lg:ml-14"}`}>
           <main className="flex-1">{children}</main>
         </div>
