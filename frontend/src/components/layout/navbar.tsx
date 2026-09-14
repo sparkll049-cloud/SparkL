@@ -10,119 +10,93 @@ export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
 
   const navLinks = [
-    { name: "Features", href: "#features" },
+    { name: "Courses", href: "#courses" },
+    { name: "How It Works", href: "#how-it-works" },
     { name: "Community", href: "#community" },
-    { name: "Resources", href: "#resources" },
     { name: "About", href: "#about" },
   ];
 
   return (
-    <header className="sticky top-0 z-50 w-full bg-white/95 backdrop-blur border-b border-gray-100">
-      <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-6 lg:px-12">
-        
+    <header className="sticky top-0 z-50 w-full bg-[#0A0F2C]/95 backdrop-blur-md border-b border-white/10">
+      <div className="mx-auto flex h-18 max-w-7xl items-center justify-between px-6 lg:px-12 py-4">
+
         {/* Logo */}
-        <Link href="/" className="flex items-center">
-  <Image
-    src="/images/logo.jpg"
-    alt="SparkL"
-    width={60}
-    height={60}
-    priority
-    className="object-contain"
-  />
-</Link>
+        <Link href="/" className="flex items-center gap-3">
+          <Image
+            src="/images/logo.jpg"
+            alt="SparkL"
+            width={40}
+            height={40}
+            priority
+            className="rounded-xl object-contain"
+          />
+          <span className="text-white text-xl font-bold tracking-tight">SparkL</span>
+        </Link>
 
         {/* Desktop Nav */}
-        <nav className="hidden items-center gap-10 md:flex">
+        <nav className="hidden items-center gap-8 md:flex">
           {navLinks.map((link) => (
             <Link
               key={link.name}
               href={link.href}
-              className="
-                relative
-                font-medium
-                text-slate-700
-                transition-colors
-                hover:text-blue-600
-                after:absolute
-                after:left-0
-                after:-bottom-1
-                after:h-[2px]
-                after:w-0
-                after:bg-blue-600
-                after:transition-all
-                hover:after:w-full
-              "
+              className="text-sm font-medium text-slate-300 transition-colors hover:text-white"
             >
               {link.name}
             </Link>
           ))}
         </nav>
 
-        {/* Desktop Button */}
-        {/* Desktop Button */}
-<div className="hidden md:block">
-  <Button
-    asChild
-    className="
-      rounded-xl
-      bg-blue-600
-      px-6
-      py-5
-      text-base
-      font-medium
-      transition-all
-      duration-300
-      hover:scale-105
-      hover:bg-blue-700
-    "
-  >
-    <Link href="/auth">
-      Sign In
-    </Link>
-  </Button>
-</div>
+        {/* Desktop Buttons */}
+        <div className="hidden md:flex items-center gap-3">
+          <Link
+            href="/auth/login"
+            className="text-sm font-medium text-slate-300 hover:text-white transition-colors px-4 py-2"
+          >
+            Log In
+          </Link>
+          <Button
+            asChild
+            className="rounded-lg bg-[#2563EB] px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-all duration-200"
+          >
+            <Link href="/auth/signup">Get Started Free</Link>
+          </Button>
+        </div>
 
-        {/* Mobile Menu Button */}
+        {/* Mobile Toggle */}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="md:hidden"
+          className="md:hidden text-white"
           aria-label="Toggle Menu"
         >
-          {isOpen ? (
-            <X size={28} />
-          ) : (
-            <Menu size={28} />
-          )}
+          {isOpen ? <X size={26} /> : <Menu size={26} />}
         </button>
       </div>
 
       {/* Mobile Menu */}
       {isOpen && (
-        <div className="md:hidden border-t border-gray-100 bg-white">
-          <div className="flex flex-col px-6 py-4 space-y-4">
+        <div className="md:hidden border-t border-white/10 bg-[#0A0F2C]">
+          <div className="flex flex-col px-6 py-5 space-y-4">
             {navLinks.map((link) => (
               <Link
                 key={link.name}
                 href={link.href}
                 onClick={() => setIsOpen(false)}
-                className="
-                  text-slate-700
-                  font-medium
-                  py-2
-                  hover:text-blue-600
-                "
+                className="text-slate-300 font-medium py-2 hover:text-white transition-colors"
               >
                 {link.name}
               </Link>
             ))}
-
-            <Button
-  asChild
-  className="rounded-xl bg-blue-600 px-6 py-5 text-base font-medium transition-all duration-300 hover:scale-105 hover:bg-blue-700"
->
-  <Link href="/auth">Sign In</Link>
-</Button>
+            <div className="pt-2 flex flex-col gap-3">
+              <Link href="/auth/login" className="text-center text-slate-300 font-medium py-2 hover:text-white">
+                Log In
+              </Link>
+              <Button
+                asChild
+                className="rounded-lg bg-[#2563EB] py-3 text-sm font-semibold hover:bg-blue-500"
+              >
+                <Link href="/auth/signup">Get Started Free</Link>
+              </Button>
+            </div>
           </div>
         </div>
       )}
