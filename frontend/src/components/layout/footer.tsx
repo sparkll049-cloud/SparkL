@@ -25,23 +25,14 @@ const footerLinks = [
     links: [
       { label: "Sign Up", href: "/auth/signup" },
       { label: "Log In", href: "/auth/login" },
-      { label: "Explore Community", href: "#community" },
+      { label: "Community", href: "#community" },
     ],
   },
 ];
 
 const socialLinks = [
   {
-    label: "Facebook",
-    href: "#",
-    svg: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
-        <path d="M22 12a10 10 0 1 0-11.6 9.9v-7H7.9V12h2.5V9.8c0-2.5 1.5-3.9 3.8-3.9 1.1 0 2.2.2 2.2.2v2.4h-1.2c-1.2 0-1.6.8-1.6 1.6V12h2.8l-.4 2.9h-2.4v7A10 10 0 0 0 22 12z" />
-      </svg>
-    ),
-  },
-  {
-    label: "Twitter",
+    label: "Twitter/X",
     href: "#",
     svg: (
       <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
@@ -71,34 +62,35 @@ const socialLinks = [
 
 export default function Footer() {
   return (
-    <footer className="border-t border-slate-200 bg-white">
-      <div className="mx-auto max-w-7xl px-6 py-14 lg:px-12">
-        <div className="grid grid-cols-1 gap-10 sm:grid-cols-2 lg:grid-cols-5">
+    <footer className="bg-[#060B1F] border-t border-white/10">
+      <div className="mx-auto max-w-7xl px-6 lg:px-12 py-16">
+        <div className="grid grid-cols-1 gap-12 sm:grid-cols-2 lg:grid-cols-5">
+
           {/* Brand */}
           <div className="lg:col-span-2">
-            <Link href="/" className="flex items-center gap-2">
+            <Link href="/" className="flex items-center gap-3">
               <Image
                 src="/images/logo.jpg"
                 alt="SparkL"
-                width={32}
-                height={32}
-                className="rounded-full"
+                width={36}
+                height={36}
+                className="rounded-xl"
               />
-              <span className="text-lg font-bold text-slate-900">SparkL</span>
+              <span className="text-white text-lg font-bold">SparkL</span>
             </Link>
 
-            <p className="mt-4 max-w-xs text-sm leading-6 text-slate-500">
-              Join students, learners, and professionals sharing knowledge,
-              opportunities, resources, and meaningful discussions.
+            <p className="mt-5 max-w-xs text-sm leading-7 text-slate-400">
+              The past question and study platform built for Nigerian polytechnic students.
+              Learn smarter, pass confidently.
             </p>
 
-            <div className="mt-6 flex gap-3">
+            <div className="mt-7 flex gap-3">
               {socialLinks.map(({ svg, href, label }) => (
                 <a
                   key={label}
                   href={href}
                   aria-label={label}
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-blue-50 hover:text-blue-600"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-slate-400 transition hover:bg-blue-600 hover:text-white"
                 >
                   {svg}
                 </a>
@@ -106,18 +98,18 @@ export default function Footer() {
             </div>
           </div>
 
-          {/* Link columns */}
+          {/* Links */}
           {footerLinks.map((col) => (
             <div key={col.heading}>
-              <h3 className="text-sm font-semibold text-slate-900">
+              <h3 className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-5">
                 {col.heading}
               </h3>
-              <ul className="mt-4 space-y-3">
+              <ul className="space-y-3">
                 {col.links.map((link) => (
                   <li key={link.label}>
                     <Link
                       href={link.href}
-                      className="text-sm text-slate-500 transition hover:text-blue-600"
+                      className="text-sm text-slate-400 hover:text-white transition-colors"
                     >
                       {link.label}
                     </Link>
@@ -128,12 +120,13 @@ export default function Footer() {
           ))}
         </div>
 
-        <div className="mt-12 flex flex-col items-center justify-between gap-4 border-t border-slate-100 pt-6 sm:flex-row">
-          <p className="text-xs text-slate-400">
+        {/* Bottom */}
+        <div className="mt-14 flex flex-col items-center justify-between gap-4 border-t border-white/10 pt-8 sm:flex-row">
+          <p className="text-xs text-slate-600">
             © {new Date().getFullYear()} SparkL. All rights reserved.
           </p>
-          <p className="text-xs text-slate-400">
-            Built for students, by students.
+          <p className="text-xs text-slate-600">
+            Built for students, by students. 🎓
           </p>
         </div>
       </div>
