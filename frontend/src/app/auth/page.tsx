@@ -1,158 +1,107 @@
 import Link from "next/link";
-import { ArrowRight, LogIn, UserPlus } from "lucide-react";
+import Image from "next/image";
+import { ArrowRight, LogIn, UserPlus, ShieldCheck } from "lucide-react";
 import AuthLayout from "@/components/auth/AuthLayout";
 
 export default function AuthPage() {
   return (
     <AuthLayout>
-      <div className="fade-up">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#07091A] px-5 py-10">
+        <div className="w-full max-w-sm animate-fade-up">
 
-        {/* Header */}
-
-        <h1 className="text-4xl font-bold text-slate-900">
-          Welcome to SparkL
-        </h1>
-
-        <p className="mt-2 text-slate-500">
-          Choose how you want to continue.
-        </p>
-
-        {/* Login Card */}
-
-        <Link href="/auth/login">
-          <div
-            className="
-              group
-              mt-10
-              flex
-              cursor-pointer
-              items-center
-              rounded-2xl
-              border
-              border-slate-200
-              bg-white
-              p-5
-              transition-all
-              duration-300
-              hover:-translate-y-1
-              hover:border-blue-500
-              hover:shadow-xl
-            "
-          >
-            <div
-              className="
-                flex
-                h-16
-                w-16
-                items-center
-                justify-center
-                rounded-2xl
-                bg-blue-100
-                text-blue-600
-              "
-            >
-              <LogIn size={30} />
-            </div>
-
-            <div className="ml-5 flex-1">
-              <h3 className="text-lg font-semibold text-slate-900">
-                Log in to your account
-              </h3>
-
-              <p className="mt-1 text-sm text-slate-500">
-                Welcome back. Continue your learning journey.
-              </p>
-            </div>
-
-            <ArrowRight
-              className="
-                text-blue-600
-                transition-transform
-                duration-300
-                group-hover:translate-x-2
-              "
+          {/* Logo */}
+          <div className="mb-8 flex items-center gap-3">
+            <Image
+              src="/images/logo.jpg"
+              alt="SparkL logo"
+              width={40}
+              height={40}
+              className="rounded-xl object-contain"
             />
+            <span className="text-2xl font-black tracking-tight text-white">
+              SparkL
+            </span>
           </div>
-        </Link>
 
-        {/* Signup Card */}
-
-        <Link href="/auth/signup">
-          <div
-            className="
-              group
-              mt-6
-              flex
-              cursor-pointer
-              items-center
-              rounded-2xl
-              border
-              border-slate-200
-              bg-white
-              p-5
-              transition-all
-              duration-300
-              hover:-translate-y-1
-              hover:border-green-500
-              hover:shadow-xl
-            "
-          >
-            <div
-              className="
-                flex
-                h-16
-                w-16
-                items-center
-                justify-center
-                rounded-2xl
-                bg-green-100
-                text-green-600
-              "
-            >
-              <UserPlus size={30} />
-            </div>
-
-            <div className="ml-5 flex-1">
-              <h3 className="text-lg font-semibold text-slate-900">
-                Create a new account
-              </h3>
-
-              <p className="mt-1 text-sm text-slate-500">
-                Join SparkL and start your learning experience.
-              </p>
-            </div>
-
-            <ArrowRight
-              className="
-                text-blue-600
-                transition-transform
-                duration-300
-                group-hover:translate-x-2
-              "
-            />
+          {/* Secure badge */}
+          <div className="mb-4 inline-flex items-center gap-1.5 rounded-full border border-blue-500/25 bg-blue-500/10 px-3 py-1">
+            <ShieldCheck className="h-3.5 w-3.5 text-blue-400" />
+            <span className="text-[11px] font-medium text-blue-400">
+              Secure login
+            </span>
           </div>
-        </Link>
 
-        {/* Footer */}
+          {/* Heading */}
+          <h1 className="text-[26px] font-bold leading-tight text-white">
+            Welcome back
+          </h1>
+          <p className="mt-1.5 mb-8 text-sm text-slate-500">
+            Your learning journey continues here.
+          </p>
 
-        <p className="mt-10 text-center text-sm leading-7 text-slate-500">
-          By continuing, you agree to our{" "}
-          <Link
-            href="#"
-            className="font-medium text-blue-600 hover:underline"
-          >
-            Terms of Service
-          </Link>{" "}
-          and{" "}
-          <Link
-            href="#"
-            className="font-medium text-blue-600 hover:underline"
-          >
-            Privacy Policy
+          {/* Login Card */}
+          <Link href="/auth/login">
+            <div className="group flex items-center gap-4 rounded-2xl border border-[#1e2a4a] bg-[#0D1230] p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-600 hover:bg-[#111a3d]">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-blue-400">
+                <LogIn className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-slate-200">
+                  Log in to your account
+                </p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Continue where you left off
+                </p>
+              </div>
+              <ArrowRight className="h-4 w-4 text-slate-600 transition-transform duration-200 group-hover:translate-x-1 group-hover:text-blue-400" />
+            </div>
           </Link>
-          .
-        </p>
 
+          {/* Divider */}
+          <div className="my-3 flex items-center gap-3">
+            <div className="h-px flex-1 bg-[#1e2a4a]" />
+            <span className="text-[11px] text-slate-600">or</span>
+            <div className="h-px flex-1 bg-[#1e2a4a]" />
+          </div>
+
+          {/* Signup Card */}
+          <Link href="/auth/signup">
+            <div className="group flex items-center gap-4 rounded-2xl border border-[#1e2a4a] bg-[#0D1230] p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-600 hover:bg-[#0d1f1a]">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-emerald-500/12 text-emerald-400">
+                <UserPlus className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-slate-200">
+                  Create a new account
+                </p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Join thousands of students on SparkL
+                </p>
+              </div>
+              <ArrowRight className="h-4 w-4 text-slate-600 transition-transform duration-200 group-hover:translate-x-1 group-hover:text-emerald-400" />
+            </div>
+          </Link>
+
+          {/* Footer */}
+          <p className="mt-8 text-center text-xs leading-relaxed text-slate-600">
+            By continuing, you agree to our{" "}
+            <Link
+              href="#"
+              className="text-blue-500 transition hover:text-blue-400 hover:underline"
+            >
+              Terms of Service
+            </Link>{" "}
+            and{" "}
+            <Link
+              href="#"
+              className="text-blue-500 transition hover:text-blue-400 hover:underline"
+            >
+              Privacy Policy
+            </Link>
+            .
+          </p>
+
+        </div>
       </div>
     </AuthLayout>
   );
