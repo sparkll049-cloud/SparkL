@@ -11,7 +11,6 @@ export const metadata = {
   description:
     "SparkL is a past question and study platform built for Nigerian tertiary students. Learn who we are, why we built it, and where we're going.",
 };
-
 export default function AboutPage() {
   return (
     <>
