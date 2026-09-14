@@ -1,23 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  User,
-  Mail,
-  Phone,
-  Lock,
-  Eye,
-  EyeOff,
-  ArrowRight,
-} from "lucide-react";
-
-import AuthLayout from "@/components/auth/AuthLayout";
-import AuthModal from "@/components/auth/AuthModal";
-import { Button } from "@/components/ui/button";
+import { User, Mail, Phone, Lock, Eye, EyeOff, ArrowRight, Check } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
+import { Button } from "@/components/ui/button";
+import AuthModal from "@/components/auth/AuthModal";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -29,36 +18,21 @@ export default function SignupPage() {
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] =
-    useState("");
-
-  const [showPassword, setShowPassword] =
-    useState(false);
-
-  const [showConfirmPassword, setShowConfirmPassword] =
-    useState(false);
-
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const emailValid =
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-
-  const phoneValid =
-    /^(\+234|0)?[789][01]\d{8}$/.test(phone);
-
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const phoneValid = /^(\+234|0)?[789][01]\d{8}$/.test(phone);
   const hasMinLength = password.length >= 8;
   const hasUpperCase = /[A-Z]/.test(password);
   const hasNumber = /\d/.test(password);
-  const hasSpecialCharacter =
-    /[^A-Za-z0-9]/.test(password);
-
-  const passwordsMatch =
-    password === confirmPassword &&
-    confirmPassword !== "";
+  const hasSpecial = /[^A-Za-z0-9]/.test(password);
+  const passwordsMatch = password === confirmPassword && confirmPassword !== "";
 
   const formValid =
     fullName.trim() !== "" &&
@@ -67,393 +41,293 @@ export default function SignupPage() {
     hasMinLength &&
     hasUpperCase &&
     hasNumber &&
-    hasSpecialCharacter &&
+    hasSpecial &&
     passwordsMatch &&
     agreedToTerms;
 
-  const getPasswordStrength = () => {
-    let score = 0;
-
-    if (hasMinLength) score++;
-    if (hasUpperCase) score++;
-    if (hasNumber) score++;
-    if (hasSpecialCharacter) score++;
-
-    if (score <= 1) {
-      return {
-        text: "Weak",
-        color: "bg-red-500",
-        width: "w-1/4",
-      };
-    }
-
-    if (score <= 3) {
-      return {
-        text: "Medium",
-        color: "bg-yellow-500",
-        width: "w-2/4",
-      };
-    }
-
-    return {
-      text: "Strong",
-      color: "bg-green-500",
-      width: "w-full",
-    };
-  };
+  const strengthScore = [hasMinLength, hasUpperCase, hasNumber, hasSpecial].filter(Boolean).length;
+  const strength =
+    strengthScore <= 1
+      ? { label: "Weak", color: "bg-red-500", width: "w-1/4" }
+      : strengthScore <= 3
+      ? { label: "Fair", color: "bg-yellow-400", width: "w-2/4" }
+      : { label: "Strong", color: "bg-emerald-500", width: "w-full" };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
-
     if (!formValid) return;
-
     setLoading(true);
 
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: {
-        data: {
-          full_name: fullName,
-          phone: phone,
-        },
-      },
+      options: { data: { full_name: fullName, phone } },
     });
 
     setLoading(false);
 
-    if (error) {
-      setErrorMsg(error.message);
-      return;
-    }
-
-    if (data.user) {
-      router.push("/onboarding");
-    }
+    if (error) { setErrorMsg(error.message); return; }
+    if (data.user) router.push("/onboarding");
   };
 
+  // Reusable input wrapper
+  const Field = ({
+    label,
+    children,
+    hint,
+  }: {
+    label: string;
+    children: React.ReactNode;
+    hint?: React.ReactNode;
+  }) => (
+    <div>
+      <label className="block text-sm font-medium text-slate-300 mb-2">{label}</label>
+      <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
+        {children}
+      </div>
+      {hint}
+    </div>
+  );
+
+  const inputClass = "ml-3 w-full bg-transparent text-white placeholder:text-slate-600 outline-none text-sm";
+
   return (
-  <>
-  <AuthLayout>
-        <div className="fade-up">
-          <h1 className="text-4xl font-bold text-slate-900">
-            Create Account
-          </h1>
+    <>
+      <div className="min-h-screen bg-[#0A0F2C] flex">
 
-          <p className="mt-2 text-slate-500">
-            Join SparkL and start learning together.
+        {/* ── Left panel ── */}
+        <div className="hidden lg:flex lg:w-[42%] relative flex-col justify-between p-14 overflow-hidden">
+          <div
+            className="absolute inset-0 opacity-[0.04]"
+            style={{
+              backgroundImage:
+                "linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)",
+              backgroundSize: "60px 60px",
+            }}
+          />
+          <div className="absolute top-1/3 -left-20 w-[400px] h-[400px] bg-blue-600/20 rounded-full blur-[120px] pointer-events-none" />
+
+          <div className="relative">
+            <Link href="/" className="inline-flex items-center gap-3">
+              <div className="h-9 w-9 rounded-xl bg-[#2563EB] flex items-center justify-center">
+                <span className="text-white font-black text-sm">S</span>
+              </div>
+              <span className="text-white font-bold text-xl tracking-tight">SparkL</span>
+            </Link>
+          </div>
+
+          <div className="relative">
+            <p className="text-3xl font-extrabold text-white leading-snug mb-6">
+              The smarter way to prepare for Nigerian tertiary exams.
+            </p>
+            <ul className="space-y-4">
+              {[
+                "Access thousands of verified past questions",
+                "Organized by department, level, and course",
+                "Free — for every student, always",
+                "Polytechnics, universities, colleges of education",
+              ].map((item) => (
+                <li key={item} className="flex items-start gap-3 text-sm text-slate-400">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-400">
+                    <Check size={11} strokeWidth={3} />
+                  </span>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <p className="relative text-xs text-slate-600">
+            © {new Date().getFullYear()} SparkL. All rights reserved.
           </p>
+        </div>
 
-          <form onSubmit={handleSubmit} className="mt-10 space-y-5">
-            {/* Full Name */}
+        {/* ── Right panel: form ── */}
+        <div className="w-full lg:w-[58%] flex items-start justify-center px-6 py-14 bg-[#060B1F] overflow-y-auto">
+          <div className="w-full max-w-md">
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-700">
-                Full Name
-              </label>
+            {/* Mobile logo */}
+            <Link href="/" className="inline-flex items-center gap-3 mb-10 lg:hidden">
+              <div className="h-8 w-8 rounded-xl bg-[#2563EB] flex items-center justify-center">
+                <span className="text-white font-black text-xs">S</span>
+              </div>
+              <span className="text-white font-bold text-lg">SparkL</span>
+            </Link>
 
-              <div className="flex h-14 items-center rounded-xl border border-slate-200 px-4 focus-within:border-blue-600 focus-within:ring-4 focus-within:ring-blue-100">
-                <User
-                  size={20}
-                  className="text-slate-400"
-                />
+            <h1 className="text-3xl font-extrabold text-white">Create your account</h1>
+            <p className="mt-2 text-slate-400 text-sm">Free forever. No card needed.</p>
 
+            <form onSubmit={handleSubmit} className="mt-10 space-y-5">
+
+              {/* Full name */}
+              <Field label="Full name">
+                <User size={18} className="text-slate-500 shrink-0" />
                 <input
                   type="text"
-                  placeholder="Enter your full name"
+                  placeholder="Your full name"
                   value={fullName}
-                  onChange={(e) =>
-                    setFullName(e.target.value)
-                  }
-                  className="ml-3 w-full bg-transparent outline-none"
+                  onChange={(e) => setFullName(e.target.value)}
+                  className={inputClass}
                 />
-              </div>
-            </div>
+              </Field>
 
-            {/* Phone */}
-
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-700">
-                Phone Number
-              </label>
-
-              <div className="flex h-14 items-center rounded-xl border border-slate-200 px-4 focus-within:border-blue-600 focus-within:ring-4 focus-within:ring-blue-100">
-                <Phone
-                  size={20}
-                  className="text-slate-400"
-                />
-
+              {/* Phone */}
+              <Field
+                label="Phone number"
+                hint={
+                  phone && !phoneValid ? (
+                    <p className="mt-2 text-xs text-red-400">Enter a valid Nigerian phone number.</p>
+                  ) : null
+                }
+              >
+                <Phone size={18} className="text-slate-500 shrink-0" />
                 <input
                   type="tel"
                   placeholder="08012345678"
                   value={phone}
-                  onChange={(e) =>
-                    setPhone(e.target.value)
-                  }
-                  className="ml-3 w-full bg-transparent outline-none"
+                  onChange={(e) => setPhone(e.target.value)}
+                  className={inputClass}
                 />
-              </div>
+              </Field>
 
-              {phone && !phoneValid && (
-                <p className="mt-2 text-sm text-red-500">
-                  Enter a valid Nigerian phone number.
-                </p>
-              )}
-            </div>
-
-            {/* Email */}
-
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-700">
-                Email Address
-              </label>
-
-              <div className="flex h-14 items-center rounded-xl border border-slate-200 px-4 focus-within:border-blue-600 focus-within:ring-4 focus-within:ring-blue-100">
-                <Mail
-                  size={20}
-                  className="text-slate-400"
-                />
-
+              {/* Email */}
+              <Field
+                label="Email address"
+                hint={
+                  email && !emailValid ? (
+                    <p className="mt-2 text-xs text-red-400">Enter a valid email address.</p>
+                  ) : null
+                }
+              >
+                <Mail size={18} className="text-slate-500 shrink-0" />
                 <input
                   type="email"
-                  placeholder="Enter your email"
+                  placeholder="your@email.com"
                   value={email}
-                  onChange={(e) =>
-                    setEmail(e.target.value)
-                  }
-                  className="ml-3 w-full bg-transparent outline-none"
+                  onChange={(e) => setEmail(e.target.value)}
+                  className={inputClass}
                 />
-              </div>
+              </Field>
 
-              {email && !emailValid && (
-                <p className="mt-2 text-sm text-red-500">
-                  Please enter a valid email.
-                </p>
-              )}
-            </div>
+              {/* Password */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Password</label>
+                <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
+                  <Lock size={18} className="text-slate-500 shrink-0" />
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    placeholder="Create a password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className={inputClass}
+                  />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="text-slate-500 hover:text-slate-300 transition-colors">
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
 
-            {/* Password */}
+                {password && (
+                  <div className="mt-3">
+                    {/* Strength bar */}
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="flex-1 h-1.5 rounded-full bg-white/10">
+                        <div className={`h-1.5 rounded-full transition-all duration-500 ${strength.width} ${strength.color}`} />
+                      </div>
+                      <span className="text-xs text-slate-400 w-10 text-right">{strength.label}</span>
+                    </div>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-700">
-                Password
-              </label>
-
-              <div className="flex h-14 items-center rounded-xl border border-slate-200 px-4 focus-within:border-blue-600 focus-within:ring-4 focus-within:ring-blue-100">
-                <Lock
-                  size={20}
-                  className="text-slate-400"
-                />
-
-                <input
-                  type={
-                    showPassword
-                      ? "text"
-                      : "password"
-                  }
-                  placeholder="Create a password"
-                  value={password}
-                  onChange={(e) =>
-                    setPassword(e.target.value)
-                  }
-                  className="ml-3 w-full bg-transparent outline-none"
-                />
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    setShowPassword(!showPassword)
-                  }
-                >
-                  {showPassword ? (
-                    <EyeOff
-                      size={20}
-                      className="text-slate-400"
-                    />
-                  ) : (
-                    <Eye
-                      size={20}
-                      className="text-slate-400"
-                    />
-                  )}
-                </button>
-              </div>
-
-              {password && (
-                <>
-                  <div className="mt-3 h-2 rounded-full bg-slate-200">
-                    <div
-                      className={`h-2 rounded-full transition-all duration-500 ${getPasswordStrength().width} ${getPasswordStrength().color}`}
-                    />
+                    {/* Requirements */}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {[
+                        { met: hasMinLength, label: "8+ characters" },
+                        { met: hasUpperCase, label: "Uppercase letter" },
+                        { met: hasNumber, label: "Number" },
+                        { met: hasSpecial, label: "Special character" },
+                      ].map(({ met, label }) => (
+                        <div key={label} className={`flex items-center gap-1.5 text-xs ${met ? "text-emerald-400" : "text-slate-600"}`}>
+                          <Check size={10} strokeWidth={3} className={met ? "opacity-100" : "opacity-30"} />
+                          {label}
+                        </div>
+                      ))}
+                    </div>
                   </div>
+                )}
+              </div>
 
-                  <p className="mt-2 text-sm text-slate-500">
-                    Password strength:
-                    <span className="ml-1 font-medium">
-                      {getPasswordStrength().text}
-                    </span>
+              {/* Confirm password */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Confirm password</label>
+                <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
+                  <Lock size={18} className="text-slate-500 shrink-0" />
+                  <input
+                    type={showConfirmPassword ? "text" : "password"}
+                    placeholder="Repeat your password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className={inputClass}
+                  />
+                  <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="text-slate-500 hover:text-slate-300 transition-colors">
+                    {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+                {confirmPassword && (
+                  <p className={`mt-2 text-xs ${passwordsMatch ? "text-emerald-400" : "text-red-400"}`}>
+                    {passwordsMatch ? "Passwords match" : "Passwords do not match"}
                   </p>
-
-                  <div className="mt-4 space-y-1 text-sm">
-                    <p className={hasMinLength ? "text-green-600" : "text-slate-500"}>
-                      ✓ At least 8 characters
-                    </p>
-
-                    <p className={hasUpperCase ? "text-green-600" : "text-slate-500"}>
-                      ✓ One uppercase letter
-                    </p>
-
-                    <p className={hasNumber ? "text-green-600" : "text-slate-500"}>
-                      ✓ One number
-                    </p>
-
-                    <p className={hasSpecialCharacter ? "text-green-600" : "text-slate-500"}>
-                      ✓ One special character
-                    </p>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Confirm Password */}
-
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-700">
-                Confirm Password
-              </label>
-
-              <div className="flex h-14 items-center rounded-xl border border-slate-200 px-4 focus-within:border-blue-600 focus-within:ring-4 focus-within:ring-blue-100">
-                <Lock
-                  size={20}
-                  className="text-slate-400"
-                />
-
-                <input
-                  type={
-                    showConfirmPassword
-                      ? "text"
-                      : "password"
-                  }
-                  placeholder="Confirm your password"
-                  value={confirmPassword}
-                  onChange={(e) =>
-                    setConfirmPassword(
-                      e.target.value
-                    )
-                  }
-                  className="ml-3 w-full bg-transparent outline-none"
-                />
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    setShowConfirmPassword(
-                      !showConfirmPassword
-                    )
-                  }
-                >
-                  {showConfirmPassword ? (
-                    <EyeOff
-                      size={20}
-                      className="text-slate-400"
-                    />
-                  ) : (
-                    <Eye
-                      size={20}
-                      className="text-slate-400"
-                    />
-                  )}
-                </button>
+                )}
               </div>
 
-              {confirmPassword && (
-                <p
-                  className={`mt-2 text-sm ${
-                    passwordsMatch
-                      ? "text-green-600"
-                      : "text-red-500"
-                  }`}
-                >
-                  {passwordsMatch
-                    ? "Passwords match"
-                    : "Passwords do not match"}
-                </p>
+              {/* Terms */}
+              <label className="flex items-start gap-3 text-sm text-slate-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 rounded border-white/20 bg-white/5 accent-blue-500"
+                  checked={agreedToTerms}
+                  onChange={(e) => setAgreedToTerms(e.target.checked)}
+                />
+                <span>
+                  I agree to the{" "}
+                  <button type="button" onClick={() => setShowTerms(true)} className="text-blue-400 hover:text-blue-300 font-medium transition-colors">
+                    Terms of Service
+                  </button>{" "}
+                  and{" "}
+                  <button type="button" onClick={() => setShowPrivacy(true)} className="text-blue-400 hover:text-blue-300 font-medium transition-colors">
+                    Privacy Policy
+                  </button>
+                </span>
+              </label>
+
+              {/* Error */}
+              {errorMsg && (
+                <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3">
+                  <p className="text-sm text-red-400">{errorMsg}</p>
+                </div>
               )}
-            </div>
 
-            {/* Terms */}
+              {/* Submit */}
+              <Button
+                type="submit"
+                disabled={!formValid || loading}
+                className="w-full h-13 rounded-xl bg-[#2563EB] text-sm font-semibold text-white hover:bg-blue-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {loading ? "Creating account..." : "Create account"}
+                {!loading && <ArrowRight size={16} />}
+              </Button>
+            </form>
 
-            <label className="flex items-start gap-3 text-sm text-slate-600">
-              <input
-                type="checkbox"
-                className="mt-1"
-                checked={agreedToTerms}
-                onChange={(e) =>
-                  setAgreedToTerms(e.target.checked)
-                }
-              />
-
-              <span>
-                I agree to the{" "}
-                <button
-                  type="button"
-                  onClick={() =>
-                    setShowTerms(true)
-                  }
-                  className="font-medium text-blue-600 hover:underline"
-                >
-                  Terms of Service
-                </button>{" "}
-                and{" "}
-                <button
-                  type="button"
-                  onClick={() =>
-                    setShowPrivacy(true)
-                  }
-                  className="font-medium text-blue-600 hover:underline"
-                >
-                  Privacy Policy
-                </button>
-              </span>
-            </label>
-
-            {errorMsg && (
-              <p className="text-sm text-red-500">{errorMsg}</p>
-            )}
-
-            <Button
-              type="submit"
-              disabled={!formValid || loading}
-              className={`h-14 w-full rounded-xl text-base font-semibold ${
-                formValid && !loading
-                  ? "bg-gradient-to-r from-blue-700 to-blue-500 hover:scale-[1.02]"
-                  : "cursor-not-allowed bg-slate-300"
-              }`}
-            >
-              <span className="mr-2">
-                {loading ? "Creating Account..." : "Create Account"}
-              </span>
-
-              {!loading && <ArrowRight size={18} />}
-            </Button>
-          </form>
-
-          <p className="mt-8 text-center text-sm text-slate-500">
-            Already have an account?
-
-            <Link
-              href="/auth/login"
-              className="ml-2 font-semibold text-blue-600 hover:underline"
-            >
-              Log In
-            </Link>
-          </p>
+            <p className="mt-8 text-center text-sm text-slate-500">
+              Already have an account?{" "}
+              <Link href="/auth/login" className="text-blue-400 font-medium hover:text-blue-300 transition-colors">
+                Log in
+              </Link>
+            </p>
+          </div>
         </div>
-    </AuthLayout>
+      </div>
 
-
-  </>
-    
+      {showTerms && <AuthModal type="terms" onClose={() => setShowTerms(false)} />}
+      {showPrivacy && <AuthModal type="privacy" onClose={() => setShowPrivacy(false)} />}
+    </>
   );
 }
