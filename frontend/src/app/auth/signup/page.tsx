@@ -336,3 +336,6 @@ export default function SignupPage() {
     <p>Please read our privacy policy to understand how we handle your data.</p>
   </AuthModal>
 )}
+    </>
+   );
+}
