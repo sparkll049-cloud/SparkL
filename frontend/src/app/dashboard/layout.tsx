@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import {
@@ -11,8 +10,6 @@ import {
   User,
   ShieldCheck,
   LogOut,
-  Menu,
-  X,
   Loader2,
   Zap,
 } from "lucide-react";
@@ -39,7 +36,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     })
   );
 
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -103,7 +99,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <Link
               key={item.href}
               href={item.href}
-              onClick={() => setMobileOpen(false)}
               title={!mobile && !sidebarExpanded ? item.label : undefined}
               className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150
                 ${!mobile && !sidebarExpanded ? "justify-center px-2.5" : ""}
@@ -123,7 +118,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="my-3 mx-1 border-t border-white/[0.06]" />
             <Link
               href="/admin"
-              onClick={() => setMobileOpen(false)}
               title={!mobile && !sidebarExpanded ? "Admin" : undefined}
               className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all
                 ${!mobile && !sidebarExpanded ? "justify-center px-2.5" : ""}
@@ -143,7 +137,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <div className={`border-t border-white/[0.06] p-2 space-y-0.5 ${!mobile && !sidebarExpanded ? "px-2" : ""}`}>
         <Link
           href="/dashboard/profile"
-          onClick={() => setMobileOpen(false)}
           className={`flex items-center gap-3 rounded-lg px-2 py-2.5 transition hover:bg-white/[0.05]
             ${!mobile && !sidebarExpanded ? "justify-center px-2" : ""}`}
         >
@@ -190,53 +183,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <SidebarContent />
         </aside>
 
-        {/* ── Mobile drawer ── */}
-        {mobileOpen && (
-          <div className="fixed inset-0 z-40 lg:hidden">
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-            <aside className="absolute inset-y-0 left-0 w-60 border-r border-white/[0.06] bg-[#0D1230]">
-              <SidebarContent mobile />
-            </aside>
-          </div>
-        )}
-
-        {/* ── Main area ── */}
+        {/* ── Main area (no topbar) ── */}
         <div className={`flex flex-1 flex-col transition-all duration-200 ${sidebarExpanded ? "lg:ml-52" : "lg:ml-14"}`}>
-
-          {/* Topbar */}
-          <header className="sticky top-0 z-20 flex h-12 items-center justify-between border-b border-white/[0.05] bg-[#07091A]/90 px-4 backdrop-blur-md lg:px-6">
-            <button
-              onClick={() => setMobileOpen(true)}
-              className="rounded-lg p-1.5 text-slate-500 hover:bg-white/[0.05] hover:text-slate-300 transition lg:hidden"
-            >
-              <Menu className="h-5 w-5" />
-            </button>
-
-            {/* Mobile logo */}
-            <div className="flex items-center gap-2 lg:hidden">
-              <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#2563EB]">
-                <Zap className="h-3.5 w-3.5 text-white" fill="white" />
-              </div>
-              <span className="text-sm font-black text-white">SparkL</span>
-            </div>
-
-            {/* Breadcrumb on desktop */}
-            <div className="hidden lg:block">
-              <p className="text-xs text-slate-600">
-                {navItems.find(n => pathname === n.href || (n.href !== "/dashboard" && pathname?.startsWith(n.href)))?.label ?? "Dashboard"}
-              </p>
-            </div>
-
-            {/* Right side — avatar */}
-            <Link href="/dashboard/profile" className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/[0.05] transition">
-              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[#1E3A8A] text-[10px] font-bold text-blue-200">
-                {initial}
-              </div>
-            </Link>
-          </header>
-
           <main className="flex-1">{children}</main>
         </div>
+
       </div>
     </QueryClientProvider>
   );
