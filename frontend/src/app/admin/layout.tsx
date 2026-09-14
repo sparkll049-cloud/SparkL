@@ -15,10 +15,10 @@ import {
   CalendarDays,
   LogOut,
   Menu,
-  X,
   Loader2,
+  ChevronLeft,
+  ShieldCheck,
 } from "lucide-react";
-
 import { createClient } from "@/utils/supabase/client";
 
 const navGroups = [
@@ -46,11 +46,7 @@ const navGroups = [
   },
 ];
 
-export default function AdminLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClient();
@@ -61,35 +57,16 @@ export default function AdminLayout({
 
   useEffect(() => {
     let active = true;
-
     async function verifyAdmin() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        router.replace("/auth/login");
-        return;
-      }
-
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { router.replace("/auth/login"); return; }
       const { data: profile, error } = await supabase
-        .from("profiles") // adjust to your actual users/profiles table name
-        .select("is_admin")
-        .eq("id", session.user.id)
-        .single();
-
-      if (error || !profile?.is_admin) {
-        router.replace("/dashboard");
-        return;
-      }
-
+        .from("profiles").select("is_admin").eq("id", session.user.id).single();
+      if (error || !profile?.is_admin) { router.replace("/dashboard"); return; }
       if (active) setAuthChecked(true);
     }
-
     verifyAdmin();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, []);
 
   async function handleLogout() {
@@ -100,142 +77,104 @@ export default function AdminLayout({
 
   if (!authChecked) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      <div className="flex min-h-screen items-center justify-center bg-[#07091A]">
+        <Loader2 className="h-7 w-7 animate-spin text-blue-500" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Mobile top bar */}
-      <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 lg:hidden">
-        <div className="flex items-center gap-2">
-          <Image
-            src="/images/logo.jpg"
-            alt="SparkL"
-            width={28}
-            height={28}
-            className="rounded-full"
-          />
-          <span className="font-bold text-slate-900">Admin</span>
+    <div className="flex min-h-screen bg-[#07091A]">
+
+      {/* ── Sidebar ── */}
+      <aside className={`
+        fixed inset-y-0 left-0 z-40 flex w-60 flex-col
+        border-r border-white/[0.05] bg-[#0D1230]
+        transition-transform duration-200
+        lg:translate-x-0
+        ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
+      `}>
+        {/* Logo */}
+        <div className="flex items-center gap-3 border-b border-white/[0.05] px-5 py-4">
+          <Image src="/images/logo.jpg" alt="SparkL" width={30} height={30} className="rounded-lg object-contain" />
+          <div>
+            <p className="text-sm font-black tracking-tight text-white">SparkL</p>
+            <p className="flex items-center gap-1 text-[10px] font-medium text-blue-400">
+              <ShieldCheck className="h-3 w-3" /> Admin Panel
+            </p>
+          </div>
         </div>
 
-        <button onClick={() => setMobileOpen(!mobileOpen)}>
-          {mobileOpen ? (
-            <X size={24} className="text-slate-700" />
-          ) : (
-            <Menu size={24} className="text-slate-700" />
-          )}
-        </button>
-      </div>
-
-      <div className="mx-auto flex max-w-[1500px]">
-        {/* Sidebar */}
-        <aside
-          className={`
-            fixed inset-y-0 left-0 z-40 w-64 transform overflow-y-auto border-r border-slate-200
-            bg-white transition-transform duration-200 ease-in-out
-            lg:static lg:translate-x-0
-            ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
-          `}
-        >
-          <div className="flex h-full flex-col justify-between p-5">
-            <div>
-              <Link
-                href="/admin"
-                className="mb-8 hidden items-center gap-2 lg:flex"
-              >
-                <Image
-                  src="/images/logo.jpg"
-                  alt="SparkL"
-                  width={32}
-                  height={32}
-                  className="rounded-full"
-                />
-                <div>
-                  <span className="block text-lg font-bold leading-tight text-slate-900">
-                    SparkL
-                  </span>
-                  <span className="block text-xs font-medium text-slate-400">
-                    Admin Panel
-                  </span>
-                </div>
-              </Link>
-
-              <nav className="space-y-5">
-                {navGroups.map((group) => (
-                  <div key={group.label}>
-                    <p className="px-4 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      {group.label}
-                    </p>
-                    <div className="mt-2 space-y-1">
-                      {group.items.map((item) => {
-                        const active =
-                          pathname === item.href ||
-                          (item.href !== "/admin" &&
-                            pathname?.startsWith(item.href));
-
-                        const Icon = item.icon;
-
-                        return (
-                          <Link
-                            key={item.href}
-                            href={item.href}
-                            onClick={() => setMobileOpen(false)}
-                            className={`
-                              flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium
-                              transition
-                              ${
-                                active
-                                  ? "bg-blue-50 text-blue-600"
-                                  : "text-slate-600 hover:bg-slate-50"
-                              }
-                            `}
-                          >
-                            <Icon size={18} />
-                            {item.label}
-                          </Link>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </nav>
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+          {navGroups.map((group) => (
+            <div key={group.label}>
+              <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">
+                {group.label}
+              </p>
+              <div className="space-y-0.5">
+                {group.items.map((item) => {
+                  const active = pathname === item.href || (item.href !== "/admin" && pathname?.startsWith(item.href));
+                  const Icon = item.icon;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={() => setMobileOpen(false)}
+                      className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all
+                        ${active
+                          ? "bg-[#2563EB]/15 text-[#60A5FA]"
+                          : "text-[#64748B] hover:bg-white/[0.05] hover:text-slate-200"
+                        }`}
+                    >
+                      <Icon className={`h-4 w-4 shrink-0 ${active ? "text-[#60A5FA]" : "text-[#475569]"}`} />
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
             </div>
+          ))}
+        </nav>
 
-            <div className="space-y-1">
-              <Link
-                href="/dashboard"
-                className="flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-slate-50"
-              >
-                <LayoutDashboard size={18} />
-                Back to Student View
-              </Link>
-
-              <button
-                onClick={handleLogout}
-                disabled={loggingOut}
-                className="flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium text-red-500 transition hover:bg-red-50 disabled:opacity-60"
-              >
-                <LogOut size={18} />
-                {loggingOut ? "Logging out..." : "Log Out"}
-              </button>
-            </div>
-          </div>
-        </aside>
-
-        {mobileOpen && (
-          <div
+        {/* Bottom */}
+        <div className="border-t border-white/[0.05] p-3 space-y-0.5">
+          <Link
+            href="/dashboard"
             onClick={() => setMobileOpen(false)}
-            className="fixed inset-0 z-30 bg-black/30 lg:hidden"
-          />
-        )}
+            className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-300"
+          >
+            <ChevronLeft className="h-4 w-4 shrink-0" />
+            Student View
+          </Link>
+          <button
+            onClick={handleLogout}
+            disabled={loggingOut}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
+          >
+            {loggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4 shrink-0" />}
+            {loggingOut ? "Logging out…" : "Log out"}
+          </button>
+        </div>
+      </aside>
 
-        <main className="min-h-screen flex-1 px-4 py-6 sm:px-6 lg:px-8">
-          {children}
-        </main>
+      {/* Mobile backdrop */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />
+      )}
+
+      {/* Mobile menu button */}
+      <button
+        onClick={() => setMobileOpen(true)}
+        className="fixed bottom-6 left-4 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-[#2563EB] shadow-lg transition hover:bg-blue-500 lg:hidden"
+      >
+        <Menu className="h-5 w-5 text-white" />
+      </button>
+
+      {/* Main */}
+      <div className="flex flex-1 flex-col lg:ml-60">
+        <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">{children}</main>
       </div>
     </div>
   );
-          }
+}
