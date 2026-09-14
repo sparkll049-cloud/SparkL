@@ -326,8 +326,13 @@ export default function SignupPage() {
         </div>
       </div>
 
-      {showTerms && <AuthModal type="terms" onClose={() => setShowTerms(false)} />}
-      {showPrivacy && <AuthModal type="privacy" onClose={() => setShowPrivacy(false)} />}
-    </>
-  );
-}
+{showTerms && (
+  <AuthModal isOpen={showTerms} onClose={() => setShowTerms(false)} title="Terms of Service">
+    <p>Please read our terms of service carefully before using SparkL.</p>
+  </AuthModal>
+)}
+{showPrivacy && (
+  <AuthModal isOpen={showPrivacy} onClose={() => setShowPrivacy(false)} title="Privacy Policy">
+    <p>Please read our privacy policy to understand how we handle your data.</p>
+  </AuthModal>
+)}
