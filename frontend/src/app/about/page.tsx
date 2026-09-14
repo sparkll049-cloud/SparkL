@@ -4,14 +4,14 @@ import {
   AboutHero,
   AboutMission,
   AboutValues,
-  AboutTeam,
+  AboutPillars,
   AboutCTA,
 } from "@/components/about";
 
 export const metadata = {
   title: "About Us — SparkL",
   description:
-    "SparkL is a past question and study platform built for Nigerian tertiary students. Learn who we are, why we built it, and where we're going.",
+    "SparkL is a past question and study platform built for Nigerian tertiary institution students. Learn who we are, why we built it, and where we're going.",
 };
 
 export default function AboutPage() {
@@ -22,7 +22,7 @@ export default function AboutPage() {
         <AboutHero />
         <AboutMission />
         <AboutValues />
-        <AboutTeam />
+        <AboutPillars />
         <AboutCTA />
       </main>
       <Footer />
