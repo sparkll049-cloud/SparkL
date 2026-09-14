@@ -1,39 +1,23 @@
 export default function StatsSection() {
   const stats = [
-    {
-      value: "10K+",
-      label: "Active Learners",
-    },
-    {
-      value: "500+",
-      label: "Resources Shared",
-    },
-    {
-      value: "1K+",
-      label: "Discussions",
-    },
-    {
-      value: "50+",
-      label: "Communities",
-    },
+    { value: "10K+", label: "Active Students", sub: "and growing every week" },
+    { value: "3K+", label: "Past Questions", sub: "verified and organized" },
+    { value: "50+", label: "Departments", sub: "across Yabatech" },
+    { value: "98%", label: "Pass Rate", sub: "among active users" },
   ];
 
   return (
-    <section className="bg-white py-20">
-      <div className="mx-auto max-w-7xl px-6 lg:px-12">
-        <div className="grid grid-cols-2 gap-8 md:grid-cols-4">
+    <section className="bg-[#0D1333] border-t border-white/10">
+      <div className="mx-auto max-w-7xl px-6 lg:px-12 py-16">
+        <div className="grid grid-cols-2 gap-px md:grid-cols-4 bg-white/10 rounded-2xl overflow-hidden">
           {stats.map((stat) => (
             <div
               key={stat.label}
-              className="rounded-2xl border border-gray-100 bg-white p-8 text-center shadow-sm transition hover:shadow-md"
+              className="bg-[#0D1333] px-8 py-10 text-center"
             >
-              <h3 className="text-4xl font-bold text-blue-600">
-                {stat.value}
-              </h3>
-
-              <p className="mt-3 text-gray-600">
-                {stat.label}
-              </p>
+              <p className="text-4xl font-extrabold text-white">{stat.value}</p>
+              <p className="mt-2 text-sm font-semibold text-blue-400">{stat.label}</p>
+              <p className="mt-1 text-xs text-slate-500">{stat.sub}</p>
             </div>
           ))}
         </div>
