@@ -145,16 +145,19 @@ export default function CommunityPage() {
       // User's institution from profile
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("institution_id, institution:institutions(id, name)")
-          .eq("id", user.id)
-          .single();
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("institution_id, institution:institutions(id, name)")
+    .eq("id", user.id)
+    .single();
 
-        if (profile?.institution) {
-          setUserInstitution(profile.institution as { id: string; name: string });
-        }
-      }
+  if (profile?.institution) {
+    const inst = Array.isArray(profile.institution)
+      ? profile.institution[0]
+      : profile.institution;
+    if (inst) setUserInstitution(inst as { id: string; name: string });
+  }
+}
 
       // All institutions for filter dropdown
       const { data: instData } = await supabase
