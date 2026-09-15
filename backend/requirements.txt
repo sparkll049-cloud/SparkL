@@ -9,3 +9,4 @@ python-jose[cryptography]
 google-genai>=0.3.0
 Pillow
 pdf2image 
+boto3==1.34.69
