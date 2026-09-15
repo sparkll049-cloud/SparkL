@@ -10,9 +10,12 @@ import {
   AlertCircle,
   Eye,
   X,
-  Upload as UploadIcon,
   CheckCircle2,
   Clock,
+  Sparkles,
+  ChevronDown,
+  BookOpen,
+  Zap,
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
@@ -31,39 +34,130 @@ interface QuestionDetail {
   semester: { id: string; name: string } | null;
 }
 
-interface FormattedLine {
-  text: string;
-  indent: boolean;
-}
-
-interface AnswerSubmission {
+interface ProcessedQuestion {
   id: string;
-  status: "pending" | "reviewed";
-  feedback: string | null;
-  created_at: string;
-  reviewed_at: string | null;
-  extraction_quality: number | null;
+  question_number: number;
+  question_text: string;
+  question_type: "mcq" | "theory";
+  option_a: string | null;
+  option_b: string | null;
+  option_c: string | null;
+  option_d: string | null;
+  correct_answer: string | null;
+  model_answer: string | null;
+  explanation: string | null;
+  topic_tag: string | null;
+  difficulty: string | null;
+  marks: number | null;
 }
 
 const LOW_QUALITY_THRESHOLD = 0.5;
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png"];
 
-// Preserves the document's own line breaks and structure instead of
-// re-grouping text into arbitrary sentence blocks. Lines that look like
-// sub-parts (a), (b), i), ii), etc. get a light indent so nested
-// question structure stays visually clear.
-function formatExtractedText(text: string): FormattedLine[] {
-  const subPartPattern = /^\(?[a-z]\)|^\(?[ivx]+\)/i;
+function DifficultyBadge({ difficulty }: { difficulty: string | null }) {
+  if (!difficulty) return null;
+  const map: Record<string, string> = {
+    easy: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+    medium: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+    hard: "bg-red-500/10 text-red-400 border-red-500/20",
+  };
+  return (
+    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize ${map[difficulty] ?? "bg-slate-500/10 text-slate-400 border-slate-500/20"}`}>
+      {difficulty}
+    </span>
+  );
+}
 
-  return text
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => ({
-      text: line,
-      indent: subPartPattern.test(line),
-    }));
+function MCQQuestion({ q }: { q: ProcessedQuestion }) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState(false);
+
+  const options = ["a", "b", "c", "d"] as const;
+
+  function getOptionStyle(opt: string) {
+    if (!revealed && selected !== opt) {
+      return "border-white/10 bg-white/[0.03] text-slate-300 hover:border-blue-500/40 hover:bg-blue-500/5";
+    }
+    if (!revealed && selected === opt) {
+      return "border-blue-500/50 bg-blue-500/10 text-blue-300";
+    }
+    // revealed
+    if (opt === q.correct_answer) {
+      return "border-emerald-500/40 bg-emerald-500/10 text-emerald-300";
+    }
+    if (selected === opt) {
+      return "border-red-500/40 bg-red-500/10 text-red-300";
+    }
+    return "border-white/[0.05] bg-white/[0.02] text-slate-500";
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Options */}
+      <div className="space-y-2">
+        {options.map((opt) => {
+          const text = q[`option_${opt}` as keyof ProcessedQuestion] as string | null;
+          if (!text) return null;
+          return (
+            <button
+              key={opt}
+              onClick={() => {
+                if (revealed) return;
+                setSelected(opt);
+              }}
+              disabled={revealed}
+              className={`w-full rounded-xl border px-4 py-3 text-left text-sm transition-all ${getOptionStyle(opt)}`}
+            >
+              <span className="font-semibold uppercase mr-2">{opt}.</span>
+              {text}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Submit / reveal */}
+      {!revealed ? (
+        <button
+          onClick={() => setSelected(prev => { setRevealed(true); return prev; })}
+          disabled={!selected}
+          className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Submit Answer
+        </button>
+      ) : (
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 space-y-2">
+          <p className={`text-sm font-semibold ${selected === q.correct_answer ? "text-emerald-400" : "text-red-400"}`}>
+            {selected === q.correct_answer ? "✓ Correct!" : `✗ Incorrect — correct answer is ${q.correct_answer?.toUpperCase()}`}
+          </p>
+          {q.explanation && (
+            <p className="text-sm text-slate-400 leading-6">{q.explanation}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TheoryQuestion({ q }: { q: ProcessedQuestion }) {
+  const [showAnswer, setShowAnswer] = useState(false);
+
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={() => setShowAnswer(!showAnswer)}
+        className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-semibold text-slate-300 transition hover:bg-white/[0.08]"
+      >
+        <ChevronDown size={14} className={`transition-transform ${showAnswer ? "rotate-180" : ""}`} />
+        {showAnswer ? "Hide Model Answer" : "Show Model Answer"}
+      </button>
+
+      {showAnswer && q.model_answer && (
+        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+          <p className="text-xs font-semibold text-emerald-400 mb-2">Model Answer</p>
+          <p className="text-sm text-slate-300 leading-7 whitespace-pre-wrap">{q.model_answer}</p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function QuestionDetailPage() {
@@ -71,22 +165,19 @@ export default function QuestionDetailPage() {
   const router = useRouter();
   const params = useParams();
   const questionId = params?.id as string;
-  const answerFileInputRef = useRef<HTMLInputElement>(null);
 
   const [data, setData] = useState<QuestionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const [processedQuestions, setProcessedQuestions] = useState<ProcessedQuestion[]>([]);
+  const [questionsLoading, setQuestionsLoading] = useState(false);
+
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerError, setViewerError] = useState("");
 
-  const [myAnswers, setMyAnswers] = useState<AnswerSubmission[]>([]);
-  const [answerFile, setAnswerFile] = useState<File | null>(null);
-  const [answerFileError, setAnswerFileError] = useState("");
-  const [submittingAnswer, setSubmittingAnswer] = useState(false);
-  const [answerError, setAnswerError] = useState("");
-  const [answerSuccess, setAnswerSuccess] = useState(false);
+  const [showRawText, setShowRawText] = useState(false);
 
   useEffect(() => {
     if (!questionId) return;
@@ -95,28 +186,22 @@ export default function QuestionDetailPage() {
       setLoading(true);
       setError("");
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        router.push("/auth/login");
-        return;
-      }
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { router.push("/auth/login"); return; }
 
       try {
         const res = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}`,
           { headers: { Authorization: `Bearer ${session.access_token}` } }
         );
-
         if (res.status === 404) throw new Error("This past question wasn't found.");
         if (!res.ok) throw new Error("Failed to load this past question.");
 
         const json: QuestionDetail = await res.json();
         setData(json);
 
-        await loadMyAnswers(session.access_token);
+        // Load AI-processed questions
+        await loadProcessedQuestions(session.access_token);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong.");
       } finally {
@@ -127,39 +212,36 @@ export default function QuestionDetailPage() {
     load();
   }, [questionId]);
 
-  async function loadMyAnswers(token: string) {
+  async function loadProcessedQuestions(token: string) {
+    setQuestionsLoading(true);
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/answers/mine/${questionId}`,
+        `${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}/processed`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      if (res.ok) setMyAnswers(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setProcessedQuestions(data);
+      }
     } catch {
-      // Non-critical — history is secondary to the rest of the page
+      // non-critical
+    } finally {
+      setQuestionsLoading(false);
     }
   }
 
   async function openViewer() {
     setViewerError("");
     setViewerLoading(true);
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) {
-      router.push("/auth/login");
-      return;
-    }
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) { router.push("/auth/login"); return; }
 
     try {
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}/file-url`,
         { headers: { Authorization: `Bearer ${session.access_token}` } }
       );
-
       if (!res.ok) throw new Error("Couldn't open the file.");
-
       const json: { url: string } = await res.json();
       setViewerUrl(json.url);
     } catch (err) {
@@ -169,93 +251,10 @@ export default function QuestionDetailPage() {
     }
   }
 
-  function handleAnswerFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setAnswerFileError("");
-    const selected = e.target.files?.[0] ?? null;
-
-    if (!selected) {
-      setAnswerFile(null);
-      return;
-    }
-
-    if (!ALLOWED_TYPES.includes(selected.type)) {
-      setAnswerFileError("Only PDF, JPG, and PNG files are allowed.");
-      setAnswerFile(null);
-      return;
-    }
-
-    if (selected.size > MAX_FILE_SIZE) {
-      setAnswerFileError("File is too large. Maximum size is 10MB.");
-      setAnswerFile(null);
-      return;
-    }
-
-    setAnswerFile(selected);
-  }
-
-  async function handleSubmitAnswer(e: React.FormEvent) {
-    e.preventDefault();
-    setAnswerError("");
-    setAnswerSuccess(false);
-
-    if (!answerFile) {
-      setAnswerError("Please choose a file to submit.");
-      return;
-    }
-
-    setSubmittingAnswer(true);
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) {
-      setSubmittingAnswer(false);
-      router.push("/auth/login");
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("question_id", questionId);
-    formData.append("file", answerFile);
-
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/answers`,
-        {
-          method: "POST",
-          headers: { Authorization: `Bearer ${session.access_token}` },
-          body: formData,
-        }
-      );
-
-      if (res.status === 401) {
-        setSubmittingAnswer(false);
-        router.push("/auth/login");
-        return;
-      }
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? "Submission failed. Please try again.");
-      }
-
-      setAnswerSuccess(true);
-      setAnswerFile(null);
-      if (answerFileInputRef.current) answerFileInputRef.current.value = "";
-
-      await loadMyAnswers(session.access_token);
-    } catch (err) {
-      setAnswerError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setSubmittingAnswer(false);
-    }
-  }
-
   if (loading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
       </div>
     );
   }
@@ -263,182 +262,182 @@ export default function QuestionDetailPage() {
   if (error || !data) {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-6 text-center">
-        <p className="text-slate-600">{error || "Question not found."}</p>
-        <Link href="/dashboard" className="font-semibold text-blue-600 hover:underline">
+        <p className="text-slate-500">{error || "Question not found."}</p>
+        <Link href="/dashboard" className="font-semibold text-blue-500 hover:underline">
           Back to Dashboard
         </Link>
       </div>
     );
   }
 
-  const lines = data.extracted_text ? formatExtractedText(data.extracted_text) : [];
-  const isLowQuality =
-    data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
   const isImage = data.mime_type?.startsWith("image/");
+  const isLowQuality = data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
+  const hasProcessed = processedQuestions.length > 0;
+  const theoryCount = processedQuestions.filter(q => q.question_type === "theory").length;
+  const mcqCount = processedQuestions.filter(q => q.question_type === "mcq").length;
 
   return (
-    <div className="mx-auto max-w-3xl px-6 pb-16 pt-8">
-      <Link
-        href={data.course ? `/dashboard/courses/${data.course.id}` : "/dashboard"}
-        className="inline-flex items-center gap-1 text-sm font-medium text-slate-500 hover:text-slate-700"
-      >
-        <ArrowLeft size={16} />
-        Back
-      </Link>
+    <div className="min-h-screen bg-[#07091A] px-4 py-8 sm:px-6">
+      <div className="mx-auto max-w-3xl">
 
-      <div className="mt-4 rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-        <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-600">
-            <FileText size={20} />
+        {/* Back */}
+        <Link
+          href={data.course ? `/dashboard/courses/${data.course.id}` : "/dashboard"}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          <ArrowLeft size={15} />
+          Back
+        </Link>
+
+        {/* Header card */}
+        <div className="mt-4 rounded-2xl border border-white/[0.06] bg-[#0D1230] p-5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-500/10">
+              <FileText size={20} className="text-blue-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg font-bold text-white">{data.title}</h1>
+              <p className="mt-0.5 text-sm text-slate-500">
+                {data.course?.name ?? "—"}
+                {data.semester?.name ? ` · ${data.semester.name}` : ""}
+                {data.year ? ` · ${data.year}` : ""}
+              </p>
+            </div>
+            <button
+              onClick={openViewer}
+              disabled={viewerLoading}
+              className="ml-auto flex shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-white/[0.08] disabled:opacity-60 transition"
+            >
+              {viewerLoading ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}
+              View file
+            </button>
           </div>
-          <div className="min-w-0">
-            <h1 className="text-lg font-bold text-slate-900">{data.title}</h1>
-            <p className="mt-0.5 text-sm text-slate-500">
-              {data.course?.name ?? "—"}
-              {data.semester?.name ? ` · ${data.semester.name}` : ""}
-              {data.year ? ` · ${data.year}` : ""}
-            </p>
-          </div>
-          <button
-            onClick={openViewer}
-            disabled={viewerLoading}
-            className="ml-auto flex shrink-0 items-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
-          >
-            {viewerLoading ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              <Eye size={14} />
-            )}
-            View file
-          </button>
+
+          {viewerError && (
+            <p className="mt-3 text-xs text-red-400">{viewerError}</p>
+          )}
+
+          {isLowQuality && (
+            <div className="mt-4 flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
+              <AlertCircle size={13} className="mt-0.5 shrink-0 text-amber-400" />
+              <p className="text-xs text-amber-400">
+                This scan wasn't very clear — tap "View file" to check the original if anything looks off.
+              </p>
+            </div>
+          )}
+
+          {/* Stats row */}
+          {hasProcessed && (
+            <div className="mt-4 flex flex-wrap gap-3 border-t border-white/[0.05] pt-4">
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <Sparkles size={12} className="text-violet-400" />
+                <span className="font-semibold text-violet-400">AI Processed</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <BookOpen size={12} />
+                {processedQuestions.length} questions total
+              </div>
+              {mcqCount > 0 && (
+                <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                  <Zap size={12} className="text-blue-400" />
+                  {mcqCount} MCQ
+                </div>
+              )}
+              {theoryCount > 0 && (
+                <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                  <FileText size={12} className="text-slate-400" />
+                  {theoryCount} Theory
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {viewerError && (
-          <p className="mt-3 text-xs text-red-500">{viewerError}</p>
-        )}
-
-        {isLowQuality && (
-          <div className="mt-4 flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-xs text-amber-700">
-            <AlertCircle size={14} className="mt-0.5 shrink-0" />
-            <span>
-              This scan wasn't very clear, so the text below may have small
-              errors — tap "View file" above to check the original if
-              anything looks off.
-            </span>
-          </div>
-        )}
-      </div>
-
-      <div className="mt-6 rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-        <h2 className="mb-4 text-base font-semibold text-slate-900">Extracted Text</h2>
-
-        {lines.length === 0 ? (
-          <p className="text-sm text-slate-400">No extracted text available for this file.</p>
-        ) : (
-          <div className="space-y-2 text-[15px] leading-relaxed text-slate-700">
-            {lines.map((line, i) => (
-              <p
-                key={i}
-                className={`whitespace-pre-wrap ${line.indent ? "ml-4" : ""}`}
-              >
-                {line.text}
-              </p>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Submit an answer */}
-      <div className="mt-6 rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-        <h2 className="mb-1 text-base font-semibold text-slate-900">Submit Your Answer</h2>
-        <p className="mb-4 text-sm text-slate-500">
-          Upload a photo or scan of your written answer — an admin will
-          review it and leave feedback.
-        </p>
-
-        <form onSubmit={handleSubmitAnswer} className="space-y-4">
-          <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 px-4 py-8 text-center transition hover:border-blue-300 hover:bg-blue-50/40">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 text-blue-600">
-              <UploadIcon className="h-4 w-4" />
+        {/* Questions */}
+        <div className="mt-6 space-y-4">
+          {questionsLoading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
             </div>
-            <span className="text-sm text-slate-500">
-              {answerFile ? answerFile.name : "Click to choose a PDF, JPG, or PNG (max 10MB)"}
-            </span>
-            <input
-              ref={answerFileInputRef}
-              type="file"
-              accept=".pdf,.jpg,.jpeg,.png"
-              onChange={handleAnswerFileChange}
-              className="hidden"
-            />
-          </label>
-          {answerFileError && (
-            <p className="text-sm text-red-500">{answerFileError}</p>
-          )}
-
-          {answerError && <p className="text-sm text-red-500">{answerError}</p>}
-          {answerSuccess && (
-            <p className="flex items-center gap-1.5 text-sm text-emerald-600">
-              <CheckCircle2 className="h-4 w-4" />
-              Submitted — pending admin review.
-            </p>
-          )}
-
-          <button
-            type="submit"
-            disabled={!answerFile || !!answerFileError || submittingAnswer}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
-          >
-            {submittingAnswer && <Loader2 className="h-4 w-4 animate-spin" />}
-            {submittingAnswer ? "Submitting..." : "Submit Answer"}
-          </button>
-        </form>
-
-        {myAnswers.length > 0 && (
-          <div className="mt-6 border-t border-slate-100 pt-5">
-            <h3 className="mb-3 text-sm font-semibold text-slate-800">
-              Your Submissions
-            </h3>
-            <div className="space-y-3">
-              {myAnswers.map((a) => (
+          ) : hasProcessed ? (
+            <>
+              {processedQuestions.map((q, i) => (
                 <div
-                  key={a.id}
-                  className="rounded-xl border border-slate-100 bg-slate-50 p-3.5"
+                  key={q.id}
+                  className="rounded-2xl border border-white/[0.06] bg-[#0D1230] p-5"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-xs text-slate-500">
-                      {new Date(a.created_at).toLocaleDateString()}
-                    </span>
-                    {a.status === "reviewed" ? (
-                      <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
-                        <CheckCircle2 className="h-3 w-3" />
-                        Reviewed
+                  {/* Question header */}
+                  <div className="flex items-start justify-between gap-3 mb-4">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-bold text-blue-400">
+                        Q{q.question_number ?? i + 1}
                       </span>
-                    ) : (
-                      <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
-                        <Clock className="h-3 w-3" />
-                        Pending
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize ${
+                        q.question_type === "mcq"
+                          ? "border-blue-500/20 bg-blue-500/10 text-blue-400"
+                          : "border-slate-500/20 bg-slate-500/10 text-slate-400"
+                      }`}>
+                        {q.question_type === "mcq" ? "MCQ" : "Theory"}
                       </span>
-                    )}
+                      <DifficultyBadge difficulty={q.difficulty} />
+                      {q.topic_tag && (
+                        <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-400">
+                          {q.topic_tag}
+                        </span>
+                      )}
+                      {q.marks && (
+                        <span className="text-[10px] text-slate-600">{q.marks} marks</span>
+                      )}
+                    </div>
                   </div>
-                  {a.status === "reviewed" && a.feedback && (
-                    <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
-                      {a.feedback}
-                    </p>
+
+                  {/* Question text */}
+                  <p className="text-sm text-slate-200 leading-7 whitespace-pre-wrap mb-4">
+                    {q.question_text}
+                  </p>
+
+                  {/* MCQ or Theory interaction */}
+                  {q.question_type === "mcq" ? (
+                    <MCQQuestion q={q} />
+                  ) : (
+                    <TheoryQuestion q={q} />
                   )}
                 </div>
               ))}
+            </>
+          ) : (
+            /* Fallback — no processed questions yet */
+            <div className="rounded-2xl border border-white/[0.06] bg-[#0D1230] p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <FileText size={16} className="text-slate-500" />
+                <h2 className="text-sm font-semibold text-slate-400">Extracted Text</h2>
+                <span className="ml-auto text-xs text-slate-600">
+                  AI processing not yet done
+                </span>
+              </div>
+
+              {data.extracted_text ? (
+                <div className="space-y-1.5 text-sm leading-7 text-slate-400">
+                  {data.extracted_text
+                    .split(/\n+/)
+                    .map((line) => line.trim())
+                    .filter(Boolean)
+                    .map((line, i) => (
+                      <p key={i} className={/^\(?[a-z]\)|^\(?[ivx]+\)/i.test(line) ? "ml-4" : ""}>
+                        {line}
+                      </p>
+                    ))}
+                </div>
+              ) : (
+                <p className="text-sm text-slate-600">No extracted text available.</p>
+              )}
             </div>
-          </div>
-        )}
+          )}
+        </div>
+
       </div>
 
-      {/* In-app viewer modal — deliberately not a direct <a href> link
-          or native <iframe> (which would hand control to the browser's
-          own PDF viewer, complete with its own download button). Images
-          render directly with right-click/drag disabled; PDFs render
-          page-by-page onto <canvas> via PdfViewer. This cannot stop
-          screenshots, only make link-sharing and save-as harder. */}
+      {/* PDF/Image viewer modal */}
       {viewerUrl && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
@@ -450,7 +449,6 @@ export default function QuestionDetailPage() {
           >
             <X size={18} />
           </button>
-
           {isImage ? (
             <img
               src={viewerUrl}
