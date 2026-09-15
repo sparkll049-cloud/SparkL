@@ -24,7 +24,7 @@ GEMINI_AVAILABLE = bool(GEMINI_API_KEY)
 
 _client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_AVAILABLE else None
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 
 # Aggressive prompt — tells Gemini to try its hardest even on bad scans
 EXTRACTION_PROMPT = (
