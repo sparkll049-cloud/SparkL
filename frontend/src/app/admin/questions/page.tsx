@@ -466,17 +466,24 @@ export default function AdminQuestionsPage() {
                         </p>
 
                         {q.file_url && (
-                          <a
-                            href={q.file_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
-                          >
-                            View saved file
-                            <ExternalLink size={12} />
-                          </a>
-                        )}
-
+  <button
+    onClick={async () => {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${q.id}/file-url`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) return;
+      const { url } = await res.json();
+      window.open(url, "_blank");
+    }}
+    className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+  >
+    View saved file
+    <ExternalLink size={12} />
+  </button>
+)}
                         {q.extracted_text && editingId !== q.id && (
                           <div className="mt-2 flex items-center gap-3">
                             <button
