@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from app.admin_auth import get_current_admin
 from app.supabase_client import supabase
 from app.storage import get_signed_url, delete_file
+from app.services.question_processor import process_questions, ProcessingError
 
 router = APIRouter(prefix="/api/admin/questions", tags=["admin-questions"])
 
@@ -43,7 +44,6 @@ async def list_questions(
     res = query.execute()
     questions = res.data or []
 
-    # Fetch uploaders in a second query and merge in Python
     uploader_ids = list({q["uploaded_by"] for q in questions if q.get("uploaded_by")})
 
     profiles_by_id = {}
@@ -56,10 +56,23 @@ async def list_questions(
         )
         profiles_by_id = {p["id"]: p for p in (profiles_res.data or [])}
 
+    # Fetch which past_question_ids have already been AI processed
+    question_ids = [q["id"] for q in questions]
+    processed_ids: set[str] = set()
+    if question_ids:
+        proc_res = (
+            supabase.table("questions")
+            .select("past_question_id")
+            .in_("past_question_id", question_ids)
+            .execute()
+        )
+        processed_ids = {r["past_question_id"] for r in (proc_res.data or [])}
+
     for q in questions:
         profile = profiles_by_id.get(q.get("uploaded_by"))
         q["uploader"] = {"full_name": profile["full_name"]} if profile else None
         q.pop("uploaded_by", None)
+        q["ai_processed"] = q["id"] in processed_ids
 
     return questions
 
@@ -69,7 +82,6 @@ async def get_question_file_url(
     question_id: str,
     admin_id: str = Depends(get_current_admin),
 ):
-    """Admin can get a signed URL for any question regardless of status."""
     res = (
         supabase.table("past_questions")
         .select("id, file_url, status")
@@ -148,6 +160,110 @@ async def update_extracted_text(
     return res.data[0]
 
 
+@router.post("/{question_id}/process")
+async def process_question_with_ai(
+    question_id: str,
+    admin_id: str = Depends(get_current_admin),
+):
+    # 1. Fetch the record
+    res = (
+        supabase.table("past_questions")
+        .select("id, extracted_text, status, course_id, course:courses(name)")
+        .eq("id", question_id)
+        .maybe_single()
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    record = res.data
+
+    if record["status"] != "approved":
+        raise HTTPException(
+            status_code=400,
+            detail="Only approved papers can be processed."
+        )
+
+    extracted_text = record.get("extracted_text") or ""
+    if not extracted_text or extracted_text.startswith("[extraction failed"):
+        raise HTTPException(
+            status_code=400,
+            detail="No valid extracted text to process."
+        )
+
+    course_name = (record.get("course") or {}).get("name", "")
+
+    # 2. Send to Gemini
+    try:
+        questions = process_questions(
+            extracted_text=extracted_text,
+            course_name=course_name,
+        )
+    except ProcessingError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not questions:
+        raise HTTPException(
+            status_code=500,
+            detail="Gemini returned no questions. Check extracted text quality."
+        )
+
+    # 3. Delete any previously processed questions for this paper (re-run safe)
+    supabase.table("questions").delete().eq(
+        "past_question_id", question_id
+    ).execute()
+
+    # 4. Bulk insert
+    rows = [
+        {
+            "past_question_id": question_id,
+            "course_id":        record["course_id"],
+            "question_number":  q.get("question_number"),
+            "question_text":    q.get("question_text", ""),
+            "question_type":    q.get("question_type", "theory"),
+            "option_a":         q.get("option_a"),
+            "option_b":         q.get("option_b"),
+            "option_c":         q.get("option_c"),
+            "option_d":         q.get("option_d"),
+            "correct_answer":   q.get("correct_answer"),
+            "model_answer":     q.get("model_answer"),
+            "explanation":      q.get("explanation"),
+            "topic_tag":        q.get("topic_tag"),
+            "ai_processed":     True,
+        }
+        for q in questions
+    ]
+
+    insert_res = supabase.table("questions").insert(rows).execute()
+
+    return {
+        "processed": True,
+        "questions_created": len(insert_res.data or []),
+    }
+
+
+@router.get("/{question_id}/processed-questions")
+async def get_processed_questions(
+    question_id: str,
+    admin_id: str = Depends(get_current_admin),
+):
+    """Preview the AI-processed questions for a paper."""
+    res = (
+        supabase.table("questions")
+        .select(
+            "id, question_number, question_text, question_type, "
+            "option_a, option_b, option_c, option_d, "
+            "correct_answer, model_answer, explanation, topic_tag"
+        )
+        .eq("past_question_id", question_id)
+        .order("question_number")
+        .execute()
+    )
+
+    return res.data or []
+
+
 @router.delete("/{question_id}")
 async def delete_question(
     question_id: str,
@@ -169,7 +285,6 @@ async def delete_question(
     if not res.data:
         raise HTTPException(status_code=404, detail="Question not found.")
 
-    # Best-effort B2 cleanup — DB row is already gone either way
     if file_url:
         delete_file(file_url)
 
