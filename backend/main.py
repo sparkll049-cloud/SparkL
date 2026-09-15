@@ -15,6 +15,7 @@ from app.routers import (
     uploads,
     questions,
     answers,
+    community,
 )
 from app.services.extraction_worker import run_extraction_worker
 
@@ -52,6 +53,7 @@ app.include_router(courses.router)
 app.include_router(uploads.router)
 app.include_router(questions.router)
 app.include_router(answers.router)
+app.include_router(community.router)
 
 @app.get("/")
 def root():
