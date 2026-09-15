@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -11,132 +11,249 @@ import {
   MessageCircle,
   Send,
   Upload,
-  User,
   ThumbsUp,
   MoreHorizontal,
   Flag,
   Paperclip,
+  Loader2,
+  AlertCircle,
 } from "lucide-react";
+import { createClient } from "@/utils/supabase/client";
 
-type Solution = {
+type Question = {
   id: string;
-  initials: string;
-  name: string;
-  institution: string;
-  time: string;
+  title: string;
+  description: string;
+  course_code: string | null;
+  views: number;
+  is_answered: boolean;
+  created_at: string;
+  institution: { id: string; name: string } | null;
+  course: { id: string; name: string } | null;
+  asker: { id: string; full_name: string } | null;
+};
+
+type Answer = {
+  id: string;
   content: string;
-  helpful: boolean;
-  helpfulCount: number;
+  helpful_count: number;
+  is_accepted: boolean;
+  voted_helpful: boolean;
+  created_at: string;
+  answerer: { id: string; full_name: string } | null;
 };
 
-const questionData = {
-  "1": {
-    courseCode: "MTH 201",
-    institution: "University of Lagos",
-    title: "How do I solve this differential equation?",
-    description:
-      "I'm having trouble understanding the second step of this question. Can someone explain the solution and show me how to approach similar problems?",
-    author: "Daniel A.",
-    time: "2 hours ago",
-    views: 28,
-    answered: true,
-  },
-  "2": {
-    courseCode: "CSC 301",
-    institution: "Yaba College of Technology",
-    title: "Can someone explain this data structure question?",
-    description:
-      "I understand the basic concept, but I'm confused about how the algorithm works in this particular example.",
-    author: "Michael E.",
-    time: "4 hours ago",
-    views: 41,
-    answered: true,
-  },
-  "3": {
-    courseCode: "PHY 204",
-    institution: "University of Ibadan",
-    title: "Help with this mechanics problem",
-    description:
-      "I'm struggling with the second part of this problem. I'd appreciate a step-by-step explanation.",
-    author: "Sarah K.",
-    time: "6 hours ago",
-    views: 19,
-    answered: false,
-  },
-};
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
 
-const initialSolutions: Solution[] = [
-  {
-    id: "solution-1",
-    initials: "JO",
-    name: "John O.",
-    institution: "University of Lagos",
-    time: "1 hour ago",
-    content:
-      "First, separate the variables and integrate both sides. The important part is to identify the correct integrating factor before simplifying the equation.",
-    helpful: true,
-    helpfulCount: 8,
-  },
-];
+function getInitials(name: string | null | undefined): string {
+  if (!name) return "?";
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+}
 
 export default function QuestionDetailsPage() {
   const params = useParams();
+  const router = useRouter();
+  const supabase = createClient();
   const questionId = String(params.questionId);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const question =
-    questionData[questionId as keyof typeof questionData] ??
-    questionData["1"];
+  const [question, setQuestion] = useState<Question | null>(null);
+  const [answers, setAnswers] = useState<Answer[]>([]);
+  const [loadingQuestion, setLoadingQuestion] = useState(true);
+  const [loadingAnswers, setLoadingAnswers] = useState(true);
+  const [notFound, setNotFound] = useState(false);
 
-  const [solutions, setSolutions] = useState(initialSolutions);
   const [solutionText, setSolutionText] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isPosting, setIsPosting] = useState(false);
-  const [isHelpful, setIsHelpful] = useState<Record<string, boolean>>({});
+  const [postError, setPostError] = useState("");
+  const [votingId, setVotingId] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  async function getToken() {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+  }
 
-  const handleFileChange = (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = event.target.files?.[0] ?? null;
-    setSelectedFile(file);
-  };
+  // Load question
+  useEffect(() => {
+    // Skip seed questions
+    if (questionId.startsWith("seed-")) {
+      setNotFound(true);
+      setLoadingQuestion(false);
+      return;
+    }
 
-  const handlePostSolution = async () => {
+    async function load() {
+      setLoadingQuestion(true);
+      const token = await getToken();
+      if (!token) { router.push("/auth/login"); return; }
+
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/community/questions/${questionId}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (res.status === 404) { setNotFound(true); setLoadingQuestion(false); return; }
+      if (res.ok) setQuestion(await res.json());
+      setLoadingQuestion(false);
+    }
+    load();
+  }, [questionId]);
+
+  // Load answers
+  useEffect(() => {
+    if (questionId.startsWith("seed-")) { setLoadingAnswers(false); return; }
+
+    async function load() {
+      setLoadingAnswers(true);
+      const token = await getToken();
+      if (!token) return;
+
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/community/questions/${questionId}/answers`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (res.ok) setAnswers(await res.json());
+      setLoadingAnswers(false);
+    }
+    load();
+  }, [questionId]);
+
+  async function handlePostSolution() {
     if (!solutionText.trim()) return;
-
     setIsPosting(true);
+    setPostError("");
 
-    // Backend integration will replace this later.
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    const token = await getToken();
+    if (!token) { setPostError("Session expired. Please log in."); setIsPosting(false); return; }
 
-    const newSolution: Solution = {
-      id: `solution-${Date.now()}`,
-      initials: "YO",
-      name: "You",
-      institution: "Your Institution",
-      time: "Just now",
-      content: solutionText.trim(),
-      helpful: false,
-      helpfulCount: 0,
-    };
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/community/questions/${questionId}/answers`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ content: solutionText.trim() }),
+        }
+      );
 
-    setSolutions((current) => [newSolution, ...current]);
-    setSolutionText("");
-    setSelectedFile(null);
-    setIsPosting(false);
-  };
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? "Failed to post answer.");
+      }
 
-  const toggleHelpful = (solutionId: string) => {
-    setIsHelpful((current) => ({
-      ...current,
-      [solutionId]: !current[solutionId],
-    }));
-  };
+      const newAnswer: Answer = await res.json();
+      setAnswers((prev) => [...prev, newAnswer]);
+      setSolutionText("");
+      setSelectedFile(null);
+
+      // Mark question as answered locally
+      setQuestion((prev) => prev ? { ...prev, is_answered: true } : prev);
+    } catch (err) {
+      setPostError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setIsPosting(false);
+    }
+  }
+
+  async function toggleHelpful(answerId: string) {
+    setVotingId(answerId);
+    const token = await getToken();
+    if (!token) { setVotingId(null); return; }
+
+    // Optimistic update
+    setAnswers((prev) =>
+      prev.map((a) =>
+        a.id === answerId
+          ? {
+              ...a,
+              voted_helpful: !a.voted_helpful,
+              helpful_count: a.helpful_count + (a.voted_helpful ? -1 : 1),
+            }
+          : a
+      )
+    );
+
+    try {
+      await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/community/answers/${answerId}/vote`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+      );
+    } catch {
+      // Revert
+      setAnswers((prev) =>
+        prev.map((a) =>
+          a.id === answerId
+            ? {
+                ...a,
+                voted_helpful: !a.voted_helpful,
+                helpful_count: a.helpful_count + (a.voted_helpful ? -1 : 1),
+              }
+            : a
+        )
+      );
+    } finally {
+      setVotingId(null);
+    }
+  }
+
+  // ── Not found ──
+  if (notFound) {
+    return (
+      <main className="min-h-screen bg-slate-50">
+        <div className="mx-auto max-w-5xl px-6 py-16 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100">
+            <AlertCircle size={26} className="text-slate-400" />
+          </div>
+          <h1 className="text-2xl font-bold text-slate-900">Question not found</h1>
+          <p className="mt-2 text-slate-500">
+            This question may have been removed or doesn't exist.
+          </p>
+          <Link
+            href="/community"
+            className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700"
+          >
+            <ArrowLeft size={16} />
+            Back to Community
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
+  // ── Loading ──
+  if (loadingQuestion) {
+    return (
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <Loader2 className="h-7 w-7 animate-spin text-blue-600" />
+      </main>
+    );
+  }
+
+  if (!question) return null;
 
   return (
     <main className="min-h-screen bg-slate-50">
       <div className="mx-auto max-w-5xl px-6 py-8">
+
         {/* Back */}
         <Link
           href="/community"
@@ -146,88 +263,61 @@ export default function QuestionDetailsPage() {
           Back to Community
         </Link>
 
-        {/* Question */}
+        {/* ── Question ── */}
         <article className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8">
-          {/* Course + Status */}
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-              {question.courseCode}
-            </span>
-
-            <span className="text-xs text-slate-300">•</span>
-
+            {question.course_code && (
+              <span className="rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                {question.course_code}
+              </span>
+            )}
+            {question.course_code && <span className="text-xs text-slate-300">•</span>}
             <span className="text-xs font-medium text-slate-500">
-              {question.institution}
+              {question.institution?.name ?? "Unknown institution"}
             </span>
-
             <span
               className={`ml-auto inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
-                question.answered
+                question.is_answered
                   ? "bg-emerald-50 text-emerald-700"
                   : "bg-amber-50 text-amber-700"
               }`}
             >
-              {question.answered ? (
-                <>
-                  <CheckCircle2 size={13} />
-                  Answered
-                </>
+              {question.is_answered ? (
+                <><CheckCircle2 size={13} /> Answered</>
               ) : (
                 "Unanswered"
               )}
             </span>
           </div>
 
-          {/* Title */}
           <h1 className="mt-5 text-2xl font-bold leading-9 text-slate-950 sm:text-3xl">
             {question.title}
           </h1>
 
-          {/* Description */}
           <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-600">
             {question.description}
           </p>
 
-          {/* Question attachment */}
-          <div className="mt-6 flex min-h-[220px] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50">
-            <div className="text-center">
-              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-white text-slate-400 shadow-sm">
-                <Paperclip size={19} />
-              </div>
-
-              <p className="mt-3 text-sm font-medium text-slate-500">
-                Question attachment
-              </p>
-
-              <p className="mt-1 text-xs text-slate-400">
-                Question image or document will appear here
-              </p>
-            </div>
-          </div>
-
           {/* Metadata */}
           <div className="mt-6 flex flex-wrap items-center gap-5 border-t border-slate-100 pt-5 text-xs text-slate-400">
             <span className="flex items-center gap-1.5">
-              <User size={14} />
-              {question.author}
+              <div className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[9px] font-bold text-slate-600">
+                {getInitials(question.asker?.full_name)}
+              </div>
+              {question.asker?.full_name ?? "Anonymous"}
             </span>
-
             <span className="flex items-center gap-1.5">
               <Clock3 size={14} />
-              Asked {question.time}
+              Asked {timeAgo(question.created_at)}
             </span>
-
             <span className="flex items-center gap-1.5">
               <MessageCircle size={14} />
-              {solutions.length}{" "}
-              {solutions.length === 1 ? "answer" : "answers"}
+              {answers.length} {answers.length === 1 ? "answer" : "answers"}
             </span>
-
             <span className="flex items-center gap-1.5">
               <Eye size={14} />
               {question.views} views
             </span>
-
             <button
               type="button"
               className="ml-auto inline-flex items-center gap-1.5 transition hover:text-slate-700"
@@ -238,128 +328,131 @@ export default function QuestionDetailsPage() {
           </div>
         </article>
 
-        {/* Solutions */}
+        {/* ── Answers ── */}
         <section className="mt-8">
           <div className="flex items-end justify-between gap-4">
             <div>
-              <h2 className="text-xl font-bold text-slate-950">
-                Community Solutions
-              </h2>
-
+              <h2 className="text-xl font-bold text-slate-950">Community Answers</h2>
               <p className="mt-1 text-sm text-slate-500">
                 Solutions shared by other students.
               </p>
             </div>
-
             <span className="hidden rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500 sm:inline-flex">
-              {solutions.length}{" "}
-              {solutions.length === 1 ? "solution" : "solutions"}
+              {answers.length} {answers.length === 1 ? "answer" : "answers"}
             </span>
           </div>
 
-          {solutions.length === 0 ? (
+          {loadingAnswers ? (
+            <div className="mt-5 flex justify-center py-10">
+              <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+            </div>
+          ) : answers.length === 0 ? (
             <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
-              <MessageCircle
-                size={28}
-                className="mx-auto text-slate-300"
-              />
-
-              <h3 className="mt-4 text-sm font-semibold text-slate-800">
-                No solutions yet
-              </h3>
-
+              <MessageCircle size={28} className="mx-auto text-slate-300" />
+              <h3 className="mt-4 text-sm font-semibold text-slate-800">No answers yet</h3>
               <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
                 Be the first student to share a helpful explanation.
               </p>
-
-              <Link
+              <a
                 href="#answer"
-                className="mt-5 inline-flex rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                className="mt-5 inline-flex rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
               >
-                Share a Solution
-              </Link>
+                Share an Answer
+              </a>
             </div>
           ) : (
             <div className="mt-5 space-y-4">
-              {solutions.map((solution) => {
-                const markedHelpful =
-                  isHelpful[solution.id] ?? solution.helpful;
-
-                return (
-                  <article
-                    key={solution.id}
-                    className="rounded-2xl border border-slate-200 bg-white p-6"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-700">
-                        {solution.initials}
-                      </div>
-
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-900">
-                          {solution.name}
-                        </p>
-
-                        <p className="truncate text-xs text-slate-400">
-                          {solution.institution} · {solution.time}
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        className="ml-auto rounded-lg p-2 text-slate-400 transition hover:bg-slate-50 hover:text-slate-700"
-                        aria-label="More options"
-                      >
-                        <MoreHorizontal size={18} />
-                      </button>
+              {answers.map((answer) => (
+                <article
+                  key={answer.id}
+                  className={`rounded-2xl border bg-white p-6 ${
+                    answer.is_accepted
+                      ? "border-emerald-200 bg-emerald-50/30"
+                      : "border-slate-200"
+                  }`}
+                >
+                  {answer.is_accepted && (
+                    <div className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                      <CheckCircle2 size={12} />
+                      Accepted Answer
                     </div>
+                  )}
 
-                    <p className="mt-5 text-sm leading-7 text-slate-600">
-                      {solution.content}
-                    </p>
-
-                    <div className="mt-5 flex items-center border-t border-slate-100 pt-4">
-                      <button
-                        type="button"
-                        onClick={() => toggleHelpful(solution.id)}
-                        className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                          markedHelpful
-                            ? "bg-emerald-50 text-emerald-700"
-                            : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
-                        }`}
-                      >
-                        <ThumbsUp size={15} />
-                        Helpful
-                        {solution.helpfulCount > 0 &&
-                          ` · ${solution.helpfulCount}`}
-                      </button>
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700">
+                      {getInitials(answer.answerer?.full_name)}
                     </div>
-                  </article>
-                );
-              })}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">
+                        {answer.answerer?.full_name ?? "Anonymous"}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {timeAgo(answer.created_at)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setOpenMenuId(openMenuId === answer.id ? null : answer.id)}
+                      className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-50 hover:text-slate-700"
+                    >
+                      <MoreHorizontal size={18} />
+                    </button>
+                  </div>
+
+                  <p className="mt-5 text-sm leading-7 text-slate-600">
+                    {answer.content}
+                  </p>
+
+                  <div className="mt-5 border-t border-slate-100 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => toggleHelpful(answer.id)}
+                      disabled={votingId === answer.id}
+                      className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition disabled:opacity-50 ${
+                        answer.voted_helpful
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+                      }`}
+                    >
+                      {votingId === answer.id ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <ThumbsUp size={14} />
+                      )}
+                      Helpful
+                      {answer.helpful_count > 0 && ` · ${answer.helpful_count}`}
+                    </button>
+                  </div>
+                </article>
+              ))}
             </div>
           )}
         </section>
 
-        {/* Answer box */}
+        {/* ── Answer box ── */}
         <section
           id="answer"
           className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 sm:p-7"
         >
-          <h2 className="text-lg font-semibold text-slate-950">
-            Share your solution
-          </h2>
-
+          <h2 className="text-lg font-semibold text-slate-950">Share your answer</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Help this student by explaining how you solved the question.
+            Help this student by explaining how you would approach this question.
           </p>
 
           <textarea
             value={solutionText}
-            onChange={(event) => setSolutionText(event.target.value)}
-            placeholder="Write your solution or explanation..."
-            className="mt-5 min-h-[160px] w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+            onChange={(e) => setSolutionText(e.target.value)}
+            placeholder="Write your answer or explanation..."
+            rows={6}
+            className="mt-5 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
           />
+
+          {postError && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5">
+              <AlertCircle size={14} className="shrink-0 text-red-500" />
+              <p className="text-xs text-red-600">{postError}</p>
+            </div>
+          )}
 
           <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -367,19 +460,17 @@ export default function QuestionDetailsPage() {
                 ref={fileInputRef}
                 type="file"
                 accept="image/*,.pdf,.doc,.docx"
-                onChange={handleFileChange}
+                onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
                 className="hidden"
               />
-
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
               >
                 <Upload size={16} />
-                Upload Solution
+                Attach file
               </button>
-
               {selectedFile && (
                 <p className="mt-2 max-w-[260px] truncate text-xs text-slate-400">
                   {selectedFile.name}
@@ -391,13 +482,17 @@ export default function QuestionDetailsPage() {
               type="button"
               onClick={handlePostSolution}
               disabled={!solutionText.trim() || isPosting}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Send size={16} />
-              {isPosting ? "Posting..." : "Post Solution"}
+              {isPosting ? (
+                <><Loader2 size={16} className="animate-spin" /> Posting...</>
+              ) : (
+                <><Send size={16} /> Post Answer</>
+              )}
             </button>
           </div>
         </section>
+
       </div>
     </main>
   );
