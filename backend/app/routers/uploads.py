@@ -8,9 +8,10 @@ Signed URLs are generated on demand for viewing — no permanent public URLs.
 Flow:
     1. Verify Supabase auth token → get real user_id
     2. Validate file size and actual file content (magic bytes)
-    3. Upload to Backblaze B2 under past-questions/{user_id}/{uuid}.ext
-    4. Save record with status="pending", file_url = B2 key (not a URL)
-    5. Background worker handles text extraction (extraction_worker.py)
+    3. Pre-extract text NOW — reject file immediately if completely unreadable
+    4. Upload to Backblaze B2 under past-questions/{user_id}/{uuid}.ext
+    5. Save record with extracted_text already populated (or None if
+       Gemini was rate-limited — worker will retry in background)
     6. Stays invisible until admin approves via /api/admin/questions
 """
 
@@ -34,21 +35,28 @@ from fastapi import (
 
 from app.supabase_client import supabase
 from app.storage import upload_file, delete_file
+from app.services.text_extractor import (
+    extract_text,
+    EmptyExtractionError,
+    UnsupportedFileTypeError,
+)
 
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
 
-TABLE_NAME     = "past_questions"
+TABLE_NAME       = "past_questions"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_TITLE_LENGTH = 150
-MIN_YEAR = 1990
+MIN_YEAR         = 1990
 
 # Magic-byte signatures — never trust client Content-Type
 FILE_SIGNATURES = {
-    b"%PDF-":           ("application/pdf", "pdf"),
-    b"\xff\xd8\xff":   ("image/jpeg",       "jpg"),
-    b"\x89PNG\r\n\x1a\n": ("image/png",    "png"),
+    b"%PDF-":               ("application/pdf", "pdf"),
+    b"\xff\xd8\xff":       ("image/jpeg",       "jpg"),
+    b"\x89PNG\r\n\x1a\n": ("image/png",        "png"),
 }
 
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def detect_file_type(file_bytes: bytes) -> tuple[str, str]:
     for signature, (mime_type, ext) in FILE_SIGNATURES.items():
@@ -91,10 +99,12 @@ async def get_current_user_id(
     return UUID(user.id)
 
 
+# ── Routes ────────────────────────────────────────────────────────────────────
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    summary="Upload a past question to Backblaze B2",
+    summary="Upload a past question — pre-extracts text, rejects unreadable files",
 )
 async def upload_past_question(
     title: str = Form(...),
@@ -104,7 +114,7 @@ async def upload_past_question(
     file: UploadFile = File(...),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    # Validate title
+    # ── Validate title ────────────────────────────────────────────────
     title = title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Title is required.")
@@ -116,7 +126,7 @@ async def upload_past_question(
 
     year = validate_year(year)
 
-    # Validate UUIDs
+    # ── Validate UUIDs ────────────────────────────────────────────────
     try:
         UUID(course_id)
     except ValueError:
@@ -127,7 +137,7 @@ async def upload_past_question(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid semester_id.")
 
-    # Read file
+    # ── Read and size-check file ──────────────────────────────────────
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -137,10 +147,42 @@ async def upload_past_question(
             detail=f"File too large. Max size is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB.",
         )
 
-    # Detect real file type from magic bytes
+    # ── Detect real file type from magic bytes ────────────────────────
     mime_type, ext = detect_file_type(file_bytes)
 
-    # Upload to Backblaze B2
+    # ── Pre-extraction check ──────────────────────────────────────────
+    # Attempt text extraction BEFORE accepting the upload.
+    # Reject completely unreadable files immediately with a clear message
+    # so the student can fix it rather than wasting admin review time.
+    pre_extract_text    = None
+    pre_extract_quality = None
+
+    fake_filename = f"file.{ext}"
+
+    try:
+        pre_result          = extract_text(fake_filename, file_bytes)
+        pre_extract_text    = pre_result.text
+        pre_extract_quality = pre_result.quality
+
+    except EmptyExtractionError as e:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"We couldn't read text from your file: {str(e)} "
+                "Please upload a clearer scan or a text-based PDF."
+            ),
+        )
+
+    except UnsupportedFileTypeError as e:
+        raise HTTPException(status_code=415, detail=str(e))
+
+    except Exception:
+        # Gemini may be rate-limited or unavailable — don't block the upload.
+        # The background worker will retry extraction later.
+        pre_extract_text    = None
+        pre_extract_quality = None
+
+    # ── Upload to Backblaze B2 ────────────────────────────────────────
     storage_key = upload_file(
         file_bytes=file_bytes,
         user_id=str(user_id),
@@ -148,19 +190,22 @@ async def upload_past_question(
         ext=ext,
     )
 
-    # Save record to Supabase — store B2 key not a URL
+    # ── Save record to Supabase ───────────────────────────────────────
+    # Store B2 key as file_url — never a permanent public URL.
+    # Actual file access always goes through a short-lived signed URL
+    # generated on demand via /api/questions/{id}/file-url.
     record = {
-        "title": title,
-        "year": year,
-        "course_id": course_id,
-        "semester_id": semester_id,
-        "status": "pending",
-        "file_url": storage_key,
-        "mime_type": mime_type,
-        "file_size": len(file_bytes),
-        "extracted_text": None,
-        "extraction_quality": None,
-        "uploaded_by": str(user_id),
+        "title":              title,
+        "year":               year,
+        "course_id":          course_id,
+        "semester_id":        semester_id,
+        "status":             "pending",
+        "file_url":           storage_key,
+        "mime_type":          mime_type,
+        "file_size":          len(file_bytes),
+        "extracted_text":     pre_extract_text,
+        "extraction_quality": pre_extract_quality,
+        "uploaded_by":        str(user_id),
     }
 
     try:
