@@ -17,16 +17,14 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.supabase_client import supabase
 from app.routers.uploads import get_current_user_id
+from app.storage import get_signed_url
 
 router = APIRouter(prefix="/api/questions", tags=["Questions"])
 
-STORAGE_BUCKET = "past-questions"
 FILE_URL_EXPIRY_SECONDS = 90  # long enough to load the viewer, not to hoard
 
 
 def _is_admin(user_id: UUID) -> bool:
-    """Soft admin check — returns False on any lookup failure instead of
-    raising, since this is used as an access bypass, not a hard gate."""
     try:
         profile_res = (
             supabase.table("profiles")
@@ -50,7 +48,10 @@ def _can_access(row: dict, user_id: UUID) -> bool:
 
 
 @router.get("/{question_id}")
-async def get_question(question_id: str, user_id: UUID = Depends(get_current_user_id)):
+async def get_question(
+    question_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
     try:
         UUID(question_id)
     except ValueError:
@@ -80,7 +81,8 @@ async def get_question(question_id: str, user_id: UUID = Depends(get_current_use
 
 @router.get("/{question_id}/file-url")
 async def get_signed_file_url(
-    question_id: str, user_id: UUID = Depends(get_current_user_id)
+    question_id: str,
+    user_id: UUID = Depends(get_current_user_id),
 ):
     try:
         UUID(question_id)
@@ -94,6 +96,7 @@ async def get_signed_file_url(
         .maybe_single()
         .execute()
     )
+
     row = response.data
     if not row:
         raise HTTPException(status_code=404, detail="Question not found.")
@@ -101,11 +104,7 @@ async def get_signed_file_url(
     if not _can_access(row, user_id):
         raise HTTPException(status_code=404, detail="Question not found.")
 
-    try:
-        signed = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
-            row["file_url"], FILE_URL_EXPIRY_SECONDS
-        )
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to generate file link.")
+    # Generate signed URL from Backblaze B2
+    url = get_signed_url(row["file_url"], expires_in=FILE_URL_EXPIRY_SECONDS)
 
-    return {"url": signed["signedURL"], "expires_in": FILE_URL_EXPIRY_SECONDS}
+    return {"url": url, "expires_in": FILE_URL_EXPIRY_SECONDS}
