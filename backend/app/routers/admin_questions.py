@@ -5,12 +5,11 @@ from pydantic import BaseModel
 
 from app.admin_auth import get_current_admin
 from app.supabase_client import supabase
+from app.storage import get_signed_url, delete_file
 
 router = APIRouter(prefix="/api/admin/questions", tags=["admin-questions"])
 
-STORAGE_BUCKET = "past-questions"
-
-MAX_EXTRACTED_TEXT_LENGTH = 50_000  # generous ceiling — a few dozen pages of text
+MAX_EXTRACTED_TEXT_LENGTH = 50_000
 
 
 class StatusUpdate(BaseModel):
@@ -44,9 +43,7 @@ async def list_questions(
     res = query.execute()
     questions = res.data or []
 
-    # profiles isn't linked to past_questions via a declared FK that
-    # PostgREST can see, so fetch uploaders in a second query and merge
-    # them in Python rather than relying on an embedded join.
+    # Fetch uploaders in a second query and merge in Python
     uploader_ids = list({q["uploaded_by"] for q in questions if q.get("uploaded_by")})
 
     profiles_by_id = {}
@@ -65,6 +62,27 @@ async def list_questions(
         q.pop("uploaded_by", None)
 
     return questions
+
+
+@router.get("/{question_id}/file-url")
+async def get_question_file_url(
+    question_id: str,
+    admin_id: str = Depends(get_current_admin),
+):
+    """Admin can get a signed URL for any question regardless of status."""
+    res = (
+        supabase.table("past_questions")
+        .select("id, file_url, status")
+        .eq("id", question_id)
+        .maybe_single()
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    url = get_signed_url(res.data["file_url"], expires_in=300)
+    return {"url": url, "expires_in": 300}
 
 
 @router.patch("/{question_id}/status")
@@ -117,9 +135,6 @@ async def update_extracted_text(
             detail=f"Extracted text must be under {MAX_EXTRACTED_TEXT_LENGTH} characters.",
         )
 
-    # Admin edits are treated as fully trusted/clean — reset the quality
-    # score to 1.0 so the low-quality warning banner no longer shows on
-    # the student-facing page for a question an admin has manually fixed.
     res = (
         supabase.table("past_questions")
         .update({"extracted_text": text, "extraction_quality": 1.0})
@@ -154,14 +169,8 @@ async def delete_question(
     if not res.data:
         raise HTTPException(status_code=404, detail="Question not found.")
 
-    # Best-effort cleanup — the DB row is already gone either way, so
-    # don't fail the request if storage removal has an issue.
-    # file_url is now always a plain storage path (private bucket, no
-    # public URL stored), so it can be passed to remove() directly.
+    # Best-effort B2 cleanup — DB row is already gone either way
     if file_url:
-        try:
-            supabase.storage.from_(STORAGE_BUCKET).remove([file_url])
-        except Exception:
-            pass
+        delete_file(file_url)
 
     return {"deleted": True}
