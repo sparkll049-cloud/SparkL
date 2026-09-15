@@ -44,7 +44,7 @@ _groq_client: Groq | None = (
     Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 )
 
-GEMINI_MODEL      = "gemini-3.5-flash"
+GEMINI_MODEL      = "gemini-3.6-flash"
 GROQ_VISION_MODEL = "qwen/qwen3-32b"
 GROQ_REASON_MODEL = "openai/gpt-oss-120b"
 
