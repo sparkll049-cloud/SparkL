@@ -25,7 +25,7 @@ logger = logging.getLogger("question_processor")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 _client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 
 # NOTE: All JSON example braces are doubled ({{ }}) to escape Python's str.format().
 # Only {extracted_text} is single — it is the actual substitution placeholder.
