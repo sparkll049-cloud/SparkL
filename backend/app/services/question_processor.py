@@ -271,7 +271,7 @@ def _call_groq(prompt: str, model: str, label: str) -> list[dict]:
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=1 if is_reasoning else 0.6,
-        max_completion_tokens=8192,
+        max_completion_tokens=17000,
         top_p=1 if is_reasoning else 0.95,
         stream=True,
         stop=None,
