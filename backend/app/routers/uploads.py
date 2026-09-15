@@ -1,35 +1,17 @@
 """
 uploads.py
 ----------
-Student-facing past-question upload feature. Matches the real
-`past_questions` table schema: id, course_id, uploaded_by, title, year,
-file_url, extracted_text, extraction_quality, status, created_at,
-semester_id, file_size, mime_type, rejection_reason.
+Student-facing past-question upload feature.
+Files are stored in Backblaze B2 (private bucket).
+Signed URLs are generated on demand for viewing — no permanent public URLs.
 
-Row Level Security is already enabled on this table in Supabase, with
-policies enforcing that users can only insert/read their own uploads
-(plus separate admin and "approved" read policies) — this code relies on
-that as a second layer of defense, not as a replacement for it.
-
-Flow on upload:
-    1. Verify the caller's Supabase auth token -> get a real user_id
-    2. Validate file size and actual file content (not just the
-       client-supplied Content-Type, which can be spoofed)
-    3. Upload the raw file to Supabase Storage under a per-user path
-       with a random filename -> store the storage PATH (not a public
-       URL — the bucket is private, so file access always goes through
-       a short-lived signed URL generated on demand, never a permanent
-       link)
-    4. Save the record with status="pending" and extracted_text=None —
-       text extraction now happens asynchronously via a background
-       worker (see extraction_worker.py), paced to stay under Gemini's
-       free-tier rate limit, instead of blocking the upload request.
-    5. It stays invisible to other students until an admin approves it
-       via /api/admin/questions
-
-Endpoints:
-    POST /api/upload         upload a file -> store -> save (pending, text pending)
-    GET  /api/upload/mine    the logged-in user's own uploads, any status
+Flow:
+    1. Verify Supabase auth token → get real user_id
+    2. Validate file size and actual file content (magic bytes)
+    3. Upload to Backblaze B2 under past-questions/{user_id}/{uuid}.ext
+    4. Save record with status="pending", file_url = B2 key (not a URL)
+    5. Background worker handles text extraction (extraction_worker.py)
+    6. Stays invisible until admin approves via /api/admin/questions
 """
 
 from __future__ import annotations
@@ -51,28 +33,24 @@ from fastapi import (
 )
 
 from app.supabase_client import supabase
+from app.storage import upload_file, delete_file
 
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
 
-TABLE_NAME = "past_questions"
-STORAGE_BUCKET = "past-questions"  # must exist in Supabase Storage, PRIVATE
-
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB, matches frontend + bucket limit
+TABLE_NAME     = "past_questions"
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_TITLE_LENGTH = 150
 MIN_YEAR = 1990
 
-# Magic-byte signatures — checked against actual file content, not the
-# client-supplied Content-Type header, which is trivial to spoof.
+# Magic-byte signatures — never trust client Content-Type
 FILE_SIGNATURES = {
-    b"%PDF-": ("application/pdf", "pdf"),
-    b"\xff\xd8\xff": ("image/jpeg", "jpg"),
-    b"\x89PNG\r\n\x1a\n": ("image/png", "png"),
+    b"%PDF-":           ("application/pdf", "pdf"),
+    b"\xff\xd8\xff":   ("image/jpeg",       "jpg"),
+    b"\x89PNG\r\n\x1a\n": ("image/png",    "png"),
 }
 
 
 def detect_file_type(file_bytes: bytes) -> tuple[str, str]:
-    """Return (mime_type, extension) based on real file content, or raise
-    if the bytes don't match an allowed signature."""
     for signature, (mime_type, ext) in FILE_SIGNATURES.items():
         if file_bytes.startswith(signature):
             return mime_type, ext
@@ -83,8 +61,6 @@ def detect_file_type(file_bytes: bytes) -> tuple[str, str]:
 
 
 def validate_year(year: Optional[str]) -> Optional[str]:
-    """Reject anything that isn't a plausible 4-digit year. year is
-    optional, so None/empty just passes through."""
     if not year:
         return None
     if not year.isdigit() or len(year) != 4:
@@ -99,34 +75,26 @@ def validate_year(year: Optional[str]) -> Optional[str]:
     return year
 
 
-# ---------------------------------------------------------------------------
-# Auth — verifies the Supabase JWT sent by the frontend and returns the
-# real, server-verified user id. Nothing here trusts client-supplied ids.
-# ---------------------------------------------------------------------------
 async def get_current_user_id(
     authorization: Optional[str] = Header(None),
 ) -> UUID:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated.")
-
     token = authorization.removeprefix("Bearer ").strip()
-
     try:
         user_response = supabase.auth.get_user(token)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired session.")
-
     user = getattr(user_response, "user", None)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired session.")
-
     return UUID(user.id)
 
 
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    summary="Upload a past question — file is stored and queued for text extraction",
+    summary="Upload a past question to Backblaze B2",
 )
 async def upload_past_question(
     title: str = Form(...),
@@ -136,6 +104,7 @@ async def upload_past_question(
     file: UploadFile = File(...),
     user_id: UUID = Depends(get_current_user_id),
 ):
+    # Validate title
     title = title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Title is required.")
@@ -147,7 +116,7 @@ async def upload_past_question(
 
     year = validate_year(year)
 
-    # Reject obviously invalid ids early rather than trusting them blindly.
+    # Validate UUIDs
     try:
         UUID(course_id)
     except ValueError:
@@ -158,46 +127,35 @@ async def upload_past_question(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid semester_id.")
 
+    # Read file
     file_bytes = await file.read()
-
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
     if len(file_bytes) > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
             detail=f"File too large. Max size is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB.",
         )
 
-    # Trust the bytes, not the client's declared filename/content-type.
+    # Detect real file type from magic bytes
     mime_type, ext = detect_file_type(file_bytes)
 
-    # Random filename under the caller's own user_id folder — never the
-    # client-supplied filename. This also matches the storage.objects
-    # policy that restricts uploads to path <auth.uid()>/... only.
-    storage_path = f"{user_id}/{uuid.uuid4()}.{ext}"
+    # Upload to Backblaze B2
+    storage_key = upload_file(
+        file_bytes=file_bytes,
+        user_id=str(user_id),
+        mime_type=mime_type,
+        ext=ext,
+    )
 
-    try:
-        supabase.storage.from_(STORAGE_BUCKET).upload(
-            storage_path,
-            file_bytes,
-            {"content-type": mime_type},
-        )
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to store file.")
-
-    # The bucket is private now — we store only the internal path, never
-    # a permanent public URL. Actual file access always goes through a
-    # short-lived signed URL generated on demand (see questions.py).
-    file_url = storage_path
-
+    # Save record to Supabase — store B2 key not a URL
     record = {
         "title": title,
         "year": year,
         "course_id": course_id,
         "semester_id": semester_id,
         "status": "pending",
-        "file_url": file_url,
+        "file_url": storage_key,
         "mime_type": mime_type,
         "file_size": len(file_bytes),
         "extracted_text": None,
@@ -208,13 +166,12 @@ async def upload_past_question(
     try:
         response = supabase.table(TABLE_NAME).insert(record).execute()
     except Exception:
-        # Insert call itself blew up (network blip, etc.) — clean up the
-        # orphaned file rather than leaving it dangling in storage.
-        supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
+        # Clean up orphaned B2 file if DB insert fails
+        delete_file(storage_key)
         raise HTTPException(status_code=500, detail="Failed to save upload.")
 
     if not response.data:
-        supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
+        delete_file(storage_key)
         raise HTTPException(status_code=500, detail="Failed to save upload.")
 
     return response.data[0]
@@ -237,5 +194,4 @@ async def list_my_uploads(user_id: UUID = Depends(get_current_user_id)):
         .order("created_at", desc=True)
         .execute()
     )
-
     return response.data or []
