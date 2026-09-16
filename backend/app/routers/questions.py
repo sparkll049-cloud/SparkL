@@ -21,7 +21,7 @@ from app.storage import get_signed_url
 
 router = APIRouter(prefix="/api/questions", tags=["Questions"])
 
-FILE_URL_EXPIRY_SECONDS = 90  # long enough to load the viewer, not to hoard
+FILE_URL_EXPIRY_SECONDS = 90
 
 
 def _is_admin(user_id: UUID) -> bool:
@@ -104,7 +104,47 @@ async def get_signed_file_url(
     if not _can_access(row, user_id):
         raise HTTPException(status_code=404, detail="Question not found.")
 
-    # Generate signed URL from Backblaze B2
     url = get_signed_url(row["file_url"], expires_in=FILE_URL_EXPIRY_SECONDS)
 
     return {"url": url, "expires_in": FILE_URL_EXPIRY_SECONDS}
+
+
+@router.get("/{question_id}/processed")
+async def get_processed_questions(
+    question_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    try:
+        UUID(question_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid question id.")
+
+    # Verify access first
+    response = (
+        supabase.table("past_questions")
+        .select("id, status, uploaded_by")
+        .eq("id", question_id)
+        .maybe_single()
+        .execute()
+    )
+
+    row = response.data
+    if not row:
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    if not _can_access(row, user_id):
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    res = (
+        supabase.table("questions")
+        .select(
+            "id, question_number, question_text, question_type, "
+            "option_a, option_b, option_c, option_d, "
+            "correct_answer, model_answer, explanation, topic_tag, difficulty, marks"
+        )
+        .eq("past_question_id", question_id)
+        .order("question_number")
+        .execute()
+    )
+
+    return res.data or []
