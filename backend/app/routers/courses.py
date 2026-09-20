@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user
 from app.supabase_client import supabase
+from app.services.subscription import get_user_limits
 
 router = APIRouter(prefix="/api/courses", tags=["courses"])
 
@@ -55,13 +56,18 @@ async def list_courses(user_id: str = Depends(get_current_user)):
             .execute()
         )
 
-    # These two are independent of each other — run concurrently
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    def get_limits():
+        return get_user_limits(user_id)
+
+    # All three are independent — run concurrently
+    with ThreadPoolExecutor(max_workers=3) as pool:
         pq_future = pool.submit(get_question_counts)
         uc_future = pool.submit(get_selected)
+        limits_future = pool.submit(get_limits)
 
         pq_res = pq_future.result()
         uc_res = uc_future.result()
+        limits = limits_future.result()
 
     counts: dict[str, int] = {}
     if pq_res:
@@ -80,14 +86,57 @@ async def list_courses(user_id: str = Depends(get_current_user)):
         for c in courses
     ]
 
-    return {"courses": result, "department_id": department_id}
+    # Apply free tier course cap
+    if not limits["is_paid"]:
+        unlocked = result[:3]
+        locked = [
+            {
+                "id": c["id"],
+                "name": c["name"],
+                "locked": True,
+                "question_count": None,
+                "selected": c["id"] in selected_ids,
+            }
+            for c in result[3:]
+        ]
+    else:
+        unlocked = result
+        locked = []
+
+    return {
+        "courses": unlocked,
+        "locked_courses": locked,
+        "department_id": department_id,
+        "is_paid": limits["is_paid"],
+        "plan": "free" if not limits["is_paid"] else "paid",
+    }
 
 
 @router.get("/{course_id}")
-async def get_course_detail(course_id: str, user_id: str = Depends(get_current_user)):
-    # .single()/.maybe_single() raise PGRST116 when zero rows match rather
-    # than returning None, so we guard the call itself and translate any
-    # failure into a clean 404 instead of letting it bubble up as a 500.
+async def get_course_detail(
+    course_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    # Get limits first — needed to gate access
+    limits = get_user_limits(user_id)
+
+    # Free tier: check if this course is within their allowed 3
+    if not limits["is_paid"]:
+        uc_check = (
+            supabase.table("user_courses")
+            .select("course_id")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        all_user_courses = [r["course_id"] for r in (uc_check.data or [])]
+        allowed = all_user_courses[:3]
+
+        if course_id not in allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="Upgrade your plan to access this course",
+            )
+
     try:
         course_res = (
             supabase.table("courses")
@@ -133,7 +182,6 @@ async def get_course_detail(course_id: str, user_id: str = Depends(get_current_u
             .execute()
         )
 
-    # All three depend only on course_id/user_id, not on each other
     with ThreadPoolExecutor(max_workers=3) as pool:
         count_future = pool.submit(get_count)
         questions_future = pool.submit(get_questions)
@@ -152,7 +200,11 @@ async def get_course_detail(course_id: str, user_id: str = Depends(get_current_u
         "question_count": question_count,
         "questions": questions,
         "is_selected": is_selected,
+        "is_paid": limits["is_paid"],
+        "plan": "free" if not limits["is_paid"] else "paid",
     }
+
+
 @router.get("/{course_id}/questions")
 async def get_course_questions(
     course_id: str,
@@ -161,7 +213,7 @@ async def get_course_questions(
 ):
     limits = get_user_limits(user_id)
 
-    # Check course access for free users
+    # Free tier: check course access
     if not limits["is_paid"]:
         uc_res = (
             supabase.table("user_courses")
@@ -171,9 +223,12 @@ async def get_course_questions(
         )
         allowed = [r["course_id"] for r in (uc_res.data or [])][:3]
         if course_id not in allowed:
-            raise HTTPException(status_code=403, detail="Upgrade to access this course")
+            raise HTTPException(
+                status_code=403,
+                detail="Upgrade your plan to access this course",
+            )
 
-    # Fetch all approved questions
+    # Fetch all approved questions for this course
     questions_res = (
         supabase.table("past_questions")
         .select("id, title, year, extracted_text, semester_id, created_at")
@@ -187,9 +242,10 @@ async def get_course_questions(
 
     if not limits["is_paid"]:
         if mode == "practice":
-            questions = all_questions[:limits["practice_mode_max"]]  # 5
+            # Max 5 questions
+            questions = all_questions[:limits["practice_mode_max"]]
         else:
-            # read mode: 10%
+            # Read mode: show 10%
             limit = max(1, int(total * (limits["read_mode_percent"] / 100)))
             questions = all_questions[:limit]
         is_limited = True
@@ -203,5 +259,6 @@ async def get_course_questions(
         "total": total,
         "is_limited": is_limited,
         "mode": mode,
+        "is_paid": limits["is_paid"],
         "plan": "free" if not limits["is_paid"] else "paid",
     }
