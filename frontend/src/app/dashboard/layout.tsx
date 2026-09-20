@@ -19,6 +19,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createClient } from "@/utils/supabase/client";
 import { ThemeProvider } from "@/components/ThemeProvider";
+
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/dashboard/courses", label: "My Courses", icon: BookOpen },
@@ -172,54 +173,51 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     </div>
   );
 
-  return (
-    <QueryClientProvider client={queryClient}>
-      <div className="flex min-h-screen bg-[#07091A]">
-
-        {/* ── Desktop sidebar (icon-only, expands on hover) ── */}
-        <aside
-          onMouseEnter={() => setSidebarExpanded(true)}
-          onMouseLeave={() => setSidebarExpanded(false)}
-          className={`
-            hidden lg:flex flex-col fixed inset-y-0 left-0 z-30
-            border-r border-white/[0.05] bg-[#0D1230]
-            transition-all duration-200 ease-out
-            ${sidebarExpanded ? "w-52" : "w-14"}
-          `}
-        >
-          <SidebarContent />
-        </aside>
+  // ── Single return with ThemeProvider wrapping everything ──
   return (
     <ThemeProvider>
-      <div className="min-h-screen bg-sp-bg text-sp-text transition-colors duration-300">
-        {children}
-      </div>
-    </ThemeProvider>
-  );
-        {/* ── Mobile floating menu button ── */}
-        <button
-          onClick={() => setMobileOpen(true)}
-          className="fixed bottom-6 left-4 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-[#2563EB] shadow-lg transition hover:bg-blue-500 lg:hidden"
-        >
-          <Menu className="h-5 w-5 text-white" />
-        </button>
+      <QueryClientProvider client={queryClient}>
+        <div className="flex min-h-screen transition-colors duration-300" style={{ background: "var(--sp-bg)" }}>
 
-        {/* ── Mobile drawer ── */}
-        {mobileOpen && (
-          <div className="fixed inset-0 z-40 lg:hidden">
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-            <aside className="absolute inset-y-0 left-0 w-60 border-r border-white/[0.06] bg-[#0D1230]">
-              <SidebarContent mobile />
-            </aside>
+          {/* ── Desktop sidebar ── */}
+          <aside
+            onMouseEnter={() => setSidebarExpanded(true)}
+            onMouseLeave={() => setSidebarExpanded(false)}
+            className={`
+              hidden lg:flex flex-col fixed inset-y-0 left-0 z-30
+              border-r border-white/[0.06] bg-[#0D1230]
+              transition-all duration-200 ease-out
+              ${sidebarExpanded ? "w-52" : "w-14"}
+            `}
+          >
+            <SidebarContent />
+          </aside>
+
+          {/* ── Mobile floating menu button ── */}
+          <button
+            onClick={() => setMobileOpen(true)}
+            className="fixed bottom-6 left-4 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-[#2563EB] shadow-lg transition hover:bg-blue-500 lg:hidden"
+          >
+            <Menu className="h-5 w-5 text-white" />
+          </button>
+
+          {/* ── Mobile drawer ── */}
+          {mobileOpen && (
+            <div className="fixed inset-0 z-40 lg:hidden">
+              <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
+              <aside className="absolute inset-y-0 left-0 w-60 border-r border-white/[0.06] bg-[#0D1230]">
+                <SidebarContent mobile />
+              </aside>
+            </div>
+          )}
+
+          {/* ── Main area ── */}
+          <div className={`flex flex-1 flex-col transition-all duration-200 ${sidebarExpanded ? "lg:ml-52" : "lg:ml-14"}`}>
+            <main className="flex-1">{children}</main>
           </div>
-        )}
 
-        {/* ── Main area ── */}
-        <div className={`flex flex-1 flex-col transition-all duration-200 ${sidebarExpanded ? "lg:ml-52" : "lg:ml-14"}`}>
-          <main className="flex-1">{children}</main>
         </div>
-
-      </div>
-    </QueryClientProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }
