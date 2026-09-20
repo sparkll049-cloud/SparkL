@@ -153,3 +153,55 @@ async def get_course_detail(course_id: str, user_id: str = Depends(get_current_u
         "questions": questions,
         "is_selected": is_selected,
     }
+@router.get("/{course_id}/questions")
+async def get_course_questions(
+    course_id: str,
+    mode: str = "read",
+    user_id: str = Depends(get_current_user),
+):
+    limits = get_user_limits(user_id)
+
+    # Check course access for free users
+    if not limits["is_paid"]:
+        uc_res = (
+            supabase.table("user_courses")
+            .select("course_id")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        allowed = [r["course_id"] for r in (uc_res.data or [])][:3]
+        if course_id not in allowed:
+            raise HTTPException(status_code=403, detail="Upgrade to access this course")
+
+    # Fetch all approved questions
+    questions_res = (
+        supabase.table("past_questions")
+        .select("id, title, year, extracted_text, semester_id, created_at")
+        .eq("course_id", course_id)
+        .eq("status", "approved")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    all_questions = questions_res.data or []
+    total = len(all_questions)
+
+    if not limits["is_paid"]:
+        if mode == "practice":
+            questions = all_questions[:limits["practice_mode_max"]]  # 5
+        else:
+            # read mode: 10%
+            limit = max(1, int(total * (limits["read_mode_percent"] / 100)))
+            questions = all_questions[:limit]
+        is_limited = True
+    else:
+        questions = all_questions
+        is_limited = False
+
+    return {
+        "questions": questions,
+        "showing": len(questions),
+        "total": total,
+        "is_limited": is_limited,
+        "mode": mode,
+        "plan": "free" if not limits["is_paid"] else "paid",
+    }
