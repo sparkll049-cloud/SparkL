@@ -1,6 +1,7 @@
 import os
 import asyncio
 from contextlib import asynccontextmanager 
+from app.routers.payments import router as payments_router
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,7 +55,7 @@ app.include_router(uploads.router)
 app.include_router(questions.router)
 app.include_router(answers.router)
 app.include_router(community.router)
-
+app.include_router(payments_router)
 @app.get("/")
 def root():
     return {"status": "SparkL API running"}
