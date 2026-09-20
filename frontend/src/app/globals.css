@@ -1,8 +1,50 @@
 @import "tailwindcss";
 
+/* ── SparkL theme tokens ─────────────────────────────── */
+@theme {
+  --color-sp-bg:     var(--sp-bg);
+  --color-sp-card:   var(--sp-bg-card);
+  --color-sp-muted:  var(--sp-bg-muted);
+  --color-sp-border: var(--sp-border);
+  --color-sp-text:   var(--sp-text);
+  --color-sp-text2:  var(--sp-text-2);
+  --color-sp-text3:  var(--sp-text-3);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #111827;
+  /* Light mode */
+  --sp-bg:           #F0F2F8;
+  --sp-bg-card:      #FFFFFF;
+  --sp-bg-muted:     rgba(0, 0, 0, 0.03);
+  --sp-border:       rgba(0, 0, 0, 0.07);
+  --sp-border-hover: rgba(99, 102, 241, 0.35);
+  --sp-text:         #0F1117;
+  --sp-text-2:       rgba(15, 17, 23, 0.55);
+  --sp-text-3:       rgba(15, 17, 23, 0.30);
+  --sp-header-bg:    rgba(240, 242, 248, 0.90);
+  --sp-input-bg:     rgba(0, 0, 0, 0.04);
+  --sp-search-popup: #FFFFFF;
+
+  --background: var(--sp-bg);
+  --foreground: var(--sp-text);
+}
+
+.dark {
+  /* Dark mode */
+  --sp-bg:           #060B18;
+  --sp-bg-card:      rgba(255, 255, 255, 0.02);
+  --sp-bg-muted:     rgba(255, 255, 255, 0.03);
+  --sp-border:       rgba(255, 255, 255, 0.05);
+  --sp-border-hover: rgba(99, 102, 241, 0.40);
+  --sp-text:         #FFFFFF;
+  --sp-text-2:       rgba(255, 255, 255, 0.55);
+  --sp-text-3:       rgba(255, 255, 255, 0.25);
+  --sp-header-bg:    rgba(6, 11, 24, 0.90);
+  --sp-input-bg:     rgba(255, 255, 255, 0.04);
+  --sp-search-popup: #0D1225;
+
+  --background: var(--sp-bg);
+  --foreground: var(--sp-text);
 }
 
 body {
@@ -11,20 +53,16 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   min-height: 100vh;
   overflow-x: hidden;
+  transition: background 0.3s ease, color 0.3s ease;
 }
 
 @keyframes fadeUp {
-  from {
-    opacity: 0;
-    transform: translateY(24px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-.fade-up {
-  animation: fadeUp .8s ease;
+@keyframes shimmer {
+  to { transform: translateX(300%); }
 }
+
+.fade-up { animation: fadeUp 0.8s ease; }
