@@ -189,7 +189,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         >
           <SidebarContent />
         </aside>
-
+  return (
+    <ThemeProvider>
+      <div className="min-h-screen bg-sp-bg text-sp-text transition-colors duration-300">
+        {children}
+      </div>
+    </ThemeProvider>
+  );
         {/* ── Mobile floating menu button ── */}
         <button
           onClick={() => setMobileOpen(true)}
