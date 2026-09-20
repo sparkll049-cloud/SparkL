@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createClient } from "@/utils/supabase/client";
-
+import { ThemeProvider } from "@/components/ThemeProvider";
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/dashboard/courses", label: "My Courses", icon: BookOpen },
