@@ -8,70 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user
 from app.supabase_client import supabase
+from app.services.subscription import get_plan_limits  # ← single source of truth
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
 PAYVESSEL_SECRET_KEY = os.getenv("PAYVESSEL_SECRET_KEY")
 PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/api/service/request/transaction/verify/{reference}"
-
-TRIAL_DAYS = 7
-
-FREE_PLAN_LIMITS = {
-    "max_courses": 3,
-    "read_mode_percent": 10,
-    "practice_mode_max": 5,
-    "can_download": False,
-}
-
-PAID_PLAN_LIMITS = {
-    "max_courses": None,
-    "read_mode_percent": 100,
-    "practice_mode_max": None,
-    "can_download": True,
-}
-
-TRIAL_LIMITS = {
-    **PAID_PLAN_LIMITS,  # trial = full access
-}
-
-
-def _get_plan_limits(plan: str, expires_at: str | None, created_at: str | None) -> dict:
-    """
-    Priority order:
-    1. Active paid subscription  → full access
-    2. Within 7-day trial window → full access, is_trial=True
-    3. Everything else           → free limits
-    """
-
-    # ── 1. Check active paid subscription ────────────────────────────────────
-    if plan != "free" and expires_at:
-        try:
-            expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-            if expiry > datetime.now(timezone.utc):
-                return {"is_paid": True, "is_trial": False, **PAID_PLAN_LIMITS}
-        except Exception:
-            pass
-
-    # ── 2. Check trial window ────────────────────────────────────────────────
-    if created_at:
-        try:
-            created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            trial_ends = created + timedelta(days=TRIAL_DAYS)
-            now = datetime.now(timezone.utc)
-            if now < trial_ends:
-                days_left = (trial_ends - now).days + 1  # +1 so last day shows "1 day left"
-                return {
-                    "is_paid": True,
-                    "is_trial": True,
-                    "trial_ends_at": trial_ends.isoformat(),
-                    "trial_days_left": days_left,
-                    **TRIAL_LIMITS,
-                }
-        except Exception:
-            pass
-
-    # ── 3. Free plan ─────────────────────────────────────────────────────────
-    return {"is_paid": False, "is_trial": False, **FREE_PLAN_LIMITS}
 
 
 # ─── POST /api/payments/initiate ────────────────────────────────────────────
@@ -85,7 +27,6 @@ async def initiate_payment(
     if not plan_slug or plan_slug == "free":
         raise HTTPException(status_code=400, detail="Invalid plan")
 
-    # Fetch plan from DB
     try:
         plan_res = (
             supabase.table("subscription_plans")
@@ -104,7 +45,6 @@ async def initiate_payment(
     plan = plan_res.data
     reference = f"SPARKL-{uuid4().hex[:12].upper()}"
 
-    # Create pending transaction
     supabase.table("payment_transactions").insert({
         "user_id": user_id,
         "plan": plan_slug,
@@ -136,7 +76,6 @@ async def verify_payment(
     if not reference:
         raise HTTPException(status_code=400, detail="Reference is required")
 
-    # Fetch transaction
     try:
         txn_res = (
             supabase.table("payment_transactions")
@@ -157,7 +96,6 @@ async def verify_payment(
     if txn["status"] == "success":
         return {"status": "already_verified", "message": "Subscription already active"}
 
-    # Verify with PayVessel
     try:
         async with httpx.AsyncClient() as client:
             pv_res = await client.get(
@@ -189,7 +127,6 @@ async def verify_payment(
         }).eq("gateway_ref", reference).execute()
         raise HTTPException(status_code=400, detail="Amount mismatch")
 
-    # Fetch plan details
     plan_res = (
         supabase.table("subscription_plans")
         .select("duration_days, display_name")
@@ -205,7 +142,6 @@ async def verify_payment(
     expires_at = now + timedelta(days=plan["duration_days"])
     expires_iso = expires_at.isoformat()
 
-    # Fetch existing active subscription
     existing_sub_res = (
         supabase.table("subscriptions")
         .select("id, expires_at")
@@ -294,11 +230,11 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
     expires_at = data.get("subscription_expic")
     created_at = data.get("created_at")
 
-    limits = _get_plan_limits(plan, expires_at, created_at)
+    limits = get_plan_limits(plan, expires_at, created_at)  # ← from service
 
     return {
-        "plan": plan if limits["is_paid"] and not limits.get("is_trial") else (
-            "trial" if limits.get("is_trial") else "free"
+        "plan": "trial" if limits.get("is_trial") else (
+            plan if limits["is_paid"] else "free"
         ),
         "expires_at": expires_at,
         **limits,
