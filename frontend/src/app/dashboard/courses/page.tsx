@@ -1,16 +1,16 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   BookOpen,
   FileText,
-  Loader2,
-  CheckCircle2,
   Lock,
   Sparkles,
   ArrowRight,
+  Clock,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
@@ -39,6 +39,14 @@ interface CoursesResponse {
   plan: string;
 }
 
+interface SubscriptionStatus {
+  is_paid: boolean;
+  is_trial: boolean;
+  trial_days_left?: number;
+  trial_ends_at?: string;
+  plan: string;
+}
+
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 
 async function fetchCourses(
@@ -47,7 +55,6 @@ async function fetchCourses(
 ): Promise<CoursesResponse> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) { router.push("/auth/login"); throw new Error("No session"); }
-
   const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/courses`, {
     headers: { Authorization: `Bearer ${session.access_token}` },
   });
@@ -57,21 +64,16 @@ async function fetchCourses(
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
-function Shimmer({ className }: { className?: string }) {
-  return (
-    <div className={`relative overflow-hidden rounded-md bg-white/[0.05] ${className}`}>
-      <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.8s_ease-in-out_infinite] bg-gradient-to-r from-transparent via-white/[0.07] to-transparent" />
-    </div>
-  );
+function Bone({ className }: { className?: string }) {
+  return <div className={`rounded-lg bg-white/[0.04] animate-pulse ${className}`} />;
 }
 
 function PageSkeleton() {
   return (
     <div className="min-h-screen px-6 pb-16 pt-8" style={{ background: "var(--sp-bg)" }}>
-      <style>{`@keyframes shimmer { to { transform: translateX(250%); } }`}</style>
       <div className="mx-auto max-w-5xl">
-        <Shimmer className="h-7 w-32 mb-2" />
-        <Shimmer className="h-4 w-64 mb-8" />
+        <Bone className="h-7 w-32 mb-2" />
+        <Bone className="h-4 w-64 mb-8" />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {[...Array(4)].map((_, i) => (
             <div
@@ -79,10 +81,10 @@ function PageSkeleton() {
               className="flex items-center gap-3 rounded-2xl border p-4"
               style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
             >
-              <Shimmer className="h-10 w-10 rounded-xl shrink-0" />
+              <Bone className="h-10 w-10 rounded-xl shrink-0" />
               <div className="flex-1 space-y-2">
-                <Shimmer className="h-4 w-3/4" />
-                <Shimmer className="h-3 w-1/2" />
+                <Bone className="h-4 w-3/4" />
+                <Bone className="h-3 w-1/2" />
               </div>
             </div>
           ))}
@@ -98,6 +100,24 @@ export default function CoursesPage() {
   const supabase = createClient();
   const router = useRouter();
 
+  const [subStatus, setSubStatus] = useState<SubscriptionStatus | null>(null);
+
+  // Fetch subscription status for trial info
+  useEffect(() => {
+    async function loadStatus() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`,
+          { headers: { Authorization: `Bearer ${session.access_token}` } }
+        );
+        if (res.ok) setSubStatus(await res.json());
+      } catch { /* non-critical */ }
+    }
+    loadStatus();
+  }, []);
+
   const { data, isLoading: loading, error } = useQuery({
     queryKey: ["courses"],
     queryFn: () => fetchCourses(supabase, router),
@@ -107,14 +127,16 @@ export default function CoursesPage() {
 
   const courses = data?.courses ?? [];
   const lockedCourses = data?.locked_courses ?? [];
-  const isPaid = data?.is_paid ?? true; // default true to avoid flashing lock on paid users
+  // Default true to avoid flashing lock icons on paid users while status loads
+  const isPaid = data?.is_paid ?? true;
+  const isTrial = subStatus?.is_trial ?? false;
+  const trialDaysLeft = subStatus?.trial_days_left ?? 0;
 
   return (
     <div
       className="min-h-screen px-6 pb-16 pt-8 transition-colors"
       style={{ background: "var(--sp-bg)" }}
     >
-      <style>{`@keyframes shimmer { to { transform: translateX(250%); } }`}</style>
       <div className="mx-auto max-w-5xl">
 
         {/* Header */}
@@ -125,8 +147,34 @@ export default function CoursesPage() {
           All courses in your department. Tap one to browse its past questions.
         </p>
 
-        {/* Free tier banner */}
-        {!isPaid && lockedCourses.length > 0 && (
+        {/* Trial banner — shown when in trial */}
+        {isTrial && (
+          <div className="mt-5 flex items-center justify-between gap-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.05] px-4 py-3.5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15">
+                <Clock className="h-3.5 w-3.5 text-emerald-400" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-emerald-300">
+                  {trialDaysLeft} day{trialDaysLeft !== 1 ? "s" : ""} left in your free trial
+                </p>
+                <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>
+                  You have full access until your trial ends
+                </p>
+              </div>
+            </div>
+            <Link
+              href="/dashboard/subscribe"
+              className="shrink-0 flex items-center gap-1.5 rounded-xl border border-emerald-500/30 px-3.5 py-2 text-xs font-bold text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+            >
+              View plans
+              <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+        )}
+
+        {/* Free tier banner — shown when trial expired and not paid */}
+        {!isPaid && !isTrial && lockedCourses.length > 0 && (
           <div className="mt-5 flex items-center justify-between gap-4 rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] px-4 py-3.5">
             <div className="flex items-center gap-3">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15">
@@ -137,7 +185,7 @@ export default function CoursesPage() {
                   {lockedCourses.length} course{lockedCourses.length !== 1 ? "s" : ""} locked
                 </p>
                 <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>
-                  You're on the free plan — upgrade to unlock all courses
+                  Your free trial has ended — upgrade to unlock all courses
                 </p>
               </div>
             </div>
@@ -188,29 +236,25 @@ export default function CoursesPage() {
                     <p className="font-medium" style={{ color: "var(--sp-text)" }}>
                       {course.name}
                     </p>
-                    <p
-                      className="flex items-center gap-1 text-xs"
-                      style={{ color: "var(--sp-text-3)" }}
-                    >
+                    <p className="flex items-center gap-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
                       <FileText size={12} />
-                      {course.question_count} past question
-                      {course.question_count !== 1 ? "s" : ""}
+                      {course.question_count} past question{course.question_count !== 1 ? "s" : ""}
                     </p>
                   </div>
                 </div>
-                {course.selected && (
-                  <CheckCircle2 size={18} className="text-blue-400 shrink-0" />
-                )}
               </Link>
             ))}
           </div>
         )}
 
-        {/* Locked courses */}
-        {!isPaid && lockedCourses.length > 0 && (
+        {/* Locked courses — only shown after trial ends */}
+        {!isPaid && !isTrial && lockedCourses.length > 0 && (
           <div className="mt-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
-              Locked courses
+            <p
+              className="mb-3 text-xs font-semibold"
+              style={{ color: "var(--sp-text-3)" }}
+            >
+              Locked — upgrade to access
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {lockedCourses.map((course) => (
@@ -222,7 +266,7 @@ export default function CoursesPage() {
                     borderColor: "var(--sp-border)",
                   }}
                 >
-                  {/* Blur overlay */}
+                  {/* Lock overlay */}
                   <div className="absolute inset-0 z-10 flex items-center justify-center backdrop-blur-[2px] bg-black/30 rounded-2xl">
                     <Link
                       href="/dashboard/subscribe"
@@ -232,8 +276,7 @@ export default function CoursesPage() {
                       Unlock
                     </Link>
                   </div>
-
-                  {/* Card content underneath (blurred) */}
+                  {/* Card underneath */}
                   <div className="flex items-center gap-3 select-none">
                     <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.04]">
                       <BookOpen size={18} className="text-slate-600" />
@@ -250,8 +293,8 @@ export default function CoursesPage() {
           </div>
         )}
 
-        {/* Bottom upgrade CTA for free users */}
-        {!isPaid && (
+        {/* Bottom upgrade CTA — only after trial ends */}
+        {!isPaid && !isTrial && (
           <div className="mt-8 rounded-2xl border border-dashed border-indigo-500/20 bg-indigo-500/[0.04] p-6 text-center">
             <div className="flex justify-center mb-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/15">
