@@ -1,6 +1,6 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
@@ -13,6 +13,8 @@ router = APIRouter(prefix="/api/payments", tags=["payments"])
 
 PAYVESSEL_SECRET_KEY = os.getenv("PAYVESSEL_SECRET_KEY")
 PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/api/service/request/transaction/verify/{reference}"
+
+TRIAL_DAYS = 7
 
 FREE_PLAN_LIMITS = {
     "max_courses": 3,
@@ -28,19 +30,48 @@ PAID_PLAN_LIMITS = {
     "can_download": True,
 }
 
+TRIAL_LIMITS = {
+    **PAID_PLAN_LIMITS,  # trial = full access
+}
 
-def _get_plan_limits(plan: str, expires_at: str | None) -> dict:
-    if plan == "free" or not expires_at:
-        return {"is_paid": False, **FREE_PLAN_LIMITS}
 
-    try:
-        expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        if expiry < datetime.now(expiry.tzinfo):
-            return {"is_paid": False, **FREE_PLAN_LIMITS}
-    except Exception:
-        return {"is_paid": False, **FREE_PLAN_LIMITS}
+def _get_plan_limits(plan: str, expires_at: str | None, created_at: str | None) -> dict:
+    """
+    Priority order:
+    1. Active paid subscription  → full access
+    2. Within 7-day trial window → full access, is_trial=True
+    3. Everything else           → free limits
+    """
 
-    return {"is_paid": True, **PAID_PLAN_LIMITS}
+    # ── 1. Check active paid subscription ────────────────────────────────────
+    if plan != "free" and expires_at:
+        try:
+            expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if expiry > datetime.now(timezone.utc):
+                return {"is_paid": True, "is_trial": False, **PAID_PLAN_LIMITS}
+        except Exception:
+            pass
+
+    # ── 2. Check trial window ────────────────────────────────────────────────
+    if created_at:
+        try:
+            created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            trial_ends = created + timedelta(days=TRIAL_DAYS)
+            now = datetime.now(timezone.utc)
+            if now < trial_ends:
+                days_left = (trial_ends - now).days + 1  # +1 so last day shows "1 day left"
+                return {
+                    "is_paid": True,
+                    "is_trial": True,
+                    "trial_ends_at": trial_ends.isoformat(),
+                    "trial_days_left": days_left,
+                    **TRIAL_LIMITS,
+                }
+        except Exception:
+            pass
+
+    # ── 3. Free plan ─────────────────────────────────────────────────────────
+    return {"is_paid": False, "is_trial": False, **FREE_PLAN_LIMITS}
 
 
 # ─── POST /api/payments/initiate ────────────────────────────────────────────
@@ -144,7 +175,6 @@ async def verify_payment(
     pv_status = pv_data.get("requestSuccessful") or pv_data.get("data", {}).get("status")
     pv_amount = pv_data.get("data", {}).get("amount")
 
-    # Mark failed if PayVessel says so
     if not pv_status or pv_status not in (True, "success", "successful"):
         supabase.table("payment_transactions").update({
             "status": "failed",
@@ -152,7 +182,6 @@ async def verify_payment(
         }).eq("gateway_ref", reference).execute()
         raise HTTPException(status_code=400, detail="Payment not successful")
 
-    # Amount check (PayVessel may return in kobo or naira — adjust if needed)
     if pv_amount and int(pv_amount) != txn["amount_kobo"]:
         supabase.table("payment_transactions").update({
             "status": "failed",
@@ -188,7 +217,6 @@ async def verify_payment(
     existing_sub = (existing_sub_res.data or {}) if existing_sub_res else {}
 
     if existing_sub.get("id"):
-        # Extend from current expiry if still active
         try:
             current_expiry = datetime.fromisoformat(
                 existing_sub["expires_at"].replace("Z", "+00:00")
@@ -200,7 +228,7 @@ async def verify_payment(
         expires_at = base + timedelta(days=plan["duration_days"])
         expires_iso = expires_at.isoformat()
 
-        sub_res = supabase.table("subscriptions").update({
+        supabase.table("subscriptions").update({
             "plan": txn["plan"],
             "status": "active",
             "expires_at": expires_iso,
@@ -220,7 +248,6 @@ async def verify_payment(
 
         subscription_id = (sub_res.data or [{}])[0].get("id")
 
-    # Run these three updates concurrently — they're all independent
     def update_transaction():
         supabase.table("payment_transactions").update({
             "status": "success",
@@ -254,7 +281,7 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
     try:
         profile_res = (
             supabase.table("profiles")
-            .select("subscription_plan, subscription_expic")
+            .select("subscription_plan, subscription_expic, created_at")
             .eq("id", user_id)
             .maybe_single()
             .execute()
@@ -265,11 +292,14 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
     data = profile_res.data or {}
     plan = data.get("subscription_plan") or "free"
     expires_at = data.get("subscription_expic")
+    created_at = data.get("created_at")
 
-    limits = _get_plan_limits(plan, expires_at)
+    limits = _get_plan_limits(plan, expires_at, created_at)
 
     return {
-        "plan": plan if limits["is_paid"] else "free",
+        "plan": plan if limits["is_paid"] and not limits.get("is_trial") else (
+            "trial" if limits.get("is_trial") else "free"
+        ),
         "expires_at": expires_at,
         **limits,
     }
