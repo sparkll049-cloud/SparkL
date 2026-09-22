@@ -8,12 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user
 from app.supabase_client import supabase
-from app.services.subscription import get_plan_limits  # ← single source of truth
+from app.services.subscription import get_plan_limits
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
 PAYVESSEL_SECRET_KEY = os.getenv("PAYVESSEL_SECRET_KEY")
-PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/api/service/request/transaction/verify/{reference}"
+PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/api/service/request/transaction/verify"
 
 
 # ─── POST /api/payments/initiate ────────────────────────────────────────────
@@ -96,29 +96,41 @@ async def verify_payment(
     if txn["status"] == "success":
         return {"status": "already_verified", "message": "Subscription already active"}
 
+    # ── Call Payvessel to verify ─────────────────────────────────────────────
     try:
         async with httpx.AsyncClient() as client:
-            pv_res = await client.get(
-                PAYVESSEL_VERIFY_URL.format(reference=reference),
+            pv_res = await client.post(
+                PAYVESSEL_VERIFY_URL,
                 headers={
-                    "Authorization": f"Bearer {PAYVESSEL_SECRET_KEY}",
+                    "api-key": PAYVESSEL_SECRET_KEY,
                     "Content-Type": "application/json",
                 },
+                json={"transactionRef": reference},
                 timeout=15.0,
             )
         pv_data = pv_res.json()
-    except Exception:
-        raise HTTPException(status_code=502, detail="Could not reach PayVessel")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
 
-    pv_status = pv_data.get("requestSuccessful") or pv_data.get("data", {}).get("status")
-    pv_amount = pv_data.get("data", {}).get("amount")
+    # ── Log raw response to help debug ──────────────────────────────────────
+    print(f"[PayVessel verify] status={pv_res.status_code} body={pv_data}")
+
+    pv_status = (
+        pv_data.get("requestSuccessful")
+        or pv_data.get("data", {}).get("status")
+        or pv_data.get("status")
+    )
+    pv_amount = (
+        pv_data.get("data", {}).get("amount")
+        or pv_data.get("amount")
+    )
 
     if not pv_status or pv_status not in (True, "success", "successful"):
         supabase.table("payment_transactions").update({
             "status": "failed",
             "failed_reason": f"PayVessel status: {pv_status}",
         }).eq("gateway_ref", reference).execute()
-        raise HTTPException(status_code=400, detail="Payment not successful")
+        raise HTTPException(status_code=400, detail=f"Payment not successful: {pv_status}")
 
     if pv_amount and int(pv_amount) != txn["amount_kobo"]:
         supabase.table("payment_transactions").update({
@@ -127,6 +139,7 @@ async def verify_payment(
         }).eq("gateway_ref", reference).execute()
         raise HTTPException(status_code=400, detail="Amount mismatch")
 
+    # ── Fetch plan details ───────────────────────────────────────────────────
     plan_res = (
         supabase.table("subscription_plans")
         .select("duration_days, display_name")
@@ -138,10 +151,11 @@ async def verify_payment(
         raise HTTPException(status_code=404, detail="Plan not found")
 
     plan = plan_res.data
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=plan["duration_days"])
     expires_iso = expires_at.isoformat()
 
+    # ── Upsert subscription ──────────────────────────────────────────────────
     existing_sub_res = (
         supabase.table("subscriptions")
         .select("id, expires_at")
@@ -156,7 +170,9 @@ async def verify_payment(
         try:
             current_expiry = datetime.fromisoformat(
                 existing_sub["expires_at"].replace("Z", "+00:00")
-            ).replace(tzinfo=None)
+            )
+            if current_expiry.tzinfo is None:
+                current_expiry = current_expiry.replace(tzinfo=timezone.utc)
             base = max(current_expiry, now)
         except Exception:
             base = now
@@ -184,6 +200,7 @@ async def verify_payment(
 
         subscription_id = (sub_res.data or [{}])[0].get("id")
 
+    # ── Update transaction + profile in parallel ─────────────────────────────
     def update_transaction():
         supabase.table("payment_transactions").update({
             "status": "success",
@@ -230,7 +247,7 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
     expires_at = data.get("subscription_expic")
     created_at = data.get("created_at")
 
-    limits = get_plan_limits(plan, expires_at, created_at)  # ← from service
+    limits = get_plan_limits(plan, expires_at, created_at)
 
     return {
         "plan": "trial" if limits.get("is_trial") else (
