@@ -12,6 +12,7 @@ import {
   LogOut,
   Menu,
   Loader2,
+  crown,
   Zap,
 } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
