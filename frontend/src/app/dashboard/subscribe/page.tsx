@@ -10,8 +10,8 @@ const PLANS = [
   {
     slug: "basic",
     name: "Basic",
-    price: 500,
-    priceLabel: "₦500",
+    price: 2000,
+    priceLabel: "₦2000",
     duration: "month",
     durationLabel: "1 month",
     description: "Perfect for a single semester",
