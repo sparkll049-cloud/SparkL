@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Check, Sparkles, Zap, ArrowLeft, Loader2, CheckCircle2 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
@@ -10,28 +10,25 @@ const PLANS = [
   {
     slug: "basic",
     name: "Basic",
-    price: 2000,
-    priceLabel: "₦2000",
+    price: 500,
+    priceLabel: "₦500",
     duration: "month",
-    durationLabel: "1 month",
     description: "Perfect for a single semester",
-    color: "blue",
     perks: [
       "All courses unlocked",
       "Unlimited read mode",
       "Unlimited practice mode",
       "10 downloads/day",
     ],
+    popular: false,
   },
   {
     slug: "pro",
     name: "Pro",
-    price: 5000,
-    priceLabel: "₦5,000",
+    price: 1000,
+    priceLabel: "₦1,000",
     duration: "month",
-    durationLabel: "1 month",
     description: "Best for serious students",
-    color: "indigo",
     popular: true,
     perks: [
       "Everything in Basic",
@@ -43,12 +40,11 @@ const PLANS = [
   {
     slug: "premium",
     name: "Premium",
-    price: 10000,
-    priceLabel: "₦10,000",
+    price: 2000,
+    priceLabel: "₦2,000",
     duration: "month",
-    durationLabel: "1 month",
     description: "Full unlimited access",
-    color: "violet",
+    popular: false,
     perks: [
       "Everything in Pro",
       "Unlimited downloads",
@@ -58,7 +54,8 @@ const PLANS = [
   },
 ];
 
-export default function SubscribePage() {
+// ── Inner page (uses useSearchParams — must be inside Suspense) ───────────────
+function SubscribePageInner() {
   const supabase = createClient();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -125,7 +122,7 @@ export default function SubscribePage() {
 
       const { reference } = await initiateRes.json();
 
-      // Step 2: open PayVessel checkout
+      // Step 2: open Payvessel checkout
       const init = Checkout({
         api_key: process.env.NEXT_PUBLIC_PAYVESSEL_KEY!,
       });
@@ -200,14 +197,12 @@ export default function SubscribePage() {
           Back
         </button>
 
-        {/* Success state */}
+        {/* Success banner */}
         {justSubscribed && (
           <div className="mb-8 flex items-center gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] px-5 py-4">
             <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />
             <div>
-              <p className="text-sm font-semibold text-emerald-300">
-                You're now subscribed!
-              </p>
+              <p className="text-sm font-semibold text-emerald-300">You're now subscribed!</p>
               <p className="text-xs text-slate-500 mt-0.5">
                 Your plan is active — enjoy full access to all courses.
               </p>
@@ -230,7 +225,7 @@ export default function SubscribePage() {
           </p>
         </div>
 
-        {/* Free tier comparison */}
+        {/* Free tier summary */}
         <div className="mb-8 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">
             Free plan (current)
@@ -274,7 +269,6 @@ export default function SubscribePage() {
                     : "border-white/[0.07] bg-white/[0.02]"
                 }`}
               >
-                {/* Popular badge */}
                 {plan.popular && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2">
                     <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 px-3 py-1 text-[10px] font-bold text-white uppercase tracking-wide">
@@ -284,21 +278,17 @@ export default function SubscribePage() {
                   </div>
                 )}
 
-                {/* Plan header */}
                 <div className="mb-4">
                   <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {plan.name}
                   </p>
                   <p className="mt-1 text-3xl font-extrabold text-white">
                     {plan.priceLabel}
-                    <span className="text-sm font-normal text-slate-500">
-                      /{plan.duration}
-                    </span>
+                    <span className="text-sm font-normal text-slate-500">/{plan.duration}</span>
                   </p>
                   <p className="mt-1 text-xs text-slate-600">{plan.description}</p>
                 </div>
 
-                {/* Perks */}
                 <ul className="flex-1 space-y-2 mb-5">
                   {plan.perks.map((perk) => (
                     <li key={perk} className="flex items-start gap-2 text-xs text-slate-400">
@@ -308,7 +298,6 @@ export default function SubscribePage() {
                   ))}
                 </ul>
 
-                {/* CTA */}
                 {isCurrentPlan ? (
                   <div className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 py-2.5 text-xs font-semibold text-emerald-400">
                     <CheckCircle2 className="h-3.5 w-3.5" />
@@ -342,12 +331,26 @@ export default function SubscribePage() {
           })}
         </div>
 
-        {/* Trust note */}
         <p className="mt-6 text-center text-xs text-slate-600">
           Secure payments via PayVessel · Cancel anytime · NGN only
         </p>
 
       </div>
     </div>
+  );
+}
+
+// ── Exported page — wraps inner in Suspense to fix Next.js prerender error ────
+export default function SubscribePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[60vh] items-center justify-center bg-[#07091A]">
+          <Loader2 className="h-7 w-7 animate-spin text-indigo-400" />
+        </div>
+      }
+    >
+      <SubscribePageInner />
+    </Suspense>
   );
 }
