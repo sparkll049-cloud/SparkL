@@ -73,8 +73,8 @@ function SubscribePageInner() {
 
   useEffect(() => {
     async function loadUser() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { router.push("/auth/login"); return; }
+      const { data: { session } } = await supabase.auth.refreshSession();
+if (!session) { router.push("/auth/login"); return; }
 
       const { data: profile } = await supabase
         .from("profiles")
