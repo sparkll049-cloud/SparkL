@@ -26,8 +26,8 @@ const PLANS = [
   {
     slug: "pro",
     name: "Pro",
-    price: 1000,
-    priceLabel: "₦1,000",
+    price: 5000,
+    priceLabel: "₦5,000",
     duration: "month",
     durationLabel: "1 month",
     description: "Best for serious students",
@@ -43,8 +43,8 @@ const PLANS = [
   {
     slug: "premium",
     name: "Premium",
-    price: 2000,
-    priceLabel: "₦2,000",
+    price: 10000,
+    priceLabel: "₦10,000",
     duration: "month",
     durationLabel: "1 month",
     description: "Full unlimited access",
