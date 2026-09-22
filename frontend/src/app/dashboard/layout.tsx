@@ -12,7 +12,7 @@ import {
   LogOut,
   Menu,
   Loader2,
-  crown,
+  Crown,
   Zap,
 } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -44,6 +44,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [loggingOut,      setLoggingOut]      = useState(false);
   const [isAdmin,         setIsAdmin]         = useState(false);
+  const [userPlan,        setUserPlan]        = useState<string>("free");
   const [userInfo, setUserInfo] = useState<{ name: string | null; email: string | null }>({
     name: null, email: null,
   });
@@ -56,11 +57,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("full_name")
+        .select("full_name, subscription_plan")
         .eq("id", session.user.id)
         .single();
 
       setUserInfo((prev) => ({ ...prev, name: profile?.full_name ?? null }));
+      setUserPlan(profile?.subscription_plan ?? "free");
 
       try {
         const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/admin/overview`, {
@@ -148,7 +150,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* User section */}
         <div className="border-t border-white/[0.06] p-2 space-y-0.5">
 
-          {/* ── Theme toggle ── */}
+          {/* Theme toggle */}
           <ThemeToggle expanded={isExpanded} />
 
           {/* Profile link */}
@@ -158,13 +160,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             className={`flex items-center gap-3 rounded-lg px-2 py-2.5 transition hover:bg-white/[0.05]
               ${!isExpanded ? "justify-center" : ""}`}
           >
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#1E3A8A] text-xs font-bold text-blue-200">
+            <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#1E3A8A] text-xs font-bold text-blue-200">
               {initial}
+              {userPlan !== "free" && (
+                <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-indigo-500">
+                  <Crown className="h-2 w-2 text-white" fill="white" />
+                </span>
+              )}
             </div>
             {isExpanded && (
               <div className="min-w-0">
-                <p className="truncate text-xs font-semibold text-slate-200">{userInfo.name ?? "Student"}</p>
-                <p className="truncate text-[10px] text-slate-500">{userInfo.email ?? ""}</p>
+                <p className="truncate text-xs font-semibold text-slate-200">
+                  {userInfo.name ?? "Student"}
+                </p>
+                <p className="truncate text-[10px] text-slate-500 capitalize">
+                  {userPlan === "free" ? "Free plan" : `${userPlan} plan`}
+                </p>
               </div>
             )}
           </Link>
@@ -194,7 +205,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <QueryClientProvider client={queryClient}>
         <div className="flex min-h-screen transition-colors duration-300" style={{ background: "var(--sp-bg)" }}>
 
-          {/* ── Desktop sidebar ── */}
+          {/* Desktop sidebar */}
           <aside
             onMouseEnter={() => setSidebarExpanded(true)}
             onMouseLeave={() => setSidebarExpanded(false)}
@@ -206,7 +217,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <SidebarContent />
           </aside>
 
-          {/* ── Mobile floating menu button ── */}
+          {/* Mobile floating menu button */}
           <button
             onClick={() => setMobileOpen(true)}
             className="fixed bottom-6 left-4 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-[#2563EB] shadow-lg transition hover:bg-blue-500 lg:hidden"
@@ -214,7 +225,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <Menu className="h-5 w-5 text-white" />
           </button>
 
-          {/* ── Mobile drawer ── */}
+          {/* Mobile drawer */}
           {mobileOpen && (
             <div className="fixed inset-0 z-40 lg:hidden">
               <div
@@ -227,7 +238,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
           )}
 
-          {/* ── Main area ── */}
+          {/* Main area */}
           <div className={`flex flex-1 flex-col transition-all duration-200 ${sidebarExpanded ? "lg:ml-52" : "lg:ml-14"}`}>
             <main className="flex-1">{children}</main>
           </div>
