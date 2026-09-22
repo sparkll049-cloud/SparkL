@@ -5,17 +5,19 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  ArrowRight,
   FileText,
   Loader2,
   AlertCircle,
   Eye,
   X,
-  CheckCircle2,
   ChevronDown,
   BookOpen,
   Zap,
   Play,
   RotateCcw,
+  Lock,
+  Sparkles,
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
@@ -49,6 +51,12 @@ interface ProcessedQuestion {
   topic_tag: string | null;
   difficulty: string | null;
   marks: number | null;
+}
+
+interface QuestionLimits {
+  is_paid: boolean;
+  read_mode_percent: number;
+  practice_mode_max: number | null;
 }
 
 const LOW_QUALITY_THRESHOLD = 0.5;
@@ -212,6 +220,45 @@ function PracticeQuestion({ q, index }: { q: ProcessedQuestion; index: number })
   );
 }
 
+// ── Free gate banner ──────────────────────────────────────────────────────────
+function FreeGateBanner({
+  hiddenCount,
+  mode,
+  readPercent,
+  practiceMax,
+}: {
+  hiddenCount: number;
+  mode: "read" | "practice";
+  readPercent: number;
+  practiceMax: number | null;
+}) {
+  return (
+    <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-6 text-center">
+      <div className="flex justify-center mb-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/15">
+          <Lock className="h-4 w-4 text-indigo-400" />
+        </div>
+      </div>
+      <p className="text-sm font-semibold text-white">
+        {hiddenCount} more question{hiddenCount !== 1 ? "s" : ""} locked
+      </p>
+      <p className="mt-1 text-xs text-slate-500">
+        {mode === "read"
+          ? `You're seeing ${readPercent}% of questions on the free plan`
+          : `Practice mode is limited to ${practiceMax ?? 5} questions on the free plan`}
+      </p>
+      <Link
+        href="/dashboard/subscribe"
+        className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition-colors"
+      >
+        <Sparkles className="h-3.5 w-3.5" />
+        Unlock all questions
+        <ArrowRight className="h-3.5 w-3.5" />
+      </Link>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function QuestionDetailPage() {
   const supabase = createClient();
@@ -225,6 +272,12 @@ export default function QuestionDetailPage() {
 
   const [processedQuestions, setProcessedQuestions] = useState<ProcessedQuestion[]>([]);
   const [questionsLoading, setQuestionsLoading] = useState(false);
+
+  const [limits, setLimits] = useState<QuestionLimits>({
+    is_paid: true, // default true to avoid flash of locked content
+    read_mode_percent: 100,
+    practice_mode_max: null,
+  });
 
   const [mode, setMode] = useState<"read" | "practice">("read");
 
@@ -241,13 +294,30 @@ export default function QuestionDetailPage() {
       if (!session) { router.push("/auth/login"); return; }
 
       try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}`,
-          { headers: { Authorization: `Bearer ${session.access_token}` } }
-        );
-        if (res.status === 404) throw new Error("This past question wasn't found.");
-        if (!res.ok) throw new Error("Failed to load this past question.");
-        setData(await res.json());
+        const [detailRes, limitsRes] = await Promise.all([
+          fetch(
+            `${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}`,
+            { headers: { Authorization: `Bearer ${session.access_token}` } }
+          ),
+          fetch(
+            `${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`,
+            { headers: { Authorization: `Bearer ${session.access_token}` } }
+          ),
+        ]);
+
+        if (detailRes.status === 404) throw new Error("This past question wasn't found.");
+        if (!detailRes.ok) throw new Error("Failed to load this past question.");
+        setData(await detailRes.json());
+
+        if (limitsRes.ok) {
+          const limitsData = await limitsRes.json();
+          setLimits({
+            is_paid: limitsData.is_paid ?? false,
+            read_mode_percent: limitsData.read_mode_percent ?? 100,
+            practice_mode_max: limitsData.practice_mode_max ?? null,
+          });
+        }
+
         await loadProcessedQuestions(session.access_token);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -298,7 +368,9 @@ export default function QuestionDetailPage() {
   if (error || !data) return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-6 text-center">
       <p className="text-slate-500">{error || "Question not found."}</p>
-      <Link href="/dashboard" className="font-semibold text-blue-500 hover:underline">Back to Dashboard</Link>
+      <Link href="/dashboard" className="font-semibold text-blue-500 hover:underline">
+        Back to Dashboard
+      </Link>
     </div>
   );
 
@@ -307,6 +379,19 @@ export default function QuestionDetailPage() {
   const hasProcessed = processedQuestions.length > 0;
   const mcqCount = processedQuestions.filter(q => q.question_type === "mcq").length;
   const theoryCount = processedQuestions.filter(q => q.question_type === "theory").length;
+
+  // Compute visible slice based on free tier limits
+  const visibleQuestions = !limits.is_paid
+    ? mode === "practice"
+      ? processedQuestions.slice(0, limits.practice_mode_max ?? 5)
+      : processedQuestions.slice(
+          0,
+          Math.max(1, Math.floor(processedQuestions.length * (limits.read_mode_percent / 100)))
+        )
+    : processedQuestions;
+
+  const hiddenCount = processedQuestions.length - visibleQuestions.length;
+  const isGated = !limits.is_paid && hiddenCount > 0;
 
   return (
     <div className="min-h-screen bg-[#07091A] px-4 py-8 sm:px-6">
@@ -416,15 +501,25 @@ export default function QuestionDetailPage() {
               <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
             </div>
           ) : hasProcessed ? (
-            mode === "read" ? (
-              processedQuestions.map((q, i) => (
-                <ReadQuestion key={q.id} q={q} index={i} />
-              ))
-            ) : (
-              processedQuestions.map((q, i) => (
-                <PracticeQuestion key={q.id} q={q} index={i} />
-              ))
-            )
+            <>
+              {mode === "read"
+                ? visibleQuestions.map((q, i) => (
+                    <ReadQuestion key={q.id} q={q} index={i} />
+                  ))
+                : visibleQuestions.map((q, i) => (
+                    <PracticeQuestion key={q.id} q={q} index={i} />
+                  ))
+              }
+
+              {isGated && (
+                <FreeGateBanner
+                  hiddenCount={hiddenCount}
+                  mode={mode}
+                  readPercent={limits.read_mode_percent}
+                  practiceMax={limits.practice_mode_max}
+                />
+              )}
+            </>
           ) : (
             /* Fallback — not yet processed, show raw extracted text */
             <div className="rounded-2xl border border-white/[0.06] bg-[#0D1230] p-6">
@@ -484,3 +579,4 @@ export default function QuestionDetailPage() {
     </div>
   );
 }
+
