@@ -54,7 +54,7 @@ const PLANS = [
   },
 ];
 
-// ── Inner page (uses useSearchParams — must be inside Suspense) ───────────────
+// ── Inner page ────────────────────────────────────────────────────────────────
 function SubscribePageInner() {
   const supabase = createClient();
   const router = useRouter();
@@ -74,7 +74,7 @@ function SubscribePageInner() {
   useEffect(() => {
     async function loadUser() {
       const { data: { session } } = await supabase.auth.refreshSession();
-if (!session) { router.push("/auth/login"); return; }
+      if (!session) { router.push("/auth/login"); return; }
 
       const { data: profile } = await supabase
         .from("profiles")
@@ -99,7 +99,8 @@ if (!session) { router.push("/auth/login"); return; }
     setProcessingPlan(planSlug);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      // Always refresh session before payment
+      const { data: { session } } = await supabase.auth.refreshSession();
       if (!session) { router.push("/auth/login"); return; }
 
       // Step 1: create pending transaction on backend
@@ -144,22 +145,37 @@ if (!session) { router.push("/auth/login"); return; }
         },
         onSuccessfulOrder: async () => {
           // Step 3: verify on backend
-          const { data: { session: s } } = await supabase.auth.getSession();
-          if (!s) return;
-
-          await fetch(
-            `${process.env.NEXT_PUBLIC_API_URL}/api/payments/verify`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${s.access_token}`,
-              },
-              body: JSON.stringify({ reference }),
+          try {
+            const { data: { session: s } } = await supabase.auth.refreshSession();
+            if (!s) {
+              setError("Session expired. Please log in again.");
+              setProcessingPlan(null);
+              return;
             }
-          );
 
-          router.push("/dashboard/subscribe?subscribed=true");
+            const res = await fetch(
+              `${process.env.NEXT_PUBLIC_API_URL}/api/payments/verify`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${s.access_token}`,
+                },
+                body: JSON.stringify({ reference }),
+              }
+            );
+
+            if (res.ok) {
+              router.push("/dashboard/subscribe?subscribed=true");
+            } else {
+              const err = await res.json();
+              setError(err.detail ?? "Verification failed. Please contact support.");
+              setProcessingPlan(null);
+            }
+          } catch {
+            setError("Network error during verification. Please contact support.");
+            setProcessingPlan(null);
+          }
         },
         onError: (err: unknown) => {
           console.error(err);
@@ -340,7 +356,7 @@ if (!session) { router.push("/auth/login"); return; }
   );
 }
 
-// ── Exported page — wraps inner in Suspense to fix Next.js prerender error ────
+// ── Exported page ─────────────────────────────────────────────────────────────
 export default function SubscribePage() {
   return (
     <Suspense
