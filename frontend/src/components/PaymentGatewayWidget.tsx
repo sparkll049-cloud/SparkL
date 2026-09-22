@@ -29,7 +29,7 @@ export function PaymentGatewayWidget() {
         {[
           "All courses unlocked",
           "Unlimited read & practice",
-          "From ₦500/month",
+          "From ₦2000/month",
         ].map((item) => (
           <div key={item} className="flex items-center gap-1.5">
             <div className="h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0" />
