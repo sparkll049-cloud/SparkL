@@ -2,7 +2,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-
+from app.dependencies.admin import get_current_admin
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -158,12 +158,10 @@ async def verify_payment(
 # Protected by ADMIN_SECRET env var
 
 @router.post("/admin/grant")
-async def admin_grant_subscription(body: dict):
-    # Verify admin secret
-    secret = body.get("secret")
-    if not secret or secret != ADMIN_SECRET:
-        raise HTTPException(status_code=403, detail="Forbidden")
-
+async def admin_grant_subscription(
+    body: dict,
+    admin_id: str = Depends(get_current_admin),
+):
     target_user_id = body.get("user_id")
     plan_slug = body.get("plan")
     note = body.get("note", "Manual grant by admin")
@@ -174,6 +172,37 @@ async def admin_grant_subscription(body: dict):
     if plan_slug == "free":
         raise HTTPException(status_code=400, detail="Cannot manually grant free plan")
 
+    plan_res = (
+        supabase.table("subscription_plans")
+        .select("plan, display_name, duration_days")
+        .eq("plan", plan_slug)
+        .eq("is_active", True)
+        .maybe_single()
+        .execute()
+    )
+    if not plan_res.data:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    reference = f"MANUAL-{uuid4().hex[:12].upper()}"
+    supabase.table("payment_transactions").insert({
+        "user_id": target_user_id,
+        "plan": plan_slug,
+        "gateway": "payvessel",
+        "gateway_ref": reference,
+        "amount_kobo": 0,
+        "currency": "NGN",
+        "status": "pending",
+    }).execute()
+
+    result = await _activate_subscription(
+        target_user_id,
+        plan_slug,
+        pv_data={"manual_grant": True, "note": note, "granted_by": admin_id},
+        reference=reference,
+    )
+
+    print(f"[Admin grant] by={admin_id} user={target_user_id} plan={plan_slug} note={note}")
+    return {**result, "note": note}
     # Verify plan exists
     plan_res = (
         supabase.table("subscription_plans")
