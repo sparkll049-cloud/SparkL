@@ -54,7 +54,6 @@ const PLANS = [
   },
 ];
 
-// ── Inner page ────────────────────────────────────────────────────────────────
 function SubscribePageInner() {
   const supabase = createClient();
   const router = useRouter();
@@ -99,7 +98,6 @@ function SubscribePageInner() {
     setProcessingPlan(planSlug);
 
     try {
-      // Always refresh session before payment
       const { data: { session } } = await supabase.auth.refreshSession();
       if (!session) { router.push("/auth/login"); return; }
 
@@ -121,7 +119,7 @@ function SubscribePageInner() {
         throw new Error(err.detail ?? "Failed to initiate payment");
       }
 
-      const { reference } = await initiateRes.json();
+      const { reference: ourReference } = await initiateRes.json();
 
       // Step 2: open Payvessel checkout
       const init = Checkout({
@@ -134,7 +132,7 @@ function SubscribePageInner() {
         customer_phone_number: user.phone || "08000000000",
         amount: String(amount),
         currency: "NGN",
-        reference,
+        reference: ourReference,
         channels: ["BANK_TRANSFER", "CARD"],
         metadata: {
           plan: planSlug,
@@ -143,8 +141,10 @@ function SubscribePageInner() {
         onSuccess: () => {
           // checkout session created — wait for order
         },
-        onSuccessfulOrder: async () => {
-          // Step 3: verify on backend
+        onSuccessfulOrder: async (data: unknown) => {
+          // Log exactly what Payvessel returns so we can extract their reference
+          console.log("[PayVessel onSuccessfulOrder]", JSON.stringify(data));
+
           try {
             const { data: { session: s } } = await supabase.auth.refreshSession();
             if (!s) {
@@ -152,6 +152,17 @@ function SubscribePageInner() {
               setProcessingPlan(null);
               return;
             }
+
+            // Extract Payvessel's own reference from the callback data
+            const pvData = data as Record<string, unknown> | null;
+            const pvReference =
+              (pvData?.reference as string) ||
+              (pvData?.transaction_ref as string) ||
+              (pvData?.txn_ref as string) ||
+              (pvData?.data as Record<string, unknown>)?.reference as string ||
+              ourReference; // fallback to our ref if PV doesn't return one
+
+            console.log("[PayVessel] using reference for verify:", pvReference);
 
             const res = await fetch(
               `${process.env.NEXT_PUBLIC_API_URL}/api/payments/verify`,
@@ -161,7 +172,10 @@ function SubscribePageInner() {
                   "Content-Type": "application/json",
                   Authorization: `Bearer ${s.access_token}`,
                 },
-                body: JSON.stringify({ reference }),
+                body: JSON.stringify({
+                  reference: pvReference,
+                  our_reference: ourReference,
+                }),
               }
             );
 
@@ -178,7 +192,7 @@ function SubscribePageInner() {
           }
         },
         onError: (err: unknown) => {
-          console.error(err);
+          console.error("[PayVessel onError]", err);
           setError("Payment failed. Please try again.");
           setProcessingPlan(null);
         },
@@ -356,7 +370,6 @@ function SubscribePageInner() {
   );
 }
 
-// ── Exported page ─────────────────────────────────────────────────────────────
 export default function SubscribePage() {
   return (
     <Suspense
