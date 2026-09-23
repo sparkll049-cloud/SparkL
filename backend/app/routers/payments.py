@@ -97,6 +97,7 @@ async def verify_payment(
         return {"status": "already_verified", "message": "Subscription already active"}
 
     # ── Call Payvessel to verify ─────────────────────────────────────────────
+    pv_res = None
     try:
         async with httpx.AsyncClient() as client:
             pv_res = await client.post(
@@ -108,12 +109,13 @@ async def verify_payment(
                 json={"transactionRef": reference},
                 timeout=15.0,
             )
+        # Print BEFORE .json() so we always see raw response in logs
+        print(f"[PayVessel raw] status={pv_res.status_code} body={pv_res.text}")
         pv_data = pv_res.json()
     except Exception as e:
+        print(f"[PayVessel error] {str(e)}")
+        print(f"[PayVessel body] {pv_res.text if pv_res else 'NO RESPONSE - connection failed'}")
         raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
-
-    # ── Log raw response to help debug ──────────────────────────────────────
-    print(f"[PayVessel verify] status={pv_res.status_code} body={pv_data}")
 
     pv_status = (
         pv_data.get("requestSuccessful")
