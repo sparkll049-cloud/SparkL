@@ -7,7 +7,8 @@ import { useRouter } from "next/navigation";
 import {
   GraduationCap, BookOpen, School, Layers, Upload,
   Loader2, Mail, Phone, Pencil, Check, X, LogOut,
-  KeyRound, Eye, EyeOff, CheckCircle2,
+  KeyRound, Eye, EyeOff, CheckCircle2, Crown, Sparkles,
+  ShieldCheck, Zap, Calendar,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
@@ -21,6 +22,16 @@ interface Profile {
 interface DashboardData {
   profile: Profile;
   stats: { questions_in_courses: number; my_uploads: number; };
+}
+interface SubscriptionStatus {
+  plan: string;
+  effective_plan: string;
+  is_paid: boolean;
+  is_trial: boolean;
+  expires_at: string | null;
+  read_mode_percent: number;
+  practice_mode_max: number | null;
+  downloads_per_day: number | null;
 }
 
 const phoneValid = (phone: string) =>
@@ -54,6 +65,53 @@ function ProfileField({ icon, label, value }: { icon: React.ReactNode; label: st
   );
 }
 
+const PLAN_META: Record<string, { label: string; color: string; bg: string; border: string; icon: React.ReactNode }> = {
+  free: {
+    label: "Free",
+    color: "text-slate-400",
+    bg: "bg-slate-500/10",
+    border: "border-slate-500/20",
+    icon: <ShieldCheck size={14} />,
+  },
+  trial: {
+    label: "Trial",
+    color: "text-amber-400",
+    bg: "bg-amber-500/10",
+    border: "border-amber-500/20",
+    icon: <Zap size={14} />,
+  },
+  basic: {
+    label: "Basic",
+    color: "text-blue-400",
+    bg: "bg-blue-500/10",
+    border: "border-blue-500/20",
+    icon: <Sparkles size={14} />,
+  },
+  pro: {
+    label: "Pro",
+    color: "text-indigo-400",
+    bg: "bg-indigo-500/10",
+    border: "border-indigo-500/20",
+    icon: <Crown size={14} />,
+  },
+  premium: {
+    label: "Premium",
+    color: "text-violet-400",
+    bg: "bg-violet-500/10",
+    border: "border-violet-500/20",
+    icon: <Crown size={14} />,
+  },
+};
+
+function formatExpiry(iso: string | null): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleDateString("en-NG", {
+      day: "numeric", month: "short", year: "numeric",
+    });
+  } catch { return ""; }
+}
+
 export default function ProfilePage() {
   const supabase = createClient();
   const router = useRouter();
@@ -65,6 +123,27 @@ export default function ProfilePage() {
     queryFn: () => fetchDashboardSummary(supabase, router, setEmail),
   });
 
+  // Subscription
+  const [sub, setSub] = useState<SubscriptionStatus | null>(null);
+  const [subLoading, setSubLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadSub() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`,
+          { headers: { Authorization: `Bearer ${session.access_token}` } }
+        );
+        if (res.ok) setSub(await res.json());
+      } catch { /* non-critical */ }
+      finally { setSubLoading(false); }
+    }
+    loadSub();
+  }, []);
+
+  // Identity editing
   const [editingIdentity, setEditingIdentity] = useState(false);
   const [fullName, setFullName]               = useState("");
   const [phone, setPhone]                     = useState("");
@@ -72,21 +151,29 @@ export default function ProfilePage() {
   const [identityError, setIdentityError]     = useState("");
   const [identitySuccess, setIdentitySuccess] = useState(false);
 
+  // Password
   const [showPasswordForm,  setShowPasswordForm]  = useState(false);
+  const [currentPassword,   setCurrentPassword]   = useState("");
   const [newPassword,       setNewPassword]       = useState("");
   const [confirmPassword,   setConfirmPassword]   = useState("");
+  const [showCurrentPw,     setShowCurrentPw]     = useState(false);
   const [showNewPassword,   setShowNewPassword]   = useState(false);
   const [savingPassword,    setSavingPassword]    = useState(false);
   const [passwordError,     setPasswordError]     = useState("");
   const [passwordSuccess,   setPasswordSuccess]   = useState(false);
-  const [signingOut,        setSigningOut]        = useState(false);
+
+  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
-    if (data?.profile) { setFullName(data.profile.full_name ?? ""); setPhone(data.profile.phone ?? ""); }
+    if (data?.profile) {
+      setFullName(data.profile.full_name ?? "");
+      setPhone(data.profile.phone ?? "");
+    }
   }, [data]);
 
   function startEditingIdentity() {
-    setFullName(data?.profile?.full_name ?? ""); setPhone(data?.profile?.phone ?? "");
+    setFullName(data?.profile?.full_name ?? "");
+    setPhone(data?.profile?.phone ?? "");
     setIdentityError(""); setIdentitySuccess(false); setEditingIdentity(true);
   }
 
@@ -111,14 +198,38 @@ export default function ProfilePage() {
 
   async function savePassword() {
     setPasswordError("");
-    if (newPassword.length < 8) { setPasswordError("Password must be at least 8 characters."); return; }
+    if (!currentPassword) { setPasswordError("Enter your current password first."); return; }
+    if (newPassword.length < 8) { setPasswordError("New password must be at least 8 characters."); return; }
+    if (newPassword === currentPassword) { setPasswordError("New password must be different from your current one."); return; }
     if (newPassword !== confirmPassword) { setPasswordError("Passwords do not match."); return; }
+
     setSavingPassword(true);
+
+    // Verify current password by re-signing in
+    if (email) {
+      const { error: signInErr } = await supabase.auth.signInWithPassword({
+        email,
+        password: currentPassword,
+      });
+      if (signInErr) {
+        setPasswordError("Current password is incorrect.");
+        setSavingPassword(false);
+        return;
+      }
+    }
+
     const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
     setSavingPassword(false);
     if (updateError) { setPasswordError(updateError.message); return; }
-    setNewPassword(""); setConfirmPassword(""); setShowPasswordForm(false);
-    setPasswordSuccess(true); setTimeout(() => setPasswordSuccess(false), 3000);
+    setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+    setShowPasswordForm(false);
+    setPasswordSuccess(true); setTimeout(() => setPasswordSuccess(false), 4000);
+  }
+
+  function cancelPassword() {
+    setShowPasswordForm(false);
+    setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+    setPasswordError("");
   }
 
   async function handleSignOut() {
@@ -149,6 +260,10 @@ export default function ProfilePage() {
   const courses = Array.isArray(profile.courses) ? profile.courses : [];
   const stats = data.stats ?? { questions_in_courses: 0, my_uploads: 0 };
 
+  const effectivePlan = sub?.effective_plan ?? "free";
+  const planMeta = PLAN_META[effectivePlan] ?? PLAN_META.free;
+  const isPaid = sub?.is_paid ?? false;
+
   return (
     <div className="min-h-screen px-6 pb-16 pt-8 transition-colors" style={{ background: "var(--sp-bg)" }}>
       <div className="mx-auto max-w-3xl">
@@ -164,7 +279,83 @@ export default function ProfilePage() {
           </button>
         </div>
 
-        {/* Identity Card */}
+        {/* ── Subscription tier card ── */}
+        <div className="mt-6 rounded-2xl border p-5 transition-colors"
+          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${planMeta.bg} ${planMeta.border}`}>
+                <span className={planMeta.color}>{planMeta.icon}</span>
+              </div>
+              <div>
+                <p className="text-xs font-medium" style={{ color: "var(--sp-text-3)" }}>Current plan</p>
+                {subLoading ? (
+                  <Loader2 size={14} className="animate-spin text-slate-500 mt-1" />
+                ) : (
+                  <p className={`text-lg font-bold ${planMeta.color}`}>{planMeta.label}</p>
+                )}
+              </div>
+            </div>
+
+            {!isPaid && (
+              <Link
+                href="/dashboard/subscribe"
+                className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition shrink-0"
+              >
+                <Crown size={13} />
+                Upgrade
+              </Link>
+            )}
+          </div>
+
+          {/* Plan details */}
+          {!subLoading && sub && (
+            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                {
+                  label: "Read access",
+                  value: sub.read_mode_percent === 100 ? "Full" : `${sub.read_mode_percent}%`,
+                },
+                {
+                  label: "Practice limit",
+                  value: sub.practice_mode_max === null ? "Unlimited" : `${sub.practice_mode_max} questions`,
+                },
+                {
+                  label: "Downloads/day",
+                  value: sub.downloads_per_day === null
+                    ? "Unlimited"
+                    : sub.downloads_per_day === 0
+                    ? "None"
+                    : String(sub.downloads_per_day),
+                },
+                {
+                  label: isPaid && sub.expires_at ? "Expires" : "Renewal",
+                  value: isPaid && sub.expires_at ? formatExpiry(sub.expires_at) : "—",
+                  icon: isPaid && sub.expires_at ? <Calendar size={11} className="shrink-0 mt-0.5" /> : null,
+                },
+              ].map((item) => (
+                <div key={item.label}
+                  className="rounded-xl border px-3 py-2.5"
+                  style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
+                  <p className="text-[10px] font-medium uppercase tracking-wide" style={{ color: "var(--sp-text-3)" }}>
+                    {item.label}
+                  </p>
+                  <p className="mt-0.5 flex items-center gap-1 text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+                    {item.icon}{item.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!isPaid && (
+            <p className="mt-3 text-xs" style={{ color: "var(--sp-text-3)" }}>
+              Free plan: 10% read access · 5 practice questions · no downloads
+            </p>
+          )}
+        </div>
+
+        {/* ── Identity Card ── */}
         <div className="mt-6 rounded-2xl border p-6 transition-colors"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
           <div className="flex items-start justify-between gap-4">
@@ -229,7 +420,7 @@ export default function ProfilePage() {
           )}
         </div>
 
-        {/* Academic Details */}
+        {/* ── Academic Details ── */}
         <div className="mt-6 rounded-2xl border p-6 transition-colors"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
           <h2 className="text-lg font-semibold" style={{ color: "var(--sp-text)" }}>Academic Details</h2>
@@ -246,7 +437,7 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        {/* Courses */}
+        {/* ── Courses ── */}
         <div className="mt-6 rounded-2xl border p-6 transition-colors"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
           <h2 className="text-lg font-semibold" style={{ color: "var(--sp-text)" }}>Your Courses ({courses.length})</h2>
@@ -263,7 +454,7 @@ export default function ProfilePage() {
           )}
         </div>
 
-        {/* Activity stats */}
+        {/* ── Activity stats ── */}
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
           {[
             { icon: <Upload size={22} className="text-blue-400" />, value: stats.my_uploads, label: "Your Uploads" },
@@ -280,7 +471,7 @@ export default function ProfilePage() {
           ))}
         </div>
 
-        {/* Password */}
+        {/* ── Password ── */}
         <div className="mt-6 rounded-2xl border p-6 transition-colors"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
           <div className="flex items-center justify-between">
@@ -297,40 +488,90 @@ export default function ProfilePage() {
 
           {showPasswordForm && (
             <div className="mt-4 space-y-3">
-              <div className="relative">
-                <input type={showNewPassword ? "text" : "password"} value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)} placeholder="New password"
-                  className={`${inputClass} pr-10`} style={inputStyle} />
-                <button type="button" onClick={() => setShowNewPassword(!showNewPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: "var(--sp-text-3)" }}>
-                  {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
+              {/* Current password */}
+              <div>
+                <label className="mb-1 block text-xs font-medium" style={{ color: "var(--sp-text-3)" }}>
+                  Current password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showCurrentPw ? "text" : "password"}
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    placeholder="Enter your current password"
+                    className={`${inputClass} pr-10`}
+                    style={inputStyle}
+                  />
+                  <button type="button" onClick={() => setShowCurrentPw(!showCurrentPw)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: "var(--sp-text-3)" }}>
+                    {showCurrentPw ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
-              <input type={showNewPassword ? "text" : "password"} value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm new password"
-                className={inputClass} style={inputStyle} />
+
+              {/* New password */}
+              <div>
+                <label className="mb-1 block text-xs font-medium" style={{ color: "var(--sp-text-3)" }}>
+                  New password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="At least 8 characters"
+                    className={`${inputClass} pr-10`}
+                    style={inputStyle}
+                  />
+                  <button type="button" onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: "var(--sp-text-3)" }}>
+                    {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Confirm */}
+              <div>
+                <label className="mb-1 block text-xs font-medium" style={{ color: "var(--sp-text-3)" }}>
+                  Confirm new password
+                </label>
+                <input
+                  type={showNewPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Repeat new password"
+                  className={inputClass}
+                  style={inputStyle}
+                />
+              </div>
+
               {passwordError && <p className="text-sm text-red-400">{passwordError}</p>}
-              <div className="flex gap-2">
-                <button onClick={() => { setShowPasswordForm(false); setNewPassword(""); setConfirmPassword(""); setPasswordError(""); }}
-                  disabled={savingPassword}
+
+              <div className="flex gap-2 pt-1">
+                <button onClick={cancelPassword} disabled={savingPassword}
                   className="flex-1 rounded-lg border py-2 text-sm font-semibold transition disabled:opacity-60"
                   style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-muted)" }}>
                   Cancel
                 </button>
-                <button onClick={savePassword} disabled={savingPassword || !newPassword || !confirmPassword}
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition disabled:opacity-60">
+                <button
+                  onClick={savePassword}
+                  disabled={savingPassword || !currentPassword || !newPassword || !confirmPassword}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition disabled:opacity-60"
+                >
                   {savingPassword && <Loader2 size={14} className="animate-spin" />}
                   Update password
                 </button>
               </div>
             </div>
           )}
+
           {passwordSuccess && (
             <p className="mt-3 flex items-center gap-1.5 text-sm text-emerald-400">
               <CheckCircle2 size={14} />Password updated successfully.
             </p>
           )}
         </div>
+
       </div>
     </div>
   );
