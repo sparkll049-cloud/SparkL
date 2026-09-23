@@ -72,22 +72,33 @@ function SubscribePageInner() {
 
   useEffect(() => {
     async function loadUser() {
-      const { data: { session } } = await supabase.auth.refreshSession();
-      if (!session) { router.push("/auth/login"); return; }
+      try {
+        const { data: { session } } = await supabase.auth.refreshSession();
+        if (!session) {
+          router.push("/auth/login");
+          return;
+        }
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("full_name, phone, subscription_plan")
-        .eq("id", session.user.id)
-        .single();
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("full_name, phone, subscription_plan")
+          .eq("id", session.user.id)
+          .single();
 
-      setUser({
-        name: profile?.full_name ?? "Student",
-        email: session.user.email ?? "",
-        phone: profile?.phone ?? "",
-      });
-      setCurrentPlan(profile?.subscription_plan ?? "free");
-      setLoadingUser(false);
+        setUser({
+          name: profile?.full_name ?? "Student",
+          email: session.user.email ?? "",
+          phone: profile?.phone ?? "",
+        });
+        setCurrentPlan(profile?.subscription_plan ?? "free");
+      } catch (err) {
+        console.error("[loadUser error]", err);
+        // Don't leave the user stuck — show the page anyway
+        setUser({ name: "Student", email: "", phone: "" });
+      } finally {
+        // Always runs — even if session fetch or profile fetch throws
+        setLoadingUser(false);
+      }
     }
     loadUser();
   }, []);
@@ -121,7 +132,7 @@ function SubscribePageInner() {
 
       const { reference: ourReference } = await initiateRes.json();
 
-      // Step 2: open Payvessel checkout
+      // Step 2: open PayVessel checkout
       const init = Checkout({
         api_key: process.env.NEXT_PUBLIC_PAYVESSEL_API_KEY!,
       });
@@ -139,10 +150,9 @@ function SubscribePageInner() {
           user_email: user.email,
         },
         onSuccess: () => {
-          // checkout session created — wait for order
+          // checkout session opened — wait for order confirmation
         },
         onSuccessfulOrder: async (data: unknown) => {
-          // Log exactly what Payvessel returns so we can extract their reference
           console.log("[PayVessel onSuccessfulOrder]", JSON.stringify(data));
 
           try {
@@ -153,31 +163,27 @@ function SubscribePageInner() {
               return;
             }
 
-            // Extract Payvessel's own reference from the callback data
+            // Extract PayVessel's reference from the callback data
             const pvData = data as Record<string, unknown> | null;
             const pvReference =
               (pvData?.reference as string) ||
               (pvData?.transaction_ref as string) ||
               (pvData?.txn_ref as string) ||
-              (pvData?.data as Record<string, unknown>)?.reference as string ||
-              ourReference; // fallback to our ref if PV doesn't return one
+              ((pvData?.data as Record<string, unknown>)?.reference as string) ||
+              ourReference;
 
             console.log("[PayVessel] using reference for verify:", pvReference);
 
-            const res = await fetch(
-              `${process.env.NEXT_PUBLIC_API_URL}/api/payments/verify`,
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${s.access_token}`,
-                },
-                body: JSON.stringify({
-                  reference: pvReference,
-                  our_reference: ourReference,
-                }),
-              }
-            );
+            // ← hits Next.js proxy route, NOT FastAPI directly
+            const res = await fetch("/api/payments/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                reference: pvReference,
+                our_reference: ourReference,
+                access_token: s.access_token,
+              }),
+            });
 
             if (res.ok) {
               router.push("/dashboard/subscribe?subscribed=true");
