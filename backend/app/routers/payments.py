@@ -2,7 +2,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-from app.dependencies.admin import get_current_admin
+from app.admin_auth import get_current_admin
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
