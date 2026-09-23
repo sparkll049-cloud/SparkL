@@ -14,7 +14,8 @@ router = APIRouter(prefix="/api/payments", tags=["payments"])
 
 PAYVESSEL_API_KEY = os.getenv("PAYVESSEL_API_KEY")
 PAYVESSEL_API_SECRET = os.getenv("PAYVESSEL_SECRET_KEY")
-PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/pms/transactions/{reference}/confirm/"
+PAYVESSEL_BASE_URL = os.getenv("PAYVESSEL_BASE_URL", "https://sandbox.payvessel.com")
+PAYVESSEL_VERIFY_URL = PAYVESSEL_BASE_URL + "/pms/transactions/{reference}/confirm/"
 
 
 # ─── POST /api/payments/initiate ────────────────────────────────────────────
@@ -74,25 +75,31 @@ async def verify_payment(
     user_id: str = Depends(get_current_user),
 ):
     reference = body.get("reference")
+    our_reference = body.get("our_reference", reference)
+
     if not reference:
         raise HTTPException(status_code=400, detail="Reference is required")
 
-    try:
-        txn_res = (
-            supabase.table("payment_transactions")
-            .select("*")
-            .eq("gateway_ref", reference)
-            .eq("user_id", user_id)
-            .maybe_single()
-            .execute()
-        )
-    except Exception:
-        raise HTTPException(status_code=404, detail="Transaction not found")
+    # Look up transaction by our internal reference first, then PV reference
+    txn = None
+    for ref in list(dict.fromkeys([our_reference, reference])):  # dedup, preserve order
+        try:
+            txn_res = (
+                supabase.table("payment_transactions")
+                .select("*")
+                .eq("gateway_ref", ref)
+                .eq("user_id", user_id)
+                .maybe_single()
+                .execute()
+            )
+            if txn_res.data:
+                txn = txn_res.data
+                break
+        except Exception:
+            continue
 
-    if not txn_res.data:
+    if not txn:
         raise HTTPException(status_code=404, detail="Transaction not found")
-
-    txn = txn_res.data
 
     if txn["status"] == "success":
         return {"status": "already_verified", "message": "Subscription already active"}
@@ -126,30 +133,46 @@ async def verify_payment(
         print(f"[PayVessel body] {pv_res.text if pv_res else 'NO RESPONSE - connection failed'}")
         raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
 
+    # Payvessel returns uppercase status: SUCCESS, FAILED, PENDING, CANCELLED
     pv_status = (
         pv_data.get("data", {}).get("status")
         or pv_data.get("status")
+        or ""
     )
     pv_amount = (
         pv_data.get("data", {}).get("amount")
         or pv_data.get("amount")
     )
 
-    if not pv_status or pv_status not in ("success", "successful"):
+    print(f"[PayVessel status] raw={pv_status} normalized={str(pv_status).upper()}")
+
+    if not pv_status or str(pv_status).upper() not in ("SUCCESS", "SUCCESSFUL"):
         supabase.table("payment_transactions").update({
             "status": "failed",
             "failed_reason": f"PayVessel status: {pv_status}",
-        }).eq("gateway_ref", reference).execute()
+        }).eq("gateway_ref", txn["gateway_ref"]).execute()
         raise HTTPException(status_code=400, detail=f"Payment not successful: {pv_status}")
 
-    if pv_amount and int(pv_amount) != txn["amount_kobo"]:
-        supabase.table("payment_transactions").update({
-            "status": "failed",
-            "failed_reason": "Amount mismatch",
-        }).eq("gateway_ref", reference).execute()
-        raise HTTPException(status_code=400, detail="Amount mismatch")
+    # Amount check — Payvessel returns amount in naira string e.g. "500.00"
+    # our DB stores kobo e.g. 50000, so convert before comparing
+    if pv_amount:
+        try:
+            pv_amount_kobo = int(float(pv_amount) * 100)
+            if pv_amount_kobo != txn["amount_kobo"]:
+                supabase.table("payment_transactions").update({
+                    "status": "failed",
+                    "failed_reason": f"Amount mismatch: got {pv_amount_kobo} kobo, expected {txn['amount_kobo']} kobo",
+                }).eq("gateway_ref", txn["gateway_ref"]).execute()
+                raise HTTPException(status_code=400, detail="Amount mismatch")
+        except (ValueError, TypeError):
+            pass  # if amount can't be parsed, skip the check
 
-    return await _activate_subscription(user_id, txn["plan"], pv_data=pv_data, reference=reference)
+    return await _activate_subscription(
+        user_id,
+        txn["plan"],
+        pv_data=pv_data,
+        reference=txn["gateway_ref"],
+    )
 
 
 # ─── POST /api/payments/admin/grant ─────────────────────────────────────────
