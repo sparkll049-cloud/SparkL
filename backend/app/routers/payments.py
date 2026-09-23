@@ -76,13 +76,15 @@ async def verify_payment(
 ):
     reference = body.get("reference")
     our_reference = body.get("our_reference", reference)
+    # pv_data forwarded by the Next.js proxy — if present, skip re-calling PayVessel
+    pv_data_from_proxy: dict | None = body.get("pv_data")
 
     if not reference:
         raise HTTPException(status_code=400, detail="Reference is required")
 
-    # Look up transaction by our internal reference first, then PV reference
+    # ── Find our transaction ─────────────────────────────────────────────────
     txn = None
-    for ref in list(dict.fromkeys([our_reference, reference])):  # dedup, preserve order
+    for ref in list(dict.fromkeys([our_reference, reference])):
         try:
             txn_res = (
                 supabase.table("payment_transactions")
@@ -104,36 +106,39 @@ async def verify_payment(
     if txn["status"] == "success":
         return {"status": "already_verified", "message": "Subscription already active"}
 
-    # ── Call Payvessel to verify ─────────────────────────────────────────────
-    pv_res = None
-    try:
-        async with httpx.AsyncClient() as client:
-            pv_res = await client.get(
-                PAYVESSEL_VERIFY_URL.format(reference=reference),
-                headers={
-                    "api-key": PAYVESSEL_API_KEY,
-                    "api-secret": PAYVESSEL_API_SECRET,
-                    "Content-Type": "application/json",
-                },
-                timeout=15.0,
-            )
-        print(f"[PayVessel raw] status={pv_res.status_code} body={pv_res.text}")
+    # ── Get PayVessel data ───────────────────────────────────────────────────
+    if pv_data_from_proxy:
+        pv_data = pv_data_from_proxy
+        print(f"[Verify] Using pv_data from proxy for ref={reference}")
+    else:
+        pv_res_raw = None
+        try:
+            async with httpx.AsyncClient() as client:
+                pv_res_raw = await client.get(
+                    PAYVESSEL_VERIFY_URL.format(reference=reference),
+                    headers={
+                        "api-key": PAYVESSEL_API_KEY,
+                        "api-secret": PAYVESSEL_API_SECRET,
+                        "Content-Type": "application/json",
+                    },
+                    timeout=15.0,
+                )
+            print(f"[PayVessel direct] status={pv_res_raw.status_code} body={pv_res_raw.text}")
 
-        if pv_res.status_code == 503:
-            raise HTTPException(
-                status_code=503,
-                detail="Payment gateway is temporarily unavailable. Your payment was received — please contact support to activate your subscription."
-            )
+            if pv_res_raw.status_code == 503:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Payment gateway is temporarily unavailable. Your payment was received — please contact support.",
+                )
 
-        pv_data = pv_res.json()
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[PayVessel error] {str(e)}")
-        print(f"[PayVessel body] {pv_res.text if pv_res else 'NO RESPONSE - connection failed'}")
-        raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
+            pv_data = pv_res_raw.json()
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[PayVessel direct error] {str(e)}")
+            raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
 
-    # Payvessel returns uppercase status: SUCCESS, FAILED, PENDING, CANCELLED
+    # ── Parse status ─────────────────────────────────────────────────────────
     pv_status = (
         pv_data.get("data", {}).get("status")
         or pv_data.get("status")
@@ -144,7 +149,7 @@ async def verify_payment(
         or pv_data.get("amount")
     )
 
-    print(f"[PayVessel status] raw={pv_status} normalized={str(pv_status).upper()}")
+    print(f"[Verify] pv_status={pv_status} normalized={str(pv_status).upper()}")
 
     if not pv_status or str(pv_status).upper() not in ("SUCCESS", "SUCCESSFUL"):
         supabase.table("payment_transactions").update({
@@ -153,8 +158,6 @@ async def verify_payment(
         }).eq("gateway_ref", txn["gateway_ref"]).execute()
         raise HTTPException(status_code=400, detail=f"Payment not successful: {pv_status}")
 
-    # Amount check — Payvessel returns amount in naira string e.g. "500.00"
-    # our DB stores kobo e.g. 50000, so convert before comparing
     if pv_amount:
         try:
             pv_amount_kobo = int(float(pv_amount) * 100)
@@ -165,11 +168,11 @@ async def verify_payment(
                 }).eq("gateway_ref", txn["gateway_ref"]).execute()
                 raise HTTPException(status_code=400, detail="Amount mismatch")
         except (ValueError, TypeError):
-            pass  # if amount can't be parsed, skip the check
+            pass
 
     return await _activate_subscription(
-        user_id,
-        txn["plan"],
+        user_id=user_id,
+        plan_slug=txn["plan"],
         pv_data=pv_data,
         reference=txn["gateway_ref"],
     )
@@ -215,8 +218,8 @@ async def admin_grant_subscription(
     }).execute()
 
     result = await _activate_subscription(
-        target_user_id,
-        plan_slug,
+        user_id=target_user_id,
+        plan_slug=plan_slug,
         pv_data={"manual_grant": True, "note": note, "granted_by": admin_id},
         reference=reference,
     )
@@ -225,7 +228,7 @@ async def admin_grant_subscription(
     return {**result, "note": note}
 
 
-# ─── Shared subscription activation logic ───────────────────────────────────
+# ─── Shared subscription activation ─────────────────────────────────────────
 
 async def _activate_subscription(
     user_id: str,
@@ -248,7 +251,6 @@ async def _activate_subscription(
     expires_at = now + timedelta(days=plan["duration_days"])
     expires_iso = expires_at.isoformat()
 
-    # ── Upsert subscription ──────────────────────────────────────────────────
     existing_sub_res = (
         supabase.table("subscriptions")
         .select("id, expires_at")
@@ -293,7 +295,6 @@ async def _activate_subscription(
 
         subscription_id = (sub_res.data or [{}])[0].get("id")
 
-    # ── Update transaction ───────────────────────────────────────────────────
     supabase.table("payment_transactions").update({
         "status": "success",
         "paid_at": now.isoformat(),
@@ -301,13 +302,12 @@ async def _activate_subscription(
         "gateway_payload": pv_data,
     }).eq("gateway_ref", reference).execute()
 
-    # ── Update profile ───────────────────────────────────────────────────────
     profile_update = supabase.table("profiles").update({
         "subscription_plan": plan_slug,
         "subscription_expic": expires_iso,
     }).eq("id", user_id).execute()
 
-    print(f"[Profile update] user={user_id} plan={plan_slug} expires={expires_iso} result={profile_update.data}")
+    print(f"[Activate] user={user_id} plan={plan_slug} expires={expires_iso} profile={profile_update.data}")
 
     return {
         "status": "success",
