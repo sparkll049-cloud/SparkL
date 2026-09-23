@@ -1,5 +1,4 @@
 import os
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -127,7 +126,6 @@ async def verify_payment(
         print(f"[PayVessel body] {pv_res.text if pv_res else 'NO RESPONSE - connection failed'}")
         raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
 
-    # ── Parse status from response ───────────────────────────────────────────
     pv_status = (
         pv_data.get("data", {}).get("status")
         or pv_data.get("status")
@@ -227,6 +225,7 @@ async def _activate_subscription(
     expires_at = now + timedelta(days=plan["duration_days"])
     expires_iso = expires_at.isoformat()
 
+    # ── Upsert subscription ──────────────────────────────────────────────────
     existing_sub_res = (
         supabase.table("subscriptions")
         .select("id, expires_at")
@@ -271,23 +270,21 @@ async def _activate_subscription(
 
         subscription_id = (sub_res.data or [{}])[0].get("id")
 
-    def update_transaction():
-        supabase.table("payment_transactions").update({
-            "status": "success",
-            "paid_at": now.isoformat(),
-            "subscription_id": subscription_id,
-            "gateway_payload": pv_data,
-        }).eq("gateway_ref", reference).execute()
+    # ── Update transaction ───────────────────────────────────────────────────
+    supabase.table("payment_transactions").update({
+        "status": "success",
+        "paid_at": now.isoformat(),
+        "subscription_id": subscription_id,
+        "gateway_payload": pv_data,
+    }).eq("gateway_ref", reference).execute()
 
-    def update_profile():
-        supabase.table("profiles").update({
-            "subscription_plan": plan_slug,
-            "subscription_expic": expires_iso,
-        }).eq("id", user_id).execute()
+    # ── Update profile ───────────────────────────────────────────────────────
+    profile_update = supabase.table("profiles").update({
+        "subscription_plan": plan_slug,
+        "subscription_expic": expires_iso,
+    }).eq("id", user_id).execute()
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        pool.submit(update_transaction)
-        pool.submit(update_profile)
+    print(f"[Profile update] user={user_id} plan={plan_slug} expires={expires_iso} result={profile_update.data}")
 
     return {
         "status": "success",
