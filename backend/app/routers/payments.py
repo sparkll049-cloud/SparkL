@@ -2,19 +2,20 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-from app.admin_auth import get_current_admin
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user
+from app.admin_auth import get_current_admin
 from app.supabase_client import supabase
 from app.services.subscription import get_plan_limits
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
-PAYVESSEL_SECRET_KEY = os.getenv("PAYVESSEL_SECRET_KEY")
-PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/api/service/request/transaction/verify"
-ADMIN_SECRET = os.getenv("ADMIN_SECRET")  # set this in Render env vars
+PAYVESSEL_API_KEY = os.getenv("PAYVESSEL_API_KEY")
+PAYVESSEL_API_SECRET = os.getenv("PAYVESSEL_SECRET_KEY")
+PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/pms/transactions/{reference}/confirm/"
 
 
 # ─── POST /api/payments/initiate ────────────────────────────────────────────
@@ -101,13 +102,13 @@ async def verify_payment(
     pv_res = None
     try:
         async with httpx.AsyncClient() as client:
-            pv_res = await client.post(
-                PAYVESSEL_VERIFY_URL,
+            pv_res = await client.get(
+                PAYVESSEL_VERIFY_URL.format(reference=reference),
                 headers={
-                    "api-key": PAYVESSEL_SECRET_KEY,
+                    "api-key": PAYVESSEL_API_KEY,
+                    "api-secret": PAYVESSEL_API_SECRET,
                     "Content-Type": "application/json",
                 },
-                json={"transactionRef": reference},
                 timeout=15.0,
             )
         print(f"[PayVessel raw] status={pv_res.status_code} body={pv_res.text}")
@@ -126,9 +127,9 @@ async def verify_payment(
         print(f"[PayVessel body] {pv_res.text if pv_res else 'NO RESPONSE - connection failed'}")
         raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
 
+    # ── Parse status from response ───────────────────────────────────────────
     pv_status = (
-        pv_data.get("requestSuccessful")
-        or pv_data.get("data", {}).get("status")
+        pv_data.get("data", {}).get("status")
         or pv_data.get("status")
     )
     pv_amount = (
@@ -136,7 +137,7 @@ async def verify_payment(
         or pv_data.get("amount")
     )
 
-    if not pv_status or pv_status not in (True, "success", "successful"):
+    if not pv_status or pv_status not in ("success", "successful"):
         supabase.table("payment_transactions").update({
             "status": "failed",
             "failed_reason": f"PayVessel status: {pv_status}",
@@ -154,8 +155,6 @@ async def verify_payment(
 
 
 # ─── POST /api/payments/admin/grant ─────────────────────────────────────────
-# Admin manually grants a subscription to a user
-# Protected by ADMIN_SECRET env var
 
 @router.post("/admin/grant")
 async def admin_grant_subscription(
@@ -202,39 +201,6 @@ async def admin_grant_subscription(
     )
 
     print(f"[Admin grant] by={admin_id} user={target_user_id} plan={plan_slug} note={note}")
-    return {**result, "note": note}
-    # Verify plan exists
-    plan_res = (
-        supabase.table("subscription_plans")
-        .select("plan, display_name, duration_days")
-        .eq("plan", plan_slug)
-        .eq("is_active", True)
-        .maybe_single()
-        .execute()
-    )
-    if not plan_res.data:
-        raise HTTPException(status_code=404, detail="Plan not found")
-
-    # Create a manual transaction record
-    reference = f"MANUAL-{uuid4().hex[:12].upper()}"
-    supabase.table("payment_transactions").insert({
-        "user_id": target_user_id,
-        "plan": plan_slug,
-        "gateway": "payvessel",
-        "gateway_ref": reference,
-        "amount_kobo": 0,
-        "currency": "NGN",
-        "status": "pending",
-    }).execute()
-
-    result = await _activate_subscription(
-        target_user_id,
-        plan_slug,
-        pv_data={"manual_grant": True, "note": note},
-        reference=reference,
-    )
-
-    print(f"[Admin grant] user={target_user_id} plan={plan_slug} note={note}")
     return {**result, "note": note}
 
 
