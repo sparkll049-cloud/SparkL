@@ -5,7 +5,7 @@ import {
   Loader2, Shield, ShieldOff, UserX, UserCheck, Search,
   ChevronDown, ChevronUp, Eye, EyeOff, Activity, CreditCard,
   Calendar, MapPin, BookOpen, Phone, AlertTriangle, RefreshCw,
-  Users, GraduationCap, X,
+  Users, GraduationCap, X, Sparkles,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -45,6 +45,12 @@ const ADMIN_ROLES = [
   { value: "super_admin", label: "Super Admin", desc: "Full admin access" },
 ];
 
+const SUBSCRIPTION_PLANS = [
+  { value: "basic", label: "Basic", desc: "₦500/month · 10 downloads/day" },
+  { value: "pro", label: "Pro", desc: "₦1,000/month · 50 downloads/day" },
+  { value: "premium", label: "Premium", desc: "₦2,000/month · Unlimited downloads" },
+];
+
 const MASK = "••••••••";
 
 function mask(value: string | null | undefined, revealed: boolean): string {
@@ -66,6 +72,13 @@ export default function AdminUsersPage() {
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
   const [rolePickerId, setRolePickerId] = useState<string | null>(null);
   const [selectedRole, setSelectedRole] = useState<string>("moderator");
+
+  // ── Grant subscription state ──
+  const [grantPickerId, setGrantPickerId] = useState<string | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<string>("pro");
+  const [grantNote, setGrantNote] = useState<string>("");
+  const [grantingId, setGrantingId] = useState<string | null>(null);
+  const [grantSuccess, setGrantSuccess] = useState<string | null>(null);
 
   async function getToken() {
     const { data: { session } } = await supabase.auth.getSession();
@@ -113,7 +126,6 @@ export default function AdminUsersPage() {
 
   function toggleExpand(id: string) {
     setExpandedId((prev) => (prev === id ? null : id));
-    // auto-reveal when expanded, hide when collapsed
     setRevealedIds((prev) => {
       const next = new Set(prev);
       if (expandedId === id) { next.delete(id); } else { next.add(id); }
@@ -187,6 +199,43 @@ export default function AdminUsersPage() {
     }
   }
 
+  async function grantSubscription(user: UserRow) {
+    setGrantingId(user.id);
+    setGrantSuccess(null);
+    setError("");
+    const token = await getToken();
+    if (!token) { setError("Session expired."); setGrantingId(null); return; }
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/admin/grant`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          user_id: user.id,
+          plan: selectedPlan,
+          note: grantNote || "Manual grant by admin",
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? "Failed to grant subscription.");
+      }
+      const result = await res.json();
+      // Update user in list
+      setUsers((prev) => prev.map((u) =>
+        u.id === user.id
+          ? { ...u, subscription_plan: selectedPlan, subscription_expires_at: result.expires_at }
+          : u
+      ));
+      setGrantSuccess(`${SUBSCRIPTION_PLANS.find(p => p.value === selectedPlan)?.label} plan granted successfully!`);
+      setGrantPickerId(null);
+      setGrantNote("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setGrantingId(null);
+    }
+  }
+
   const filtered = users.filter((u) => {
     const q = search.toLowerCase();
     const matchSearch =
@@ -231,6 +280,19 @@ export default function AdminUsersPage() {
           <RefreshCw className="h-3.5 w-3.5" /> Refresh
         </button>
       </div>
+
+      {/* Grant success banner */}
+      {grantSuccess && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] px-5 py-4">
+          <div className="flex items-center gap-3">
+            <Sparkles className="h-4 w-4 shrink-0 text-emerald-400" />
+            <p className="text-sm font-semibold text-emerald-300">{grantSuccess}</p>
+          </div>
+          <button onClick={() => setGrantSuccess(null)}>
+            <X className="h-4 w-4 text-emerald-500" />
+          </button>
+        </div>
+      )}
 
       {/* Filter tabs */}
       <div className="flex flex-wrap gap-2">
@@ -292,23 +354,22 @@ export default function AdminUsersPage() {
               const isExpanded = expandedId === user.id;
               const isRevealed = revealedIds.has(user.id);
               const isActioning = actioningId === user.id;
+              const isGranting = grantingId === user.id;
               const roleLabel = ADMIN_ROLES.find((r) => r.value === user.admin_role)?.label ?? user.admin_role;
 
               return (
                 <div key={user.id} className="transition-colors hover:bg-white/[0.01]">
 
-                  {/* Row summary — always visible, info masked */}
+                  {/* Row summary */}
                   <div
                     className="flex cursor-pointer items-center gap-4 px-5 py-4"
                     onClick={() => toggleExpand(user.id)}
                   >
-                    {/* Avatar */}
                     <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold
                       ${user.suspended ? "bg-red-500/15 text-red-400" : user.is_admin ? "bg-blue-500/20 text-blue-300" : "bg-[#1E3A8A] text-blue-200"}`}>
                       {(user.full_name ?? "?").charAt(0).toUpperCase()}
                     </div>
 
-                    {/* Name + badges */}
                     <div className="flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="text-sm font-semibold text-slate-200">
@@ -324,8 +385,12 @@ export default function AdminUsersPage() {
                             Suspended
                           </span>
                         )}
+                        {user.subscription_plan && user.subscription_plan !== "free" && (
+                          <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 capitalize">
+                            {user.subscription_plan}
+                          </span>
+                        )}
                       </div>
-                      {/* Masked info in collapsed state */}
                       <p className="mt-0.5 text-xs text-slate-600">
                         {isRevealed ? (user.institution?.name ?? "No institution") : MASK}
                         {" · "}
@@ -333,7 +398,6 @@ export default function AdminUsersPage() {
                       </p>
                     </div>
 
-                    {/* Joined date + expand */}
                     <div className="flex shrink-0 items-center gap-3">
                       <p className="hidden text-xs text-slate-600 sm:block">
                         {new Date(user.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}
@@ -415,8 +479,76 @@ export default function AdminUsersPage() {
                         </div>
                       )}
 
+                      {/* ── Grant subscription picker ── */}
+                      {grantPickerId === user.id ? (
+                        <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.04] p-4 space-y-3">
+                          <p className="text-xs font-semibold text-slate-400">Grant subscription plan</p>
+
+                          {/* Plan selector */}
+                          <div className="space-y-1.5">
+                            {SUBSCRIPTION_PLANS.map((p) => (
+                              <label key={p.value} className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2.5 transition
+                                ${selectedPlan === p.value ? "border-indigo-500/40 bg-indigo-500/10" : "border-white/[0.05] bg-white/[0.02] hover:border-white/10"}`}>
+                                <input
+                                  type="radio"
+                                  name={`plan-${user.id}`}
+                                  value={p.value}
+                                  checked={selectedPlan === p.value}
+                                  onChange={() => setSelectedPlan(p.value)}
+                                  className="mt-0.5 accent-indigo-500"
+                                />
+                                <div>
+                                  <p className="text-xs font-semibold text-slate-200">{p.label}</p>
+                                  <p className="text-[11px] text-slate-600">{p.desc}</p>
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+
+                          {/* Note */}
+                          <input
+                            value={grantNote}
+                            onChange={(e) => setGrantNote(e.target.value)}
+                            placeholder="Note (optional) e.g. Payvessel was down"
+                            className="w-full rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-xs text-slate-300 placeholder:text-slate-600 outline-none focus:border-indigo-500/40"
+                          />
+
+                          {/* Actions */}
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => grantSubscription(user)}
+                              disabled={isGranting}
+                              className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50"
+                            >
+                              {isGranting
+                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                : <Sparkles className="h-3.5 w-3.5" />
+                              }
+                              {isGranting ? "Granting…" : "Grant access"}
+                            </button>
+                            <button
+                              onClick={() => { setGrantPickerId(null); setGrantNote(""); }}
+                              className="rounded-xl border border-white/[0.06] px-4 py-2 text-xs font-medium text-slate-500 transition hover:text-slate-300"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+
                       {/* Action buttons */}
                       <div className="flex flex-wrap gap-2 pt-1">
+
+                        {/* Grant subscription button */}
+                        {grantPickerId !== user.id && (
+                          <button
+                            onClick={() => { setGrantPickerId(user.id); setSelectedPlan("pro"); setGrantNote(""); }}
+                            disabled={isActioning || isGranting}
+                            className="flex items-center gap-2 rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-2.5 text-xs font-semibold text-indigo-400 transition hover:bg-indigo-500/20 disabled:opacity-50"
+                          >
+                            <Sparkles className="h-3.5 w-3.5" /> Grant subscription
+                          </button>
+                        )}
 
                         {/* Admin role picker or remove admin */}
                         {user.is_admin ? (
@@ -509,7 +641,7 @@ export default function AdminUsersPage() {
         )}
       </div>
 
-      {/* Confirm: suspend */}
+      {/* Confirm dialogs */}
       <ConfirmDialog
         open={pendingAction?.type === "suspend"}
         title={pendingAction?.type === "suspend" && pendingAction.user.suspended ? "Unsuspend this user?" : "Suspend this user?"}
@@ -527,7 +659,6 @@ export default function AdminUsersPage() {
         onCancel={() => setPendingAction(null)}
       />
 
-      {/* Confirm: admin toggle */}
       <ConfirmDialog
         open={pendingAction?.type === "admin"}
         title={pendingAction?.type === "admin" && pendingAction.user.is_admin ? "Remove admin access?" : `Make admin as ${ADMIN_ROLES.find((r) => r.value === (pendingAction?.type === "admin" ? pendingAction.role : ""))?.label ?? ""}?`}
@@ -545,7 +676,6 @@ export default function AdminUsersPage() {
         onCancel={() => { setPendingAction(null); setRolePickerId(null); }}
       />
 
-      {/* Confirm: delete */}
       <ConfirmDialog
         open={pendingAction?.type === "delete"}
         title="Delete this account?"
