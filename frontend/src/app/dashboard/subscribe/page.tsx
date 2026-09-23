@@ -93,10 +93,8 @@ function SubscribePageInner() {
         setCurrentPlan(profile?.subscription_plan ?? "free");
       } catch (err) {
         console.error("[loadUser error]", err);
-        // Don't leave the user stuck — show the page anyway
         setUser({ name: "Student", email: "", phone: "" });
       } finally {
-        // Always runs — even if session fetch or profile fetch throws
         setLoadingUser(false);
       }
     }
@@ -112,7 +110,6 @@ function SubscribePageInner() {
       const { data: { session } } = await supabase.auth.refreshSession();
       if (!session) { router.push("/auth/login"); return; }
 
-      // Step 1: create pending transaction on backend
       const initiateRes = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`,
         {
@@ -132,7 +129,6 @@ function SubscribePageInner() {
 
       const { reference: ourReference } = await initiateRes.json();
 
-      // Step 2: open PayVessel checkout
       const init = Checkout({
         api_key: process.env.NEXT_PUBLIC_PAYVESSEL_API_KEY!,
       });
@@ -159,11 +155,9 @@ function SubscribePageInner() {
             const { data: { session: s } } = await supabase.auth.refreshSession();
             if (!s) {
               setError("Session expired. Please log in again.");
-              setProcessingPlan(null);
               return;
             }
 
-            // Extract PayVessel's reference from the callback data
             const pvData = data as Record<string, unknown> | null;
             const pvReference =
               (pvData?.reference as string) ||
@@ -174,7 +168,6 @@ function SubscribePageInner() {
 
             console.log("[PayVessel] using reference for verify:", pvReference);
 
-            // ← hits Next.js proxy route, NOT FastAPI directly
             const res = await fetch("/api/payments/verify", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -186,15 +179,17 @@ function SubscribePageInner() {
             });
 
             if (res.ok) {
+              setCurrentPlan(planSlug); // optimistic update
               router.push("/dashboard/subscribe?subscribed=true");
+              return; // finally still runs, clears spinner before unmount
             } else {
               const err = await res.json();
               setError(err.detail ?? "Verification failed. Please contact support.");
-              setProcessingPlan(null);
             }
           } catch {
             setError("Network error during verification. Please contact support.");
-            setProcessingPlan(null);
+          } finally {
+            setProcessingPlan(null); // always clears — success, error, or throw
           }
         },
         onError: (err: unknown) => {
