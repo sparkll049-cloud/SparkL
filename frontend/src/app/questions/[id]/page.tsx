@@ -61,6 +61,10 @@ interface QuestionLimits {
 
 const LOW_QUALITY_THRESHOLD = 0.5;
 
+// Free plan hard caps
+const FREE_READ_CAP = 10;
+const FREE_PRACTICE_CAP = 5;
+
 // ── Read mode: single question (no interaction) ───────────────────────────────
 function ReadQuestion({ q, index }: { q: ProcessedQuestion; index: number }) {
   return (
@@ -78,7 +82,6 @@ function ReadQuestion({ q, index }: { q: ProcessedQuestion; index: number }) {
         {q.question_text}
       </p>
 
-      {/* Show MCQ options in read mode — no interaction */}
       {q.question_type === "mcq" && (
         <div className="mt-4 space-y-2">
           {(["a", "b", "c", "d"] as const).map((opt) => {
@@ -224,13 +227,9 @@ function PracticeQuestion({ q, index }: { q: ProcessedQuestion; index: number })
 function FreeGateBanner({
   hiddenCount,
   mode,
-  readPercent,
-  practiceMax,
 }: {
   hiddenCount: number;
   mode: "read" | "practice";
-  readPercent: number;
-  practiceMax: number | null;
 }) {
   return (
     <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-6 text-center">
@@ -244,8 +243,8 @@ function FreeGateBanner({
       </p>
       <p className="mt-1 text-xs text-slate-500">
         {mode === "read"
-          ? `You're seeing ${readPercent}% of questions on the free plan`
-          : `Practice mode is limited to ${practiceMax ?? 5} questions on the free plan`}
+          ? `Free plan shows only the first ${FREE_READ_CAP} questions`
+          : `Free plan limits practice to ${FREE_PRACTICE_CAP} questions`}
       </p>
       <Link
         href="/dashboard/subscribe"
@@ -380,14 +379,11 @@ export default function QuestionDetailPage() {
   const mcqCount = processedQuestions.filter(q => q.question_type === "mcq").length;
   const theoryCount = processedQuestions.filter(q => q.question_type === "theory").length;
 
-  // Compute visible slice based on free tier limits
+  // Hard caps for free users
   const visibleQuestions = !limits.is_paid
     ? mode === "practice"
-      ? processedQuestions.slice(0, limits.practice_mode_max ?? 5)
-      : processedQuestions.slice(
-          0,
-          Math.max(1, Math.floor(processedQuestions.length * (limits.read_mode_percent / 100)))
-        )
+      ? processedQuestions.slice(0, FREE_PRACTICE_CAP)
+      : processedQuestions.slice(0, FREE_READ_CAP)
     : processedQuestions;
 
   const hiddenCount = processedQuestions.length - visibleQuestions.length;
@@ -449,6 +445,11 @@ export default function QuestionDetailPage() {
                   <div className="flex items-center gap-1.5 text-xs text-slate-400">
                     <BookOpen size={12} />
                     {processedQuestions.length} questions
+                    {!limits.is_paid && (
+                      <span className="text-slate-600">
+                        · {mode === "read" ? FREE_READ_CAP : FREE_PRACTICE_CAP} visible
+                      </span>
+                    )}
                   </div>
                   {mcqCount > 0 && (
                     <div className="flex items-center gap-1.5 text-xs text-slate-400">
@@ -515,8 +516,6 @@ export default function QuestionDetailPage() {
                 <FreeGateBanner
                   hiddenCount={hiddenCount}
                   mode={mode}
-                  readPercent={limits.read_mode_percent}
-                  practiceMax={limits.practice_mode_max}
                 />
               )}
             </>
@@ -579,4 +578,3 @@ export default function QuestionDetailPage() {
     </div>
   );
 }
-
