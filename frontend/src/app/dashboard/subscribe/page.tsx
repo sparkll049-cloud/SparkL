@@ -123,7 +123,7 @@ function SubscribePageInner() {
 
       // Step 2: open Payvessel checkout
       const init = Checkout({
-        api_key: process.env.NEXT_PUBLIC_PAYVESSEL_KEY!,
+        api_key: process.env.NEXT_PUBLIC_PAYVESSEL_API_KEY!,
       });
 
       await init.initializeCheckout({
