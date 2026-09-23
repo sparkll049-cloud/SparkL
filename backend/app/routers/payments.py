@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api/payments", tags=["payments"])
 
 PAYVESSEL_SECRET_KEY = os.getenv("PAYVESSEL_SECRET_KEY")
 PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/api/service/request/transaction/verify"
+ADMIN_SECRET = os.getenv("ADMIN_SECRET")  # set this in Render env vars
 
 
 # ─── POST /api/payments/initiate ────────────────────────────────────────────
@@ -109,9 +110,17 @@ async def verify_payment(
                 json={"transactionRef": reference},
                 timeout=15.0,
             )
-        # Print BEFORE .json() so we always see raw response in logs
         print(f"[PayVessel raw] status={pv_res.status_code} body={pv_res.text}")
+
+        if pv_res.status_code == 503:
+            raise HTTPException(
+                status_code=503,
+                detail="Payment gateway is temporarily unavailable. Your payment was received — please contact support to activate your subscription."
+            )
+
         pv_data = pv_res.json()
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[PayVessel error] {str(e)}")
         print(f"[PayVessel body] {pv_res.text if pv_res else 'NO RESPONSE - connection failed'}")
@@ -141,11 +150,77 @@ async def verify_payment(
         }).eq("gateway_ref", reference).execute()
         raise HTTPException(status_code=400, detail="Amount mismatch")
 
-    # ── Fetch plan details ───────────────────────────────────────────────────
+    return await _activate_subscription(user_id, txn["plan"], pv_data=pv_data, reference=reference)
+
+
+# ─── POST /api/payments/admin/grant ─────────────────────────────────────────
+# Admin manually grants a subscription to a user
+# Protected by ADMIN_SECRET env var
+
+@router.post("/admin/grant")
+async def admin_grant_subscription(body: dict):
+    # Verify admin secret
+    secret = body.get("secret")
+    if not secret or secret != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    target_user_id = body.get("user_id")
+    plan_slug = body.get("plan")
+    note = body.get("note", "Manual grant by admin")
+
+    if not target_user_id or not plan_slug:
+        raise HTTPException(status_code=400, detail="user_id and plan are required")
+
+    if plan_slug == "free":
+        raise HTTPException(status_code=400, detail="Cannot manually grant free plan")
+
+    # Verify plan exists
+    plan_res = (
+        supabase.table("subscription_plans")
+        .select("plan, display_name, duration_days")
+        .eq("plan", plan_slug)
+        .eq("is_active", True)
+        .maybe_single()
+        .execute()
+    )
+    if not plan_res.data:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    # Create a manual transaction record
+    reference = f"MANUAL-{uuid4().hex[:12].upper()}"
+    supabase.table("payment_transactions").insert({
+        "user_id": target_user_id,
+        "plan": plan_slug,
+        "gateway": "payvessel",
+        "gateway_ref": reference,
+        "amount_kobo": 0,
+        "currency": "NGN",
+        "status": "pending",
+    }).execute()
+
+    result = await _activate_subscription(
+        target_user_id,
+        plan_slug,
+        pv_data={"manual_grant": True, "note": note},
+        reference=reference,
+    )
+
+    print(f"[Admin grant] user={target_user_id} plan={plan_slug} note={note}")
+    return {**result, "note": note}
+
+
+# ─── Shared subscription activation logic ───────────────────────────────────
+
+async def _activate_subscription(
+    user_id: str,
+    plan_slug: str,
+    pv_data: dict,
+    reference: str,
+) -> dict:
     plan_res = (
         supabase.table("subscription_plans")
         .select("duration_days, display_name")
-        .eq("plan", txn["plan"])
+        .eq("plan", plan_slug)
         .maybe_single()
         .execute()
     )
@@ -157,7 +232,6 @@ async def verify_payment(
     expires_at = now + timedelta(days=plan["duration_days"])
     expires_iso = expires_at.isoformat()
 
-    # ── Upsert subscription ──────────────────────────────────────────────────
     existing_sub_res = (
         supabase.table("subscriptions")
         .select("id, expires_at")
@@ -183,7 +257,7 @@ async def verify_payment(
         expires_iso = expires_at.isoformat()
 
         supabase.table("subscriptions").update({
-            "plan": txn["plan"],
+            "plan": plan_slug,
             "status": "active",
             "expires_at": expires_iso,
             "auto_renew": True,
@@ -193,7 +267,7 @@ async def verify_payment(
     else:
         sub_res = supabase.table("subscriptions").insert({
             "user_id": user_id,
-            "plan": txn["plan"],
+            "plan": plan_slug,
             "status": "active",
             "started_at": now.isoformat(),
             "expires_at": expires_iso,
@@ -202,7 +276,6 @@ async def verify_payment(
 
         subscription_id = (sub_res.data or [{}])[0].get("id")
 
-    # ── Update transaction + profile in parallel ─────────────────────────────
     def update_transaction():
         supabase.table("payment_transactions").update({
             "status": "success",
@@ -213,7 +286,7 @@ async def verify_payment(
 
     def update_profile():
         supabase.table("profiles").update({
-            "subscription_plan": txn["plan"],
+            "subscription_plan": plan_slug,
             "subscription_expic": expires_iso,
         }).eq("id", user_id).execute()
 
@@ -223,7 +296,7 @@ async def verify_payment(
 
     return {
         "status": "success",
-        "plan": txn["plan"],
+        "plan": plan_slug,
         "display_name": plan["display_name"],
         "expires_at": expires_iso,
     }
