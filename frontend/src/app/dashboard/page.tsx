@@ -562,10 +562,9 @@ export default function DashboardHomePage() {
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  // Global search
-  const { results: searchResults, searching: searchLoading } = useLocalCourseSearch(query, courses);
 
   const courses         = data?.profile.courses ?? [];
+    const { results: searchResults, searching: searchLoading } = useLocalCourseSearch(query, courses);
   const recentQuestions = data?.recent_questions ?? [];
   const stats           = data?.stats ?? { questions_in_courses: 0, my_uploads: 0 };
   const streak          = data?.profile.streak ?? 0;
