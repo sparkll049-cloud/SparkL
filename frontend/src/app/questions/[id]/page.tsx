@@ -468,27 +468,21 @@ export default function QuestionDetailPage() {
               {isGated && <FreeGateBanner hiddenCount={hiddenCount} mode={mode} />}
             </>
           ) : (
-            /* Fallback — not yet processed, show raw extracted text */
-            <div className="rounded-2xl border border-white/[0.06] bg-[#0D1230] p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <FileText size={16} className="text-slate-500" />
-                <h2 className="text-sm font-semibold text-slate-400">Past Question</h2>
+            /* No processed questions yet — open the secure PDF viewer */
+            <div className="rounded-2xl border border-white/[0.06] bg-[#0D1230] p-8 text-center">
+              <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
+                <FileText size={20} className="text-blue-400" />
               </div>
-              {data.extracted_text ? (
-                <div className="space-y-1.5 text-sm leading-7 text-slate-400">
-                  {data.extracted_text
-                    .split(/\n+/)
-                    .map((line) => line.trim())
-                    .filter(Boolean)
-                    .map((line, i) => (
-                      <p key={i} className={/^\(?[a-z]\)|^\(?[ivx]+\)/i.test(line) ? "ml-4" : ""}>
-                        {line}
-                      </p>
-                    ))}
-                </div>
-              ) : (
-                <p className="text-sm text-slate-600">No content available for this paper yet.</p>
-              )}
+              <p className="text-sm font-semibold text-white">View the original document</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Practice questions are being prepared. Read the original paper below.
+              </p>
+              <button
+                onClick={() => setViewerOpen(true)}
+                className="mt-4 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition"
+              >
+                <Eye size={14} /> Open document
+              </button>
             </div>
           )}
         </div>
