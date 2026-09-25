@@ -12,36 +12,70 @@
 }
 
 :root {
-  /* Light mode */
-  --sp-bg:           #F0F2F8;
-  --sp-bg-card:      #FFFFFF;
-  --sp-bg-muted:     rgba(0, 0, 0, 0.03);
-  --sp-border:       rgba(0, 0, 0, 0.07);
-  --sp-border-hover: rgba(99, 102, 241, 0.35);
-  --sp-text:         #0F1117;
-  --sp-text-2:       rgba(15, 17, 23, 0.55);
-  --sp-text-3:       rgba(15, 17, 23, 0.30);
-  --sp-header-bg:    rgba(240, 242, 248, 0.90);
-  --sp-input-bg:     rgba(0, 0, 0, 0.04);
-  --sp-search-popup: #FFFFFF;
+  /* ── Light mode ── */
+  --sp-bg:              #F0F2F8;
+  --sp-bg-card:         #FFFFFF;
+  --sp-bg-muted:        rgba(0,0,0,0.04);
+  --sp-border:          rgba(0,0,0,0.09);
+  --sp-border-hover:    rgba(99,102,241,0.40);
+  --sp-text:            #0F1117;
+  --sp-text-2:          rgba(15,17,23,0.65);
+  --sp-text-3:          rgba(15,17,23,0.38);
+  --sp-header-bg:       rgba(240,242,248,0.92);
+  --sp-input-bg:        rgba(0,0,0,0.05);
+  --sp-search-popup:    #FFFFFF;
+  --sp-ring-track:      rgba(0,0,0,0.08);
+  --sp-bone:            rgba(0,0,0,0.07);
+  --sp-bone-shine:      rgba(0,0,0,0.04);
+
+  /* course card backgrounds — enough contrast on white */
+  --sp-course-indigo-bg:  rgba(99,102,241,0.10);
+  --sp-course-indigo-bdr: rgba(99,102,241,0.28);
+  --sp-course-teal-bg:    rgba(20,184,166,0.10);
+  --sp-course-teal-bdr:   rgba(20,184,166,0.28);
+  --sp-course-violet-bg:  rgba(139,92,246,0.10);
+  --sp-course-violet-bdr: rgba(139,92,246,0.28);
+  --sp-course-sky-bg:     rgba(14,165,233,0.10);
+  --sp-course-sky-bdr:    rgba(14,165,233,0.28);
+  --sp-course-rose-bg:    rgba(244,63,94,0.10);
+  --sp-course-rose-bdr:   rgba(244,63,94,0.28);
+  --sp-course-amber-bg:   rgba(245,158,11,0.10);
+  --sp-course-amber-bdr:  rgba(245,158,11,0.28);
 
   --background: var(--sp-bg);
   --foreground: var(--sp-text);
 }
 
 .dark {
-  /* Dark mode */
-  --sp-bg:           #060B18;
-  --sp-bg-card:      rgba(255, 255, 255, 0.02);
-  --sp-bg-muted:     rgba(255, 255, 255, 0.03);
-  --sp-border:       rgba(255, 255, 255, 0.05);
-  --sp-border-hover: rgba(99, 102, 241, 0.40);
-  --sp-text:         #FFFFFF;
-  --sp-text-2:       rgba(255, 255, 255, 0.55);
-  --sp-text-3:       rgba(255, 255, 255, 0.25);
-  --sp-header-bg:    rgba(6, 11, 24, 0.90);
-  --sp-input-bg:     rgba(255, 255, 255, 0.04);
-  --sp-search-popup: #0D1225;
+  /* ── Dark mode ── */
+  --sp-bg:              #060B18;
+  --sp-bg-card:         rgba(255,255,255,0.02);
+  --sp-bg-muted:        rgba(255,255,255,0.03);
+  --sp-border:          rgba(255,255,255,0.06);
+  --sp-border-hover:    rgba(99,102,241,0.45);
+  --sp-text:            #FFFFFF;
+  --sp-text-2:          rgba(255,255,255,0.60);
+  --sp-text-3:          rgba(255,255,255,0.28);
+  --sp-header-bg:       rgba(6,11,24,0.92);
+  --sp-input-bg:        rgba(255,255,255,0.05);
+  --sp-search-popup:    #0D1225;
+  --sp-ring-track:      rgba(255,255,255,0.07);
+  --sp-bone:            rgba(255,255,255,0.05);
+  --sp-bone-shine:      rgba(255,255,255,0.07);
+
+  /* course card backgrounds dark */
+  --sp-course-indigo-bg:  rgba(99,102,241,0.09);
+  --sp-course-indigo-bdr: rgba(99,102,241,0.22);
+  --sp-course-teal-bg:    rgba(20,184,166,0.09);
+  --sp-course-teal-bdr:   rgba(20,184,166,0.22);
+  --sp-course-violet-bg:  rgba(139,92,246,0.09);
+  --sp-course-violet-bdr: rgba(139,92,246,0.22);
+  --sp-course-sky-bg:     rgba(14,165,233,0.09);
+  --sp-course-sky-bdr:    rgba(14,165,233,0.22);
+  --sp-course-rose-bg:    rgba(244,63,94,0.09);
+  --sp-course-rose-bdr:   rgba(244,63,94,0.22);
+  --sp-course-amber-bg:   rgba(245,158,11,0.09);
+  --sp-course-amber-bdr:  rgba(245,158,11,0.22);
 
   --background: var(--sp-bg);
   --foreground: var(--sp-text);
@@ -56,8 +90,24 @@ body {
   transition: background 0.3s ease, color 0.3s ease;
 }
 
+/* ── Skeleton shimmer ── */
+.sp-bone {
+  background: var(--sp-bone);
+  border-radius: 0.5rem;
+  position: relative;
+  overflow: hidden;
+}
+.sp-bone::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, var(--sp-bone-shine), transparent);
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
 @keyframes fadeUp {
-  from { opacity: 0; transform: translateY(24px); }
+  from { opacity: 0; transform: translateY(20px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
@@ -65,4 +115,4 @@ body {
   to { transform: translateX(300%); }
 }
 
-.fade-up { animation: fadeUp 0.8s ease; }
+.fade-up { animation: fadeUp 0.5s ease both; }
