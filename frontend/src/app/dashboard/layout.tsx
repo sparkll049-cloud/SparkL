@@ -24,6 +24,7 @@ const navItems = [
   { href: "/dashboard/courses", label: "My Courses", icon: BookOpen        },
   { href: "/dashboard/upload",  label: "Upload",     icon: Upload          },
   { href: "/dashboard/profile", label: "Profile",    icon: User            },
+    { href: "/community", label: "Community",    icon: community            },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
