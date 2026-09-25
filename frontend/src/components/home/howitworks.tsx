@@ -54,10 +54,7 @@ export default function HowItWorks() {
           transition={{ duration: 0.5, ease: "easeOut" }}
           className="mx-auto max-w-2xl text-center"
         >
-          <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-3.5 py-1.5 text-xs font-bold uppercase tracking-[0.12em] text-blue-600">
-            Simple by design
-          </span>
-
+      
           <h2 className="mt-4 text-4xl font-black tracking-[-0.04em] text-slate-950 sm:text-5xl">
             How It Works
           </h2>
