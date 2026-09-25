@@ -12,7 +12,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { createClient } from "@/utils/supabase/client";
+import {v zzx  createClient } from "@/utils/supabase/client";
 
 interface SecureViewerProps {
   questionId: string;
