@@ -75,6 +75,8 @@ export default function QuestionDetailsPage() {
   const [loadingQuestion, setLoadingQuestion] = useState(true);
   const [loadingAnswers, setLoadingAnswers] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const [solutionText, setSolutionText] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -88,9 +90,30 @@ export default function QuestionDetailsPage() {
     return session?.access_token ?? null;
   }
 
+  // Load avatar + current user id
+  useEffect(() => {
+    async function loadAvatar() {
+      const token = await getToken();
+      if (!token) return;
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) setCurrentUserId(user.id);
+
+        const r = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (r.ok) {
+          const j = await r.json();
+          if (j.avatar_url) setAvatarUrl(j.avatar_url);
+        }
+      } catch {}
+    }
+    loadAvatar();
+  }, []);
+
   // Load question
   useEffect(() => {
-    // Skip seed questions
     if (questionId.startsWith("seed-")) {
       setNotFound(true);
       setLoadingQuestion(false);
@@ -164,8 +187,6 @@ export default function QuestionDetailsPage() {
       setAnswers((prev) => [...prev, newAnswer]);
       setSolutionText("");
       setSelectedFile(null);
-
-      // Mark question as answered locally
       setQuestion((prev) => prev ? { ...prev, is_answered: true } : prev);
     } catch (err) {
       setPostError(err instanceof Error ? err.message : "Something went wrong.");
@@ -179,7 +200,6 @@ export default function QuestionDetailsPage() {
     const token = await getToken();
     if (!token) { setVotingId(null); return; }
 
-    // Optimistic update
     setAnswers((prev) =>
       prev.map((a) =>
         a.id === answerId
@@ -198,7 +218,6 @@ export default function QuestionDetailsPage() {
         { method: "POST", headers: { Authorization: `Bearer ${token}` } }
       );
     } catch {
-      // Revert
       setAnswers((prev) =>
         prev.map((a) =>
           a.id === answerId
@@ -249,6 +268,8 @@ export default function QuestionDetailsPage() {
   }
 
   if (!question) return null;
+
+  const isMyQuestion = currentUserId && question.asker?.id === currentUserId;
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -301,9 +322,17 @@ export default function QuestionDetailsPage() {
           {/* Metadata */}
           <div className="mt-6 flex flex-wrap items-center gap-5 border-t border-slate-100 pt-5 text-xs text-slate-400">
             <span className="flex items-center gap-1.5">
-              <div className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[9px] font-bold text-slate-600">
-                {getInitials(question.asker?.full_name)}
-              </div>
+              {isMyQuestion && avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt="Profile"
+                  className="h-5 w-5 rounded-full object-cover"
+                />
+              ) : (
+                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[9px] font-bold text-slate-600">
+                  {getInitials(question.asker?.full_name)}
+                </div>
+              )}
               {question.asker?.full_name ?? "Anonymous"}
             </span>
             <span className="flex items-center gap-1.5">
@@ -362,69 +391,80 @@ export default function QuestionDetailsPage() {
             </div>
           ) : (
             <div className="mt-5 space-y-4">
-              {answers.map((answer) => (
-                <article
-                  key={answer.id}
-                  className={`rounded-2xl border bg-white p-6 ${
-                    answer.is_accepted
-                      ? "border-emerald-200 bg-emerald-50/30"
-                      : "border-slate-200"
-                  }`}
-                >
-                  {answer.is_accepted && (
-                    <div className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                      <CheckCircle2 size={12} />
-                      Accepted Answer
-                    </div>
-                  )}
+              {answers.map((answer) => {
+                const isMyAnswer = currentUserId && answer.answerer?.id === currentUserId;
+                return (
+                  <article
+                    key={answer.id}
+                    className={`rounded-2xl border bg-white p-6 ${
+                      answer.is_accepted
+                        ? "border-emerald-200 bg-emerald-50/30"
+                        : "border-slate-200"
+                    }`}
+                  >
+                    {answer.is_accepted && (
+                      <div className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                        <CheckCircle2 size={12} />
+                        Accepted Answer
+                      </div>
+                    )}
 
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700">
-                      {getInitials(answer.answerer?.full_name)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-slate-900">
-                        {answer.answerer?.full_name ?? "Anonymous"}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        {timeAgo(answer.created_at)}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setOpenMenuId(openMenuId === answer.id ? null : answer.id)}
-                      className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-50 hover:text-slate-700"
-                    >
-                      <MoreHorizontal size={18} />
-                    </button>
-                  </div>
-
-                  <p className="mt-5 text-sm leading-7 text-slate-600">
-                    {answer.content}
-                  </p>
-
-                  <div className="mt-5 border-t border-slate-100 pt-4">
-                    <button
-                      type="button"
-                      onClick={() => toggleHelpful(answer.id)}
-                      disabled={votingId === answer.id}
-                      className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition disabled:opacity-50 ${
-                        answer.voted_helpful
-                          ? "bg-emerald-50 text-emerald-700"
-                          : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
-                      }`}
-                    >
-                      {votingId === answer.id ? (
-                        <Loader2 size={14} className="animate-spin" />
+                    <div className="flex items-center gap-3">
+                      {isMyAnswer && avatarUrl ? (
+                        <img
+                          src={avatarUrl}
+                          alt="Profile"
+                          className="h-10 w-10 shrink-0 rounded-full object-cover"
+                        />
                       ) : (
-                        <ThumbsUp size={14} />
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700">
+                          {getInitials(answer.answerer?.full_name)}
+                        </div>
                       )}
-                      Helpful
-                      {answer.helpful_count > 0 && ` · ${answer.helpful_count}`}
-                    </button>
-                  </div>
-                </article>
-              ))}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {answer.answerer?.full_name ?? "Anonymous"}
+                        </p>
+                        <p className="text-xs text-slate-400">
+                          {timeAgo(answer.created_at)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setOpenMenuId(openMenuId === answer.id ? null : answer.id)}
+                        className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-50 hover:text-slate-700"
+                      >
+                        <MoreHorizontal size={18} />
+                      </button>
+                    </div>
+
+                    <p className="mt-5 text-sm leading-7 text-slate-600">
+                      {answer.content}
+                    </p>
+
+                    <div className="mt-5 border-t border-slate-100 pt-4">
+                      <button
+                        type="button"
+                        onClick={() => toggleHelpful(answer.id)}
+                        disabled={votingId === answer.id}
+                        className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition disabled:opacity-50 ${
+                          answer.voted_helpful
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+                        }`}
+                      >
+                        {votingId === answer.id ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <ThumbsUp size={14} />
+                        )}
+                        Helpful
+                        {answer.helpful_count > 0 && ` · ${answer.helpful_count}`}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
         </section>
@@ -434,17 +474,32 @@ export default function QuestionDetailsPage() {
           id="answer"
           className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 sm:p-7"
         >
-          <h2 className="text-lg font-semibold text-slate-950">Share your answer</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Help this student by explaining how you would approach this question.
-          </p>
+          <div className="flex items-center gap-3 mb-4">
+            {avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt="Profile"
+                className="h-9 w-9 rounded-full object-cover shrink-0"
+              />
+            ) : (
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-[11px] font-black text-white">
+                ?
+              </div>
+            )}
+            <div>
+              <h2 className="text-lg font-semibold text-slate-950">Share your answer</h2>
+              <p className="text-sm text-slate-500">
+                Help this student by explaining how you would approach this question.
+              </p>
+            </div>
+          </div>
 
           <textarea
             value={solutionText}
             onChange={(e) => setSolutionText(e.target.value)}
             placeholder="Write your answer or explanation..."
             rows={6}
-            className="mt-5 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+            className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
           />
 
           {postError && (
