@@ -76,7 +76,6 @@ async function fireStreakUpdate(
 }
 
 // ── Global course search hook ─────────────────────────────────────────────────
-
 function useGlobalCourseSearch(
   query: string,
   supabase: ReturnType<typeof createClient>,
@@ -87,31 +86,34 @@ function useGlobalCourseSearch(
   useEffect(() => {
     if (!query.trim()) { setResults([]); return; }
 
-    const controller = new AbortController();
+    let cancelled = false;
+
     const timer = setTimeout(async () => {
       setSearching(true);
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
+        if (!session || cancelled) return;
         const res = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/api/courses/search?q=${encodeURIComponent(query.trim())}&limit=10`,
           {
             headers: { Authorization: `Bearer ${session.access_token}` },
-            signal: controller.signal,
           },
         );
-        if (res.ok) {
+        if (res.ok && !cancelled) {
           const json = await res.json();
           setResults(json.courses ?? []);
         }
-      } catch (e) {
-        if ((e as Error).name !== "AbortError") setResults([]);
+      } catch {
+        if (!cancelled) setResults([]);
       } finally {
-        setSearching(false);
+        if (!cancelled) setSearching(false);
       }
     }, 300);
 
-    return () => { controller.abort(); clearTimeout(timer); };
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [query, supabase]);
 
   return { results, searching };
