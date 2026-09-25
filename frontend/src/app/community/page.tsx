@@ -19,7 +19,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
-
+const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+const [firstName, setFirstName] = useState("");
 type Question = {
   id: string;
   institution: { id: string; name: string } | null;
@@ -139,36 +140,53 @@ export default function CommunityPage() {
   // Load sidebar data (institutions + user profile)
   useEffect(() => {
     async function loadSidebar() {
-      const token = await getToken();
-      if (!token) return;
+  const token = await getToken();
+  if (!token) return;
 
-      // User's institution from profile
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("institution_id, institution:institutions(id, name)")
-    .eq("id", user.id)
-    .single();
+  // User's institution from profile
+  const { data: { user } } = await supabase.auth.getUser();
+  if (user) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("institution_id, institution:institutions(id, name)")
+      .eq("id", user.id)
+      .single();
 
-  if (profile?.institution) {
-    const inst = Array.isArray(profile.institution)
-      ? profile.institution[0]
-      : profile.institution;
-    if (inst) setUserInstitution(inst as { id: string; name: string });
-  }
-}
-
-      // All institutions for filter dropdown
-      const { data: instData } = await supabase
-        .from("institutions")
-        .select("id, name")
-        .order("name");
-      setInstitutions(instData ?? []);
+    if (profile?.institution) {
+      const inst = Array.isArray(profile.institution)
+        ? profile.institution[0]
+        : profile.institution;
+      if (inst) setUserInstitution(inst as { id: string; name: string });
     }
-    loadSidebar();
-  }, []);
 
+    // ── ADD THIS ──
+    const { data: profile2 } = await supabase
+      .from("profiles")
+      .select("full_name")
+      .eq("id", user.id)
+      .single();
+    if (profile2?.full_name) setFirstName(profile2.full_name.split(" ")[0]);
+
+    try {
+      const r = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (r.ok) {
+        const j = await r.json();
+        if (j.avatar_url) setAvatarUrl(j.avatar_url);
+      }
+    } catch {}
+    // ── END ADD ──
+  }
+
+  // All institutions for filter dropdown
+  const { data: instData } = await supabase
+    .from("institutions")
+    .select("id, name")
+    .order("name");
+  setInstitutions(instData ?? []);
+}
   async function loadQuestions() {
     setLoading(true);
     setError("");
