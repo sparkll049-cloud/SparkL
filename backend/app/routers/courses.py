@@ -20,41 +20,91 @@ async def search_courses(
 ):
     """
     Full-text course search across ALL departments and institutions.
-    Returns id, name, department name, institution name.
-    No courses table has a code column so we omit it.
+    Searches both name and code columns (code may not exist — handled gracefully).
+    Also tries a spaceless variant so 'mth211' matches 'MTH 211'.
     """
-    if not q.strip():
+    raw = q.strip()
+    if not raw:
         return {"courses": []}
 
-    pattern = f"%{q.strip()}%"
+    # Build two patterns: original and spaceless version
+    # e.g. "mth211" → also try "mth 211" isn't needed; instead we search
+    # the DB with both the raw pattern and a spaced variant
+    pattern = f"%{raw}%"
 
-    # courses → departments → institutions (two hops via foreign keys)
-    res = (
-        supabase.table("courses")
-        .select(
-            "id, name, "
-            "department:departments(name, institution:institutions(name))"
+    seen_ids: set[str] = {}
+    courses: list[dict] = []
+
+    def fetch(pat: str) -> list[dict]:
+        res = (
+            supabase.table("courses")
+            .select(
+                "id, name, code, "
+                "department:departments(name, institution:institutions(name))"
+            )
+            .ilike("name", pat)
+            .order("name")
+            .limit(limit)
+            .execute()
         )
-        .ilike("name", pattern)
-        .order("name")
-        .limit(limit)
-        .execute()
-    )
+        return res.data or []
 
-    rows = res.data or []
+    def fetch_by_code(pat: str) -> list[dict]:
+        try:
+            res = (
+                supabase.table("courses")
+                .select(
+                    "id, name, code, "
+                    "department:departments(name, institution:institutions(name))"
+                )
+                .ilike("code", pat)
+                .order("name")
+                .limit(limit)
+                .execute()
+            )
+            return res.data or []
+        except Exception:
+            # code column may not exist — silently skip
+            return []
 
-    courses = []
-    for r in rows:
-        dept = r.get("department") or {}
-        inst = dept.get("institution") or {}
-        courses.append({
-            "id":          r["id"],
-            "name":        r["name"],
-            "department":  dept.get("name"),
-            "institution": inst.get("name"),
-        })
+    # If query looks like a course code (letters+digits, no spaces),
+    # also try inserting a space after the letters: "mth211" → "mth 211"
+    import re
+    spaced_pattern = None
+    code_like = re.match(r'^([a-zA-Z]+)(\d+.*)$', raw)
+    if code_like:
+        spaced = f"{code_like.group(1)} {code_like.group(2)}"
+        spaced_pattern = f"%{spaced}%"
 
-    return {"courses": courses}
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        name_future  = pool.submit(fetch, pattern)
+        code_future  = pool.submit(fetch_by_code, pattern)
+        spaced_future = pool.submit(fetch, spaced_pattern) if spaced_pattern else None
+
+        name_rows  = name_future.result()
+        code_rows  = code_future.result()
+        spaced_rows = spaced_future.result() if spaced_future else []
+
+    def normalize(rows: list[dict]):
+        for r in rows:
+            if r["id"] in seen_ids:
+                continue
+            seen_ids[r["id"]] = True
+            dept = r.get("department") or {}
+            inst = dept.get("institution") or {}
+            courses.append({
+                "id":          r["id"],
+                "name":        r["name"],
+                "code":        r.get("code"),
+                "department":  dept.get("name"),
+                "institution": inst.get("name"),
+            })
+
+    normalize(name_rows)
+    normalize(code_rows)
+    normalize(spaced_rows)
+
+    return {"courses": courses[:limit]}
 
 
 # ── List courses (enrolled) ────────────────────────────────────────────────────
@@ -79,7 +129,7 @@ async def list_courses(user_id: str = Depends(get_current_user)):
 
     courses_res = (
         supabase.table("courses")
-        .select("id, name")
+        .select("id, name, code")
         .eq("department_id", department_id)
         .order("name")
         .execute()
@@ -129,6 +179,7 @@ async def list_courses(user_id: str = Depends(get_current_user)):
         {
             "id":             c["id"],
             "name":           c["name"],
+            "code":           c.get("code"),
             "question_count": counts.get(c["id"], 0),
             "selected":       c["id"] in selected_ids,
         }
@@ -141,6 +192,7 @@ async def list_courses(user_id: str = Depends(get_current_user)):
             {
                 "id":             c["id"],
                 "name":           c["name"],
+                "code":           c.get("code"),
                 "locked":         True,
                 "question_count": None,
                 "selected":       c["id"] in selected_ids,
@@ -152,11 +204,11 @@ async def list_courses(user_id: str = Depends(get_current_user)):
         locked   = []
 
     return {
-        "courses":       unlocked,
+        "courses":        unlocked,
         "locked_courses": locked,
-        "department_id": department_id,
-        "is_paid":       limits["is_paid"],
-        "plan":          "free" if not limits["is_paid"] else "paid",
+        "department_id":  department_id,
+        "is_paid":        limits["is_paid"],
+        "plan":           "free" if not limits["is_paid"] else "paid",
     }
 
 
@@ -187,7 +239,7 @@ async def get_course_detail(
     try:
         course_res = (
             supabase.table("courses")
-            .select("id, name, department:departments(id, name)")
+            .select("id, name, code, department:departments(id, name)")
             .eq("id", course_id)
             .maybe_single()
             .execute()
@@ -212,7 +264,7 @@ async def get_course_detail(
     def get_questions():
         return (
             supabase.table("past_questions")
-            .select("id, title, year, created_at")
+            .select("id, title, year, extracted_text, semester_id, created_at")
             .eq("course_id", course_id)
             .eq("status", "approved")
             .order("created_at", desc=True)
