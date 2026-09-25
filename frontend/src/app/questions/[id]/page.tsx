@@ -10,7 +10,6 @@ import {
   Loader2,
   AlertCircle,
   Eye,
-  X,
   ChevronDown,
   BookOpen,
   Zap,
@@ -21,7 +20,7 @@ import {
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
-import PdfViewer from "@/components/PdfViewer";
+import SecureViewer from "@/components/SecureViewer";
 
 interface QuestionDetail {
   id: string;
@@ -60,10 +59,8 @@ interface QuestionLimits {
 }
 
 const LOW_QUALITY_THRESHOLD = 0.5;
-
-// Free plan hard caps
-const FREE_READ_CAP = 10;
-const FREE_PRACTICE_CAP = 5;
+const FREE_READ_CAP         = 10;
+const FREE_PRACTICE_CAP     = 5;
 
 // ── Read mode: single question (no interaction) ───────────────────────────────
 function ReadQuestion({ q, index }: { q: ProcessedQuestion; index: number }) {
@@ -77,11 +74,9 @@ function ReadQuestion({ q, index }: { q: ProcessedQuestion; index: number }) {
           <span className="text-[10px] text-slate-600 ml-auto">{q.marks} marks</span>
         )}
       </div>
-
       <p className="text-sm text-slate-200 leading-7 whitespace-pre-wrap">
         {q.question_text}
       </p>
-
       {q.question_type === "mcq" && (
         <div className="mt-4 space-y-2">
           {(["a", "b", "c", "d"] as const).map((opt) => {
@@ -137,7 +132,6 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
           </button>
         );
       })}
-
       {!revealed ? (
         <button
           onClick={() => setRevealed(true)}
@@ -165,7 +159,6 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
 // ── Practice mode: Theory with model answer toggle ───────────────────────────
 function PracticeTheory({ q }: { q: ProcessedQuestion }) {
   const [showAnswer, setShowAnswer] = useState(false);
-
   return (
     <div className="space-y-3">
       <button
@@ -175,7 +168,6 @@ function PracticeTheory({ q }: { q: ProcessedQuestion }) {
         <ChevronDown size={14} className={`transition-transform ${showAnswer ? "rotate-180" : ""}`} />
         {showAnswer ? "Hide Model Answer" : "Show Model Answer"}
       </button>
-
       {showAnswer && q.model_answer && (
         <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
           <p className="text-xs font-semibold text-emerald-400 mb-2">Model Answer</p>
@@ -210,11 +202,9 @@ function PracticeQuestion({ q, index }: { q: ProcessedQuestion; index: number })
           <span className="text-[10px] text-slate-600 ml-auto">{q.marks} marks</span>
         )}
       </div>
-
       <p className="text-sm text-slate-200 leading-7 whitespace-pre-wrap mb-4">
         {q.question_text}
       </p>
-
       {q.question_type === "mcq"
         ? <PracticeMCQ q={q} />
         : <PracticeTheory q={q} />
@@ -224,13 +214,7 @@ function PracticeQuestion({ q, index }: { q: ProcessedQuestion; index: number })
 }
 
 // ── Free gate banner ──────────────────────────────────────────────────────────
-function FreeGateBanner({
-  hiddenCount,
-  mode,
-}: {
-  hiddenCount: number;
-  mode: "read" | "practice";
-}) {
+function FreeGateBanner({ hiddenCount, mode }: { hiddenCount: number; mode: "read" | "practice" }) {
   return (
     <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-6 text-center">
       <div className="flex justify-center mb-3">
@@ -260,29 +244,26 @@ function FreeGateBanner({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function QuestionDetailPage() {
-  const supabase = createClient();
-  const router = useRouter();
-  const params = useParams();
+  const supabase   = createClient();
+  const router     = useRouter();
+  const params     = useParams();
   const questionId = params?.id as string;
 
-  const [data, setData] = useState<QuestionDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [data, setData]         = useState<QuestionDetail | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState("");
 
   const [processedQuestions, setProcessedQuestions] = useState<ProcessedQuestion[]>([]);
-  const [questionsLoading, setQuestionsLoading] = useState(false);
+  const [questionsLoading, setQuestionsLoading]     = useState(false);
 
   const [limits, setLimits] = useState<QuestionLimits>({
-    is_paid: true, // default true to avoid flash of locked content
-    read_mode_percent: 100,
-    practice_mode_max: null,
+    is_paid:            true,
+    read_mode_percent:  100,
+    practice_mode_max:  null,
   });
 
-  const [mode, setMode] = useState<"read" | "practice">("read");
-
-  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
-  const [viewerLoading, setViewerLoading] = useState(false);
-  const [viewerError, setViewerError] = useState("");
+  const [mode, setMode]             = useState<"read" | "practice">("read");
+  const [viewerOpen, setViewerOpen] = useState(false);   // ← replaces viewerUrl
 
   useEffect(() => {
     if (!questionId) return;
@@ -305,15 +286,15 @@ export default function QuestionDetailPage() {
         ]);
 
         if (detailRes.status === 404) throw new Error("This past question wasn't found.");
-        if (!detailRes.ok) throw new Error("Failed to load this past question.");
+        if (!detailRes.ok)            throw new Error("Failed to load this past question.");
         setData(await detailRes.json());
 
         if (limitsRes.ok) {
-          const limitsData = await limitsRes.json();
+          const d = await limitsRes.json();
           setLimits({
-            is_paid: limitsData.is_paid ?? false,
-            read_mode_percent: limitsData.read_mode_percent ?? 100,
-            practice_mode_max: limitsData.practice_mode_max ?? null,
+            is_paid:            d.is_paid            ?? false,
+            read_mode_percent:  d.read_mode_percent  ?? 100,
+            practice_mode_max:  d.practice_mode_max  ?? null,
           });
         }
 
@@ -339,25 +320,7 @@ export default function QuestionDetailPage() {
     finally { setQuestionsLoading(false); }
   }
 
-  async function openViewer() {
-    setViewerError("");
-    setViewerLoading(true);
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) { router.push("/auth/login"); return; }
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}/file-url`,
-        { headers: { Authorization: `Bearer ${session.access_token}` } }
-      );
-      if (!res.ok) throw new Error("Couldn't open the file.");
-      setViewerUrl((await res.json()).url);
-    } catch (err) {
-      setViewerError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setViewerLoading(false);
-    }
-  }
-
+  // ── Loading / error states ──────────────────────────────────────────
   if (loading) return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
@@ -373,13 +336,12 @@ export default function QuestionDetailPage() {
     </div>
   );
 
-  const isImage = data.mime_type?.startsWith("image/");
-  const isLowQuality = data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
-  const hasProcessed = processedQuestions.length > 0;
-  const mcqCount = processedQuestions.filter(q => q.question_type === "mcq").length;
-  const theoryCount = processedQuestions.filter(q => q.question_type === "theory").length;
+  const isLowQuality  = data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
+  const hasProcessed  = processedQuestions.length > 0;
+  const mcqCount      = processedQuestions.filter(q => q.question_type === "mcq").length;
+  const theoryCount   = processedQuestions.filter(q => q.question_type === "theory").length;
+  const isPdf         = data.mime_type?.startsWith("application/pdf");
 
-  // Hard caps for free users
   const visibleQuestions = !limits.is_paid
     ? mode === "practice"
       ? processedQuestions.slice(0, FREE_PRACTICE_CAP)
@@ -387,7 +349,7 @@ export default function QuestionDetailPage() {
     : processedQuestions;
 
   const hiddenCount = processedQuestions.length - visibleQuestions.length;
-  const isGated = !limits.is_paid && hiddenCount > 0;
+  const isGated     = !limits.is_paid && hiddenCount > 0;
 
   return (
     <div className="min-h-screen bg-[#07091A] px-4 py-8 sm:px-6">
@@ -401,7 +363,7 @@ export default function QuestionDetailPage() {
           <ArrowLeft size={15} /> Back
         </Link>
 
-        {/* Header */}
+        {/* Header card */}
         <div className="mt-4 rounded-2xl border border-white/[0.06] bg-[#0D1230] p-5">
           <div className="flex items-start gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-500/10">
@@ -415,17 +377,18 @@ export default function QuestionDetailPage() {
                 {data.year ? ` · ${data.year}` : ""}
               </p>
             </div>
-            <button
-              onClick={openViewer}
-              disabled={viewerLoading}
-              className="ml-auto flex shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-white/[0.08] disabled:opacity-60 transition"
-            >
-              {viewerLoading ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}
-              View file
-            </button>
-          </div>
 
-          {viewerError && <p className="mt-3 text-xs text-red-400">{viewerError}</p>}
+            {/* View file button — only for PDFs */}
+            {isPdf && (
+              <button
+                onClick={() => setViewerOpen(true)}
+                className="ml-auto flex shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-white/[0.08] transition"
+              >
+                <Eye size={13} />
+                View file
+              </button>
+            )}
+          </div>
 
           {isLowQuality && (
             <div className="mt-4 flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
@@ -440,7 +403,6 @@ export default function QuestionDetailPage() {
           {hasProcessed && (
             <div className="mt-4 border-t border-white/[0.05] pt-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                {/* Stats */}
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="flex items-center gap-1.5 text-xs text-slate-400">
                     <BookOpen size={12} />
@@ -465,27 +427,23 @@ export default function QuestionDetailPage() {
                   )}
                 </div>
 
-                {/* Mode toggle */}
                 {mode === "read" ? (
                   <button
                     onClick={() => setMode("practice")}
                     className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-500"
                   >
-                    <Play size={13} />
-                    Start Practice
+                    <Play size={13} /> Start Practice
                   </button>
                 ) : (
                   <button
                     onClick={() => setMode("read")}
                     className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/[0.08]"
                   >
-                    <RotateCcw size={13} />
-                    Back to Reading
+                    <RotateCcw size={13} /> Back to Reading
                   </button>
                 )}
               </div>
 
-              {/* Mode label */}
               <p className="mt-2 text-xs text-slate-600">
                 {mode === "read"
                   ? "Reading mode — answers hidden. Tap Start Practice to test yourself."
@@ -504,20 +462,10 @@ export default function QuestionDetailPage() {
           ) : hasProcessed ? (
             <>
               {mode === "read"
-                ? visibleQuestions.map((q, i) => (
-                    <ReadQuestion key={q.id} q={q} index={i} />
-                  ))
-                : visibleQuestions.map((q, i) => (
-                    <PracticeQuestion key={q.id} q={q} index={i} />
-                  ))
+                ? visibleQuestions.map((q, i) => <ReadQuestion key={q.id} q={q} index={i} />)
+                : visibleQuestions.map((q, i) => <PracticeQuestion key={q.id} q={q} index={i} />)
               }
-
-              {isGated && (
-                <FreeGateBanner
-                  hiddenCount={hiddenCount}
-                  mode={mode}
-                />
-              )}
+              {isGated && <FreeGateBanner hiddenCount={hiddenCount} mode={mode} />}
             </>
           ) : (
             /* Fallback — not yet processed, show raw extracted text */
@@ -547,33 +495,13 @@ export default function QuestionDetailPage() {
 
       </div>
 
-      {/* Viewer modal */}
-      {viewerUrl && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
-          onClick={() => setViewerUrl(null)}
-        >
-          <button
-            onClick={() => setViewerUrl(null)}
-            className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
-          >
-            <X size={18} />
-          </button>
-          {isImage ? (
-            <img
-              src={viewerUrl}
-              alt={data.title}
-              draggable={false}
-              onContextMenu={(e) => e.preventDefault()}
-              className="max-h-full max-w-full select-none rounded-lg"
-              onClick={(e) => e.stopPropagation()}
-            />
-          ) : (
-            <div onClick={(e) => e.stopPropagation()}>
-              <PdfViewer url={viewerUrl} />
-            </div>
-          )}
-        </div>
+      {/* ── Secure viewer — full screen, no raw PDF URL ── */}
+      {viewerOpen && (
+        <SecureViewer
+          questionId={questionId}
+          onClose={() => setViewerOpen(false)}
+          isPaid={limits.is_paid}
+        />
       )}
     </div>
   );
