@@ -1,70 +1,126 @@
+"use client";
+
+import { motion } from "framer-motion";
+import {
+  ArrowRight,
+  BookOpen,
+  FileQuestion,
+  MessageCircleQuestion,
+  UserPlus,
+} from "lucide-react";
+
+const steps = [
+  {
+    number: "01",
+    title: "Create your account",
+    description: "Set up your student profile and get started with SparkL.",
+    icon: UserPlus,
+  },
+  {
+    number: "02",
+    title: "Find what you need",
+    description: "Explore past questions, courses, and academic resources.",
+    icon: FileQuestion,
+  },
+  {
+    number: "03",
+    title: "Ask & learn",
+    description: "Ask questions, share solutions, and learn with other students.",
+    icon: MessageCircleQuestion,
+  },
+  {
+    number: "04",
+    title: "Keep improving",
+    description: "Practice consistently and build confidence in your courses.",
+    icon: BookOpen,
+  },
+];
+
 export default function HowItWorks() {
-  const steps = [
-    {
-      step: "01",
-      title: "Create your free account",
-      description:
-        "Sign up in under a minute — no payment needed. Just your school email and you're in.",
-    },
-    {
-      step: "02",
-      title: "Pick your department",
-      description:
-        "Select your department and level. We surface the exact past questions that match your courses.",
-    },
-    {
-      step: "03",
-      title: "Study smarter, not harder",
-      description:
-        "Practice real exam questions, see answers with explanations, and track what you've covered.",
-    },
-    {
-      step: "04",
-      title: "Walk into exams confident",
-      description:
-        "Students who use SparkL consistently report higher scores. Now it's your turn.",
-    },
-  ];
-
   return (
-    <section id="how-it-works" className="bg-[#060B1F] py-24 border-t border-white/10">
-      <div className="mx-auto max-w-7xl px-6 lg:px-12">
+    <section className="relative overflow-hidden bg-[#f8f9ff] py-16 sm:py-20 lg:py-24">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-gradient-to-r from-transparent via-blue-100 to-transparent" />
+        <div className="absolute -left-32 bottom-0 h-64 w-64 rounded-full bg-blue-100/40 blur-3xl" />
+        <div className="absolute -right-32 top-20 h-64 w-64 rounded-full bg-indigo-100/40 blur-3xl" />
+      </div>
 
-        <div className="mb-16">
-          <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-3">
+      <div className="relative mx-auto max-w-7xl px-5 sm:px-8 lg:px-10">
+        {/* Section heading */}
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, amount: 0.4 }}
+          transition={{ duration: 0.5, ease: "easeOut" }}
+          className="mx-auto max-w-2xl text-center"
+        >
+          <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-3.5 py-1.5 text-xs font-bold uppercase tracking-[0.12em] text-blue-600">
             Simple by design
-          </p>
-          <h2 className="text-4xl font-extrabold text-white md:text-5xl max-w-lg">
-            How SparkL works
+          </span>
+
+          <h2 className="mt-4 text-4xl font-black tracking-[-0.04em] text-slate-950 sm:text-5xl">
+            How It Works
           </h2>
-        </div>
 
-        <div className="grid gap-0 md:grid-cols-4">
-          {steps.map((step, index) => (
-            <div key={step.step} className="relative">
-              {/* Connector line */}
-              {index < steps.length - 1 && (
-                <div className="hidden md:block absolute top-8 left-[calc(50%+2rem)] right-0 h-px bg-white/10" />
-              )}
+          <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-slate-500 sm:text-lg">
+            Everything you need to make studying more focused, connected, and
+            productive.
+          </p>
+        </motion.div>
 
-              <div className="pr-8">
-                <div className="flex items-center gap-4 mb-5">
-                  <span className="text-5xl font-black text-white/10 leading-none">
-                    {step.step}
-                  </span>
-                  <div className="h-px flex-1 bg-white/10 md:hidden" />
-                </div>
+        {/* Steps */}
+        <div className="relative mt-12 lg:mt-14">
+          {/* Connecting line — desktop */}
+          <div className="pointer-events-none absolute left-[12.5%] right-[12.5%] top-[2.35rem] hidden h-px bg-gradient-to-r from-blue-100 via-blue-200 to-blue-100 lg:block" />
 
-                <h3 className="text-lg font-bold text-white mb-3">
-                  {step.title}
-                </h3>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:gap-5">
+            {steps.map((step, index) => {
+              const Icon = step.icon;
 
-                <p className="text-sm leading-7 text-slate-400">
-                  {step.description}
-                </p>
-              </div>
-            </div>
-          ))}
+              return (
+                <motion.div
+                  key={step.number}
+                  initial={{ opacity: 0, y: 18 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true, amount: 0.25 }}
+                  transition={{
+                    duration: 0.45,
+                    delay: index * 0.08,
+                    ease: "easeOut",
+                  }}
+                  className="group relative rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_10px_35px_-25px_rgba(15,23,42,0.25)] transition-all duration-300 hover:-translate-y-1 hover:border-blue-100 hover:shadow-[0_18px_40px_-25px_rgba(37,99,235,0.25)] sm:p-6"
+                >
+                  {/* Number + icon */}
+                  <div className="relative z-10 flex items-center justify-between">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 shadow-sm shadow-blue-600/20">
+                      <Icon className="h-5 w-5 text-white" />
+                    </div>
+
+                    <span className="text-sm font-black tracking-widest text-blue-100 transition-colors duration-300 group-hover:text-blue-200">
+                      {step.number}
+                    </span>
+                  </div>
+
+                  {/* Content */}
+                  <div className="mt-7">
+                    <h3 className="text-lg font-extrabold tracking-[-0.02em] text-slate-950">
+                      {step.title}
+                    </h3>
+
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      {step.description}
+                    </p>
+                  </div>
+
+                  {/* Bottom action cue */}
+                  <div className="mt-5 flex items-center gap-1.5 text-xs font-bold text-blue-600 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+                    <span>Step {index + 1}</span>
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </section>
