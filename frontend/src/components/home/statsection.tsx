@@ -1,26 +1,79 @@
-export default function StatsSection() {
-  const stats = [
-    { value: "10K+", label: "Active Students", sub: "and growing every week" },
-    { value: "3K+", label: "Past Questions", sub: "verified and organized" },
-    { value: "50+", label: "Departments", sub: "across Yabatech" },
-    { value: "98%", label: "Pass Rate", sub: "among active users" },
-  ];
+"use client";
 
+import { motion } from "framer-motion";
+import { BookOpen, FileQuestion, GraduationCap, MessageCircleQuestion } from "lucide-react";
+
+const stats = [
+  {
+    value: "12K+",
+    label: "Students",
+    icon: GraduationCap,
+  },
+  {
+    value: "8.5K+",
+    label: "Past Questions",
+    icon: FileQuestion,
+  },
+  {
+    value: "3.2K+",
+    label: "Questions Asked",
+    icon: MessageCircleQuestion,
+  },
+  {
+    value: "500+",
+    label: "Courses",
+    icon: BookOpen,
+  },
+];
+
+export default function StatsSection() {
   return (
-    <section className="bg-[#0D1333] border-t border-white/10">
-      <div className="mx-auto max-w-7xl px-6 lg:px-12 py-16">
-        <div className="grid grid-cols-2 gap-px md:grid-cols-4 bg-white/10 rounded-2xl overflow-hidden">
-          {stats.map((stat) => (
-            <div
-              key={stat.label}
-              className="bg-[#0D1333] px-8 py-10 text-center"
-            >
-              <p className="text-4xl font-extrabold text-white">{stat.value}</p>
-              <p className="mt-2 text-sm font-semibold text-blue-400">{stat.label}</p>
-              <p className="mt-1 text-xs text-slate-500">{stat.sub}</p>
-            </div>
-          ))}
-        </div>
+    <section className="bg-white px-5 py-8 sm:px-8 sm:py-10 lg:px-10">
+      <div className="mx-auto max-w-6xl">
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, amount: 0.4 }}
+          transition={{ duration: 0.5, ease: "easeOut" }}
+          className="grid grid-cols-2 overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-[0_8px_35px_-25px_rgba(15,23,42,0.25)] sm:grid-cols-4"
+        >
+          {stats.map((stat, index) => {
+            const Icon = stat.icon;
+
+            return (
+              <div
+                key={stat.label}
+                className={`flex items-center gap-3 px-5 py-5 sm:justify-center sm:px-6 sm:py-6 ${
+                  index === 1
+                    ? "border-l border-slate-100"
+                    : ""
+                } ${
+                  index === 2
+                    ? "border-t border-slate-100 sm:border-l sm:border-t-0"
+                    : ""
+                } ${
+                  index === 3
+                    ? "border-l border-t border-slate-100 sm:border-t-0"
+                    : ""
+                }`}
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50">
+                  <Icon className="h-4 w-4 text-blue-600" />
+                </div>
+
+                <div>
+                  <p className="text-xl font-extrabold tracking-[-0.03em] text-blue-600 sm:text-2xl">
+                    {stat.value}
+                  </p>
+
+                  <p className="mt-0.5 text-xs font-medium text-slate-500 sm:text-sm">
+                    {stat.label}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </motion.div>
       </div>
     </section>
   );
