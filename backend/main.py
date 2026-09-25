@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import (
     dashboard,
     admin_lookup,
+    avatar,
     admin_questions,
     admin_users,
     admin_overview,
@@ -56,6 +57,7 @@ app.include_router(questions.router)
 app.include_router(answers.router)
 app.include_router(community.router)
 app.include_router(payments_router)
+app.include_router(avatar.router)
 @app.get("/")
 def root():
     return {"status": "SparkL API running"}
