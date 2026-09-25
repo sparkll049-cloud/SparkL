@@ -1,119 +1,152 @@
-import {
-  Laptop,
-  Wrench,
-  Briefcase,
-  Megaphone,
-  FlaskConical,
-  BookOpen,
-  ArrowRight,
-} from "lucide-react";
+"use client";
+
 import Link from "next/link";
+import { motion } from "framer-motion";
+import {
+  ArrowRight,
+  BookOpen,
+  Briefcase,
+  FlaskConical,
+  Laptop,
+  Megaphone,
+  Wrench,
+} from "lucide-react";
 
 const topics = [
   {
     icon: Laptop,
     title: "Computer Science",
-    description: "Programming, software engineering, and computer-related courses.",
-    questions: "500+ questions",
-    color: "bg-blue-500/10 text-blue-400",
-    border: "hover:border-blue-500/50",
+    description:
+      "Programming, software engineering, databases, and computing fundamentals.",
   },
   {
     icon: Wrench,
     title: "Engineering",
-    description: "Technical subjects and engineering fundamentals.",
-    questions: "800+ questions",
-    color: "bg-emerald-500/10 text-emerald-400",
-    border: "hover:border-emerald-500/50",
+    description:
+      "Engineering mathematics, technical courses, design, and core fundamentals.",
   },
   {
     icon: Briefcase,
-    title: "Business Courses",
-    description: "Accounting, management, and business administration.",
-    questions: "600+ questions",
-    color: "bg-violet-500/10 text-violet-400",
-    border: "hover:border-violet-500/50",
+    title: "Business",
+    description:
+      "Accounting, management, economics, entrepreneurship, and administration.",
   },
   {
     icon: Megaphone,
     title: "Mass Communication",
-    description: "Media studies, journalism, and communication courses.",
-    questions: "400+ questions",
-    color: "bg-pink-500/10 text-pink-400",
-    border: "hover:border-pink-500/50",
+    description:
+      "Media studies, journalism, public relations, and communication courses.",
   },
   {
     icon: FlaskConical,
     title: "Science & Technology",
-    description: "Applied sciences and technology foundations.",
-    questions: "700+ questions",
-    color: "bg-amber-500/10 text-amber-400",
-    border: "hover:border-amber-500/50",
+    description:
+      "Applied sciences, technology, laboratory work, and scientific foundations.",
   },
   {
     icon: BookOpen,
     title: "General Studies",
-    description: "GST, entrepreneurship, and cross-departmental courses.",
-    questions: "300+ questions",
-    color: "bg-cyan-500/10 text-cyan-400",
-    border: "hover:border-cyan-500/50",
+    description:
+      "GST, entrepreneurship, communication, and other cross-departmental courses.",
   },
 ];
 
 export default function TrendingTopics() {
   return (
-    <section id="courses" className="bg-[#0A0F2C] py-24">
-      <div className="mx-auto max-w-7xl px-6 lg:px-12">
+    <section id="courses" className="relative overflow-hidden bg-white py-20 sm:py-24">
+      {/* Subtle background detail */}
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-gradient-to-r from-transparent via-blue-100 to-transparent" />
+        <div className="absolute -left-40 top-40 h-72 w-72 rounded-full bg-blue-50/70 blur-3xl" />
+        <div className="absolute -right-40 bottom-10 h-72 w-72 rounded-full bg-indigo-50/60 blur-3xl" />
+      </div>
 
+      <div className="relative mx-auto max-w-7xl px-5 sm:px-8 lg:px-10">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 mb-14">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-3">
-              What We Cover
-            </p>
-            <h2 className="text-4xl font-extrabold text-white md:text-5xl">
-              Your Department,<br />Your Questions
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, amount: 0.35 }}
+          transition={{ duration: 0.5, ease: "easeOut" }}
+          className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between"
+        >
+          <div className="max-w-2xl">
+            <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-3.5 py-1.5 text-xs font-bold uppercase tracking-[0.12em] text-blue-600">
+              Explore by subject
+            </span>
+
+            <h2 className="mt-4 text-4xl font-black tracking-[-0.04em] text-slate-950 sm:text-5xl">
+              Find your course.
+              <br />
+              <span className="text-blue-600">Find what matters.</span>
             </h2>
+
+            <p className="mt-4 max-w-xl text-base leading-7 text-slate-500 sm:text-lg">
+              Explore academic resources across departments and find past
+              questions relevant to what you study.
+            </p>
           </div>
+
           <Link
             href="/dashboard/courses"
-            className="flex items-center gap-2 text-sm font-medium text-slate-400 hover:text-white transition-colors whitespace-nowrap"
+            className="group inline-flex w-fit shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700 transition-all duration-300 hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
           >
-            View all courses <ArrowRight size={16} />
+            View all courses
+            <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
           </Link>
-        </div>
+        </motion.div>
 
-        {/* Cards */}
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {topics.map((topic) => {
+        {/* Topic grid */}
+        <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {topics.map((topic, index) => {
             const Icon = topic.icon;
+
             return (
-              <div
+              <motion.div
                 key={topic.title}
-                className={`group relative rounded-xl border border-white/10 bg-white/[0.03] p-6 transition-all duration-300 hover:-translate-y-1 hover:bg-white/[0.06] ${topic.border} cursor-pointer`}
+                initial={{ opacity: 0, y: 16 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, amount: 0.2 }}
+                transition={{
+                  duration: 0.45,
+                  delay: index * 0.06,
+                  ease: "easeOut",
+                }}
               >
-                <div className={`inline-flex h-12 w-12 items-center justify-center rounded-lg ${topic.color} mb-5`}>
-                  <Icon size={22} />
-                </div>
+                <Link
+                  href="/dashboard/courses"
+                  className="group flex h-full flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_10px_35px_-28px_rgba(15,23,42,0.35)] transition-all duration-300 hover:-translate-y-1 hover:border-blue-100 hover:shadow-[0_20px_45px_-28px_rgba(37,99,235,0.3)] sm:p-6"
+                >
+                  {/* Icon + arrow */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 transition-colors duration-300 group-hover:bg-blue-600">
+                      <Icon className="h-5 w-5 text-blue-600 transition-colors duration-300 group-hover:text-white" />
+                    </div>
 
-                <h3 className="text-lg font-semibold text-white mb-2">
-                  {topic.title}
-                </h3>
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-100 text-slate-300 transition-all duration-300 group-hover:border-blue-100 group-hover:text-blue-600">
+                      <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-0.5" />
+                    </div>
+                  </div>
 
-                <p className="text-sm leading-6 text-slate-400 mb-5">
-                  {topic.description}
-                </p>
+                  {/* Content */}
+                  <div className="mt-7">
+                    <h3 className="text-lg font-extrabold tracking-[-0.02em] text-slate-950">
+                      {topic.title}
+                    </h3>
 
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-500 bg-white/5 rounded-full px-3 py-1">
-                    {topic.questions}
-                  </span>
-                  <ArrowRight
-                    size={16}
-                    className="text-slate-600 group-hover:text-white group-hover:translate-x-1 transition-all"
-                  />
-                </div>
-              </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      {topic.description}
+                    </p>
+                  </div>
+
+                  {/* Bottom label */}
+                  <div className="mt-auto pt-6">
+                    <span className="text-xs font-bold text-blue-600">
+                      Explore resources
+                    </span>
+                  </div>
+                </Link>
+              </motion.div>
             );
           })}
         </div>
