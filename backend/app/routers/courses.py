@@ -1,6 +1,7 @@
+# routers/courses.py
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.auth import get_current_user
 from app.supabase_client import supabase
@@ -8,6 +9,55 @@ from app.services.subscription import get_user_limits
 
 router = APIRouter(prefix="/api/courses", tags=["courses"])
 
+
+# ── Global course search ───────────────────────────────────────────────────────
+
+@router.get("/search")
+async def search_courses(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=30),
+    user_id: str = Depends(get_current_user),
+):
+    """
+    Full-text course search across ALL departments and institutions.
+    Returns id, name, department name, institution name.
+    No courses table has a code column so we omit it.
+    """
+    if not q.strip():
+        return {"courses": []}
+
+    pattern = f"%{q.strip()}%"
+
+    # courses → departments → institutions (two hops via foreign keys)
+    res = (
+        supabase.table("courses")
+        .select(
+            "id, name, "
+            "department:departments(name, institution:institutions(name))"
+        )
+        .ilike("name", pattern)
+        .order("name")
+        .limit(limit)
+        .execute()
+    )
+
+    rows = res.data or []
+
+    courses = []
+    for r in rows:
+        dept = r.get("department") or {}
+        inst = dept.get("institution") or {}
+        courses.append({
+            "id":          r["id"],
+            "name":        r["name"],
+            "department":  dept.get("name"),
+            "institution": inst.get("name"),
+        })
+
+    return {"courses": courses}
+
+
+# ── List courses (enrolled) ────────────────────────────────────────────────────
 
 @router.get("")
 async def list_courses(user_id: str = Depends(get_current_user)):
@@ -34,7 +84,7 @@ async def list_courses(user_id: str = Depends(get_current_user)):
         .order("name")
         .execute()
     )
-    courses = courses_res.data or []
+    courses    = courses_res.data or []
     course_ids = [c["id"] for c in courses]
 
     def get_question_counts():
@@ -59,15 +109,14 @@ async def list_courses(user_id: str = Depends(get_current_user)):
     def get_limits():
         return get_user_limits(user_id)
 
-    # All three are independent — run concurrently
     with ThreadPoolExecutor(max_workers=3) as pool:
-        pq_future = pool.submit(get_question_counts)
-        uc_future = pool.submit(get_selected)
+        pq_future     = pool.submit(get_question_counts)
+        uc_future     = pool.submit(get_selected)
         limits_future = pool.submit(get_limits)
 
-        pq_res = pq_future.result()
-        uc_res = uc_future.result()
-        limits = limits_future.result()
+        pq_res  = pq_future.result()
+        uc_res  = uc_future.result()
+        limits  = limits_future.result()
 
     counts: dict[str, int] = {}
     if pq_res:
@@ -78,59 +127,57 @@ async def list_courses(user_id: str = Depends(get_current_user)):
 
     result = [
         {
-            "id": c["id"],
-            "name": c["name"],
+            "id":             c["id"],
+            "name":           c["name"],
             "question_count": counts.get(c["id"], 0),
-            "selected": c["id"] in selected_ids,
+            "selected":       c["id"] in selected_ids,
         }
         for c in courses
     ]
 
-    # Apply free tier course cap
     if not limits["is_paid"]:
         unlocked = result[:3]
-        locked = [
+        locked   = [
             {
-                "id": c["id"],
-                "name": c["name"],
-                "locked": True,
+                "id":             c["id"],
+                "name":           c["name"],
+                "locked":         True,
                 "question_count": None,
-                "selected": c["id"] in selected_ids,
+                "selected":       c["id"] in selected_ids,
             }
             for c in result[3:]
         ]
     else:
         unlocked = result
-        locked = []
+        locked   = []
 
     return {
-        "courses": unlocked,
+        "courses":       unlocked,
         "locked_courses": locked,
         "department_id": department_id,
-        "is_paid": limits["is_paid"],
-        "plan": "free" if not limits["is_paid"] else "paid",
+        "is_paid":       limits["is_paid"],
+        "plan":          "free" if not limits["is_paid"] else "paid",
     }
 
+
+# ── Course detail ──────────────────────────────────────────────────────────────
 
 @router.get("/{course_id}")
 async def get_course_detail(
     course_id: str,
     user_id: str = Depends(get_current_user),
 ):
-    # Get limits first — needed to gate access
     limits = get_user_limits(user_id)
 
-    # Free tier: check if this course is within their allowed 3
     if not limits["is_paid"]:
-        uc_check = (
+        uc_check    = (
             supabase.table("user_courses")
             .select("course_id")
             .eq("user_id", user_id)
             .execute()
         )
         all_user_courses = [r["course_id"] for r in (uc_check.data or [])]
-        allowed = all_user_courses[:3]
-
+        allowed          = all_user_courses[:3]
         if course_id not in allowed:
             raise HTTPException(
                 status_code=403,
@@ -183,27 +230,29 @@ async def get_course_detail(
         )
 
     with ThreadPoolExecutor(max_workers=3) as pool:
-        count_future = pool.submit(get_count)
+        count_future     = pool.submit(get_count)
         questions_future = pool.submit(get_questions)
-        selected_future = pool.submit(get_selected)
+        selected_future  = pool.submit(get_selected)
 
-        count_res = count_future.result()
+        count_res     = count_future.result()
         questions_res = questions_future.result()
-        uc_res = selected_future.result()
+        uc_res        = selected_future.result()
 
     question_count = count_res.count or 0
-    questions = questions_res.data or []
-    is_selected = len(uc_res.data or []) > 0
+    questions      = questions_res.data or []
+    is_selected    = len(uc_res.data or []) > 0
 
     return {
-        "course": course,
+        "course":         course,
         "question_count": question_count,
-        "questions": questions,
-        "is_selected": is_selected,
-        "is_paid": limits["is_paid"],
-        "plan": "free" if not limits["is_paid"] else "paid",
+        "questions":      questions,
+        "is_selected":    is_selected,
+        "is_paid":        limits["is_paid"],
+        "plan":           "free" if not limits["is_paid"] else "paid",
     }
 
+
+# ── Course questions ───────────────────────────────────────────────────────────
 
 @router.get("/{course_id}/questions")
 async def get_course_questions(
@@ -213,9 +262,8 @@ async def get_course_questions(
 ):
     limits = get_user_limits(user_id)
 
-    # Free tier: check course access
     if not limits["is_paid"]:
-        uc_res = (
+        uc_res  = (
             supabase.table("user_courses")
             .select("course_id")
             .eq("user_id", user_id)
@@ -228,7 +276,6 @@ async def get_course_questions(
                 detail="Upgrade your plan to access this course",
             )
 
-    # Fetch all approved questions for this course
     questions_res = (
         supabase.table("past_questions")
         .select("id, title, year, extracted_text, semester_id, created_at")
@@ -238,27 +285,25 @@ async def get_course_questions(
         .execute()
     )
     all_questions = questions_res.data or []
-    total = len(all_questions)
+    total         = len(all_questions)
 
     if not limits["is_paid"]:
         if mode == "practice":
-            # Max 5 questions
-            questions = all_questions[:limits["practice_mode_max"]]
+            questions = all_questions[: limits["practice_mode_max"]]
         else:
-            # Read mode: show 10%
-            limit = max(1, int(total * (limits["read_mode_percent"] / 100)))
-            questions = all_questions[:limit]
+            limit_n   = max(1, int(total * (limits["read_mode_percent"] / 100)))
+            questions = all_questions[:limit_n]
         is_limited = True
     else:
-        questions = all_questions
+        questions  = all_questions
         is_limited = False
 
     return {
-        "questions": questions,
-        "showing": len(questions),
-        "total": total,
+        "questions":  questions,
+        "showing":    len(questions),
+        "total":      total,
         "is_limited": is_limited,
-        "mode": mode,
-        "is_paid": limits["is_paid"],
-        "plan": "free" if not limits["is_paid"] else "paid",
+        "mode":       mode,
+        "is_paid":    limits["is_paid"],
+        "plan":       "free" if not limits["is_paid"] else "paid",
     }
