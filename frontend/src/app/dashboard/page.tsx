@@ -1005,7 +1005,7 @@ export default function DashboardHomePage() {
               </div>
               <p className="text-[11px] leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
                 Students who practice with past questions score{" "}
-                <span className="font-bold text-indigo-500">40% higher</span> on average. Try practice mode on any AI-processed paper.
+                <span className="font-bold text-indigo-500">40% higher</span> on average. Try practice mode now.
               </p>
             </div>
           </aside>
