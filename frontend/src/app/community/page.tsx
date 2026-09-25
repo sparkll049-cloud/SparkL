@@ -306,7 +306,7 @@ export default function CommunityPage() {
   return (
     <main className="min-h-screen bg-slate-50">
 
-      {/* ── Header ── */}
+      
 <div className="flex items-center gap-3">
   <Link
     href="/community/ask"
