@@ -8,9 +8,11 @@ import {
   GraduationCap, BookOpen, School, Layers, Upload,
   Loader2, Mail, Phone, Pencil, Check, X, LogOut,
   KeyRound, Eye, EyeOff, CheckCircle2, Crown, Sparkles,
-  ShieldCheck, Zap, Calendar,
+  ShieldCheck, Zap, Calendar, Camera,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Course { id: string; name: string; }
 interface Profile {
@@ -45,6 +47,8 @@ async function fetchDashboardSummary(
   return res.json();
 }
 
+// ── Sub-components ────────────────────────────────────────────────────────────
+
 function ProfileField({
   icon, label, value,
 }: {
@@ -64,51 +68,18 @@ function ProfileField({
   );
 }
 
-// ── Plan metadata ────────────────────────────────────────────────────────────
+// ── Plan metadata ─────────────────────────────────────────────────────────────
+
 type PlanKey = "free" | "trial" | "basic" | "pro" | "premium";
 
 const PLAN_META: Record<PlanKey, {
-  label: string;
-  color: string;
-  bg: string;
-  border: string;
-  icon: React.ReactNode;
+  label: string; color: string; bg: string; border: string; icon: React.ReactNode;
 }> = {
-  free: {
-    label: "Free",
-    color: "text-slate-400",
-    bg: "bg-slate-500/10",
-    border: "border-slate-500/20",
-    icon: <ShieldCheck size={15} />,
-  },
-  trial: {
-    label: "Trial",
-    color: "text-amber-400",
-    bg: "bg-amber-500/10",
-    border: "border-amber-500/20",
-    icon: <Zap size={15} />,
-  },
-  basic: {
-    label: "Basic",
-    color: "text-blue-400",
-    bg: "bg-blue-500/10",
-    border: "border-blue-500/20",
-    icon: <Sparkles size={15} />,
-  },
-  pro: {
-    label: "Pro",
-    color: "text-indigo-400",
-    bg: "bg-indigo-500/10",
-    border: "border-indigo-500/20",
-    icon: <Crown size={15} />,
-  },
-  premium: {
-    label: "Premium",
-    color: "text-violet-400",
-    bg: "bg-violet-500/10",
-    border: "border-violet-500/20",
-    icon: <Crown size={15} />,
-  },
+  free:    { label: "Free",    color: "text-slate-400",  bg: "bg-slate-500/10",  border: "border-slate-500/20",  icon: <ShieldCheck size={15} /> },
+  trial:   { label: "Trial",   color: "text-amber-400",  bg: "bg-amber-500/10",  border: "border-amber-500/20",  icon: <Zap size={15} /> },
+  basic:   { label: "Basic",   color: "text-blue-400",   bg: "bg-blue-500/10",   border: "border-blue-500/20",   icon: <Sparkles size={15} /> },
+  pro:     { label: "Pro",     color: "text-indigo-400", bg: "bg-indigo-500/10", border: "border-indigo-500/20", icon: <Crown size={15} /> },
+  premium: { label: "Premium", color: "text-violet-400", bg: "bg-violet-500/10", border: "border-violet-500/20", icon: <Crown size={15} /> },
 };
 
 function getPlanMeta(plan: string) {
@@ -118,9 +89,7 @@ function getPlanMeta(plan: string) {
 function formatExpiry(iso: string | null): string {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleDateString("en-NG", {
-      day: "numeric", month: "short", year: "numeric",
-    });
+    return new Date(iso).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" });
   } catch { return "—"; }
 }
 
@@ -131,28 +100,24 @@ function formatDownloads(val: number | null | undefined, isPaid: boolean): strin
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
+
 export default function ProfilePage() {
-  const supabase = createClient();
-  const router = useRouter();
-  const queryClient = useQueryClient();
+  const supabase     = createClient();
+  const router       = useRouter();
+  const queryClient  = useQueryClient();
   const [email, setEmail] = useState<string | null>(null);
 
-  // Dashboard data (profile + stats)
+  // ── Dashboard data ──────────────────────────────────────────────────────────
   const { data, isLoading: loading, error } = useQuery({
     queryKey: ["dashboard-summary"],
     queryFn: () => fetchDashboardSummary(supabase, router, setEmail),
   });
 
-  // Subscription status from API
+  // ── Subscription ────────────────────────────────────────────────────────────
   const [sub, setSub] = useState<{
-    plan: string;
-    effective_plan: string;
-    is_paid: boolean;
-    is_trial: boolean;
-    expires_at: string | null;
-    read_mode_percent: number;
-    practice_mode_max: number | null;
-    downloads_per_day: number | null;
+    plan: string; effective_plan: string; is_paid: boolean; is_trial: boolean;
+    expires_at: string | null; read_mode_percent: number;
+    practice_mode_max: number | null; downloads_per_day: number | null;
   } | null>(null);
   const [subLoading, setSubLoading] = useState(true);
 
@@ -167,7 +132,6 @@ export default function ProfilePage() {
         );
         if (res.ok) {
           const raw = await res.json();
-          // Normalise — API may not always return effective_plan
           setSub({
             plan:               raw.plan ?? "free",
             effective_plan:     raw.effective_plan ?? raw.plan ?? "free",
@@ -188,7 +152,62 @@ export default function ProfilePage() {
     loadSub();
   }, []);
 
-  // Identity editing
+  // ── Avatar ──────────────────────────────────────────────────────────────────
+  const [avatarUrl,       setAvatarUrl]       = useState<string | null>(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarError,     setAvatarError]     = useState("");
+
+  useEffect(() => {
+    async function loadAvatar() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`,
+          { headers: { Authorization: `Bearer ${session.access_token}` } }
+        );
+        if (res.ok) {
+          const json = await res.json();
+          if (json.avatar_url) setAvatarUrl(json.avatar_url);
+        }
+      } catch { /* silent */ }
+    }
+    loadAvatar();
+  }, []);
+
+  async function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setAvatarError("Image must be under 5 MB.");
+      return;
+    }
+    setUploadingAvatar(true);
+    setAvatarError("");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated.");
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/avatar`,
+        { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, body: form }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail ?? "Upload failed.");
+      }
+      const json = await res.json();
+      setAvatarUrl(json.avatar_url);
+    } catch (err) {
+      setAvatarError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploadingAvatar(false);
+      e.target.value = "";
+    }
+  }
+
+  // ── Identity editing ────────────────────────────────────────────────────────
   const [editingIdentity, setEditingIdentity] = useState(false);
   const [fullName,        setFullName]        = useState("");
   const [phone,           setPhone]           = useState("");
@@ -196,7 +215,7 @@ export default function ProfilePage() {
   const [identityError,   setIdentityError]   = useState("");
   const [identitySuccess, setIdentitySuccess] = useState(false);
 
-  // Password
+  // ── Password ────────────────────────────────────────────────────────────────
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [currentPassword,  setCurrentPassword]  = useState("");
   const [newPassword,      setNewPassword]      = useState("");
@@ -232,16 +251,14 @@ export default function ProfilePage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setIdentityError("Session expired."); setSavingIdentity(false); return; }
     const { error: updateError } = await supabase.from("profiles").update({
-      full_name: fullName.trim(),
-      phone: phone.trim() || null,
+      full_name:  fullName.trim(),
+      phone:      phone.trim() || null,
       updated_at: new Date().toISOString(),
     }).eq("id", user.id);
     setSavingIdentity(false);
     if (updateError) { setIdentityError(updateError.message); return; }
     queryClient.setQueryData(["dashboard-summary"], (prev: DashboardData | undefined) =>
-      prev
-        ? { ...prev, profile: { ...prev.profile, full_name: fullName.trim(), phone: phone.trim() || null } }
-        : prev
+      prev ? { ...prev, profile: { ...prev.profile, full_name: fullName.trim(), phone: phone.trim() || null } } : prev
     );
     setEditingIdentity(false);
     setIdentitySuccess(true);
@@ -252,20 +269,12 @@ export default function ProfilePage() {
     setPasswordError("");
     if (!currentPassword) { setPasswordError("Enter your current password first."); return; }
     if (newPassword.length < 8) { setPasswordError("New password must be at least 8 characters."); return; }
-    if (newPassword === currentPassword) { setPasswordError("New password must be different from your current one."); return; }
+    if (newPassword === currentPassword) { setPasswordError("New password must differ from current."); return; }
     if (newPassword !== confirmPassword) { setPasswordError("Passwords do not match."); return; }
     setSavingPassword(true);
-    // Verify current password
     if (email) {
-      const { error: signInErr } = await supabase.auth.signInWithPassword({
-        email,
-        password: currentPassword,
-      });
-      if (signInErr) {
-        setPasswordError("Current password is incorrect.");
-        setSavingPassword(false);
-        return;
-      }
+      const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password: currentPassword });
+      if (signInErr) { setPasswordError("Current password is incorrect."); setSavingPassword(false); return; }
     }
     const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
     setSavingPassword(false);
@@ -289,13 +298,9 @@ export default function ProfilePage() {
   }
 
   const inputClass = "w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-blue-500 transition";
-  const inputStyle = {
-    background: "var(--sp-input-bg)",
-    borderColor: "var(--sp-border)",
-    color: "var(--sp-text)",
-  };
+  const inputStyle = { background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" };
 
-  // ── Loading / error states ──────────────────────────────────────────────
+  // ── Loading / error ─────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center" style={{ background: "var(--sp-bg)" }}>
@@ -310,26 +315,25 @@ export default function ProfilePage() {
         <p style={{ color: "var(--sp-text-3)" }}>
           {error instanceof Error ? error.message : "Profile not found."}
         </p>
-        <Link href="/dashboard" className="font-semibold text-blue-400 hover:underline">
-          Back to Dashboard
-        </Link>
+        <Link href="/dashboard" className="font-semibold text-blue-400 hover:underline">Back to Dashboard</Link>
       </div>
     );
   }
 
-  const profile = data.profile ?? {};
-  const courses = Array.isArray(profile.courses) ? profile.courses : [];
-  const stats = data.stats ?? { questions_in_courses: 0, my_uploads: 0 };
-
+  const profile       = data.profile ?? {};
+  const courses       = Array.isArray(profile.courses) ? profile.courses : [];
+  const stats         = data.stats ?? { questions_in_courses: 0, my_uploads: 0 };
   const effectivePlan = sub?.effective_plan ?? sub?.plan ?? "free";
-  const isPaid = sub?.is_paid === true;
-  const planMeta = getPlanMeta(effectivePlan);
+  const isPaid        = sub?.is_paid === true;
+  const planMeta      = getPlanMeta(effectivePlan);
+  const initials      = (profile.full_name ?? "S").charAt(0).toUpperCase();
 
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen px-6 pb-16 pt-8 transition-colors" style={{ background: "var(--sp-bg)" }}>
+    <div className="min-h-screen px-4 pb-16 pt-8 sm:px-6 transition-colors" style={{ background: "var(--sp-bg)" }}>
       <div className="mx-auto max-w-3xl">
 
-        {/* Header row */}
+        {/* ── Page header ── */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold" style={{ color: "var(--sp-text)" }}>Profile</h1>
@@ -340,14 +344,14 @@ export default function ProfilePage() {
           <button
             onClick={handleSignOut}
             disabled={signingOut}
-            className="flex items-center gap-1.5 rounded-xl bg-red-500/10 border border-red-500/20 px-3.5 py-2 text-sm font-semibold text-red-400 transition hover:bg-red-500/20 disabled:opacity-60"
+            className="flex items-center gap-1.5 rounded-xl border border-red-500/20 bg-red-500/10 px-3.5 py-2 text-sm font-semibold text-red-400 transition hover:bg-red-500/20 disabled:opacity-60"
           >
             {signingOut ? <Loader2 size={15} className="animate-spin" /> : <LogOut size={15} />}
             Sign out
           </button>
         </div>
 
-        {/* ── Subscription tier card ──────────────────────────────────────── */}
+        {/* ── Subscription card ── */}
         <div
           className="mt-6 rounded-2xl border p-5 transition-colors"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
@@ -358,56 +362,33 @@ export default function ProfilePage() {
                 <span className={planMeta.color}>{planMeta.icon}</span>
               </div>
               <div>
-                <p className="text-xs font-medium" style={{ color: "var(--sp-text-3)" }}>
-                  Current plan
-                </p>
-                {subLoading ? (
-                  <Loader2 size={14} className="mt-1 animate-spin text-slate-500" />
-                ) : (
-                  <p className={`text-lg font-bold ${planMeta.color}`}>
-                    {planMeta.label}
-                  </p>
-                )}
+                <p className="text-xs font-medium" style={{ color: "var(--sp-text-3)" }}>Current plan</p>
+                {subLoading
+                  ? <Loader2 size={14} className="mt-1 animate-spin text-slate-500" />
+                  : <p className={`text-lg font-bold ${planMeta.color}`}>{planMeta.label}</p>
+                }
               </div>
             </div>
-
             {!isPaid && (
               <Link
                 href="/dashboard/subscribe"
-                className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition shrink-0"
+                className="flex shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500"
               >
-                <Crown size={13} />
-                Upgrade
+                <Crown size={13} /> Upgrade
               </Link>
             )}
           </div>
 
-          {/* Plan detail tiles */}
           {!subLoading && sub && (
             <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
               {[
-                {
-                  label: "Read access",
-                  value: sub.read_mode_percent === 100
-                    ? "Full"
-                    : `${sub.read_mode_percent}%`,
-                },
-                {
-                  label: "Practice limit",
-                  value: sub.practice_mode_max === null || sub.practice_mode_max === undefined
-                    ? "Unlimited"
-                    : `${sub.practice_mode_max} questions`,
-                },
-                {
-                  label: "Downloads/day",
-                  value: formatDownloads(sub.downloads_per_day, isPaid),
-                },
+                { label: "Read access",     value: sub.read_mode_percent === 100 ? "Full" : `${sub.read_mode_percent}%` },
+                { label: "Practice limit",  value: sub.practice_mode_max == null ? "Unlimited" : `${sub.practice_mode_max} questions` },
+                { label: "Downloads/day",   value: formatDownloads(sub.downloads_per_day, isPaid) },
                 {
                   label: isPaid && sub.expires_at ? "Expires" : "Renewal",
                   value: isPaid && sub.expires_at ? formatExpiry(sub.expires_at) : "—",
-                  icon: isPaid && sub.expires_at
-                    ? <Calendar size={11} className="shrink-0 mt-0.5" />
-                    : null,
+                  icon:  isPaid && sub.expires_at ? <Calendar size={11} className="mt-0.5 shrink-0" /> : null,
                 },
               ].map((item) => (
                 <div
@@ -415,16 +396,10 @@ export default function ProfilePage() {
                   className="rounded-xl border px-3 py-2.5"
                   style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}
                 >
-                  <p
-                    className="text-[10px] font-medium uppercase tracking-wide"
-                    style={{ color: "var(--sp-text-3)" }}
-                  >
+                  <p className="text-[10px] font-medium uppercase tracking-wide" style={{ color: "var(--sp-text-3)" }}>
                     {item.label}
                   </p>
-                  <p
-                    className="mt-0.5 flex items-center gap-1 text-sm font-semibold"
-                    style={{ color: "var(--sp-text)" }}
-                  >
+                  <p className="mt-0.5 flex items-center gap-1 text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
                     {item.icon}{item.value}
                   </p>
                 </div>
@@ -439,20 +414,51 @@ export default function ProfilePage() {
           )}
         </div>
 
-        {/* ── Identity card ───────────────────────────────────────────────── */}
+        {/* ── Identity card ── */}
         <div
           className="mt-6 rounded-2xl border p-6 transition-colors"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
         >
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-center gap-4 flex-1 min-w-0">
-              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-xl font-bold text-blue-400">
-                {(profile.full_name ?? "S").charAt(0).toUpperCase()}
+
+              {/* Avatar with upload button */}
+              <div className="relative shrink-0">
+                <div className="h-16 w-16 overflow-hidden rounded-full bg-blue-500/15 ring-2 ring-blue-500/20">
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt="Profile" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-xl font-bold text-blue-400">
+                      {initials}
+                    </div>
+                  )}
+                </div>
+
+                {/* Camera overlay */}
+                <label
+                  htmlFor="avatar-upload"
+                  className="absolute -bottom-1 -right-1 flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-blue-600 text-white shadow-lg ring-2 ring-[var(--sp-bg-card)] transition hover:bg-blue-500"
+                  title="Change photo"
+                >
+                  {uploadingAvatar
+                    ? <Loader2 size={12} className="animate-spin" />
+                    : <Camera size={12} />
+                  }
+                </label>
+                <input
+                  id="avatar-upload"
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  className="hidden"
+                  onChange={handleAvatarChange}
+                  disabled={uploadingAvatar}
+                />
               </div>
 
+              {/* Name / email / phone */}
               {!editingIdentity ? (
                 <div className="min-w-0">
-                  <h2 className="text-lg font-semibold truncate" style={{ color: "var(--sp-text)" }}>
+                  <h2 className="truncate text-lg font-semibold" style={{ color: "var(--sp-text)" }}>
                     {profile.full_name ?? "Student"}
                   </h2>
                   {email && (
@@ -480,25 +486,26 @@ export default function ProfilePage() {
                   <input
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="Phone number"
+                    placeholder="Phone number (e.g. 08012345678)"
                     className={inputClass}
                     style={inputStyle}
                   />
                   {email && (
                     <p className="flex items-center gap-1.5 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                      <Mail size={12} />{email} (email can't be changed here)
+                      <Mail size={12} />{email} (can't be changed here)
                     </p>
                   )}
                 </div>
               )}
             </div>
 
+            {/* Edit / save controls */}
             {!editingIdentity ? (
               <button
                 onClick={startEditingIdentity}
-                className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-blue-400 hover:bg-blue-500/10 transition"
+                className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-blue-400 transition hover:bg-blue-500/10"
               >
-                <Pencil size={13} />Edit
+                <Pencil size={13} /> Edit
               </button>
             ) : (
               <div className="flex shrink-0 gap-1.5">
@@ -513,7 +520,7 @@ export default function ProfilePage() {
                 <button
                   onClick={saveIdentity}
                   disabled={savingIdentity}
-                  className="rounded-lg bg-blue-600 p-2 text-white hover:bg-blue-500 transition disabled:opacity-60"
+                  className="rounded-lg bg-blue-600 p-2 text-white transition hover:bg-blue-500 disabled:opacity-60"
                 >
                   {savingIdentity ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
                 </button>
@@ -521,22 +528,26 @@ export default function ProfilePage() {
             )}
           </div>
 
+          {/* Feedback */}
+          {avatarError && (
+            <p className="mt-3 flex items-center gap-1.5 text-xs text-red-400">
+              <X size={12} />{avatarError}
+            </p>
+          )}
           {identityError && <p className="mt-3 text-sm text-red-400">{identityError}</p>}
           {identitySuccess && (
             <p className="mt-3 flex items-center gap-1.5 text-sm text-emerald-400">
-              <CheckCircle2 size={14} />Profile updated.
+              <CheckCircle2 size={14} /> Profile updated.
             </p>
           )}
         </div>
 
-        {/* ── Academic details ────────────────────────────────────────────── */}
+        {/* ── Academic details ── */}
         <div
           className="mt-6 rounded-2xl border p-6 transition-colors"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
         >
-          <h2 className="text-lg font-semibold" style={{ color: "var(--sp-text)" }}>
-            Academic Details
-          </h2>
+          <h2 className="text-lg font-semibold" style={{ color: "var(--sp-text)" }}>Academic Details</h2>
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <ProfileField icon={<School size={18} />}        label="Institution" value={profile.institution?.name} />
             <ProfileField icon={<BookOpen size={18} />}      label="Department"  value={profile.department?.name} />
@@ -548,12 +559,12 @@ export default function ProfilePage() {
               href="/onboarding"
               className="flex items-center gap-1.5 text-sm font-semibold text-blue-400 hover:underline"
             >
-              <Pencil size={14} />Edit academic details
+              <Pencil size={14} /> Edit academic details
             </Link>
           </div>
         </div>
 
-        {/* ── Courses ─────────────────────────────────────────────────────── */}
+        {/* ── Courses ── */}
         <div
           className="mt-6 rounded-2xl border p-6 transition-colors"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
@@ -562,15 +573,13 @@ export default function ProfilePage() {
             Your Courses ({courses.length})
           </h2>
           {courses.length === 0 ? (
-            <p className="mt-3 text-sm" style={{ color: "var(--sp-text-3)" }}>
-              No courses selected yet.
-            </p>
+            <p className="mt-3 text-sm" style={{ color: "var(--sp-text-3)" }}>No courses selected yet.</p>
           ) : (
             <div className="mt-3 flex flex-wrap gap-2">
               {courses.map((course) => (
                 <span
                   key={course.id}
-                  className="rounded-full bg-blue-500/10 border border-blue-500/20 px-3 py-1.5 text-sm font-medium text-blue-400"
+                  className="rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1.5 text-sm font-medium text-blue-400"
                 >
                   {course.name}
                 </span>
@@ -579,19 +588,11 @@ export default function ProfilePage() {
           )}
         </div>
 
-        {/* ── Activity stats ───────────────────────────────────────────────── */}
+        {/* ── Activity stats ── */}
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
           {[
-            {
-              icon: <Upload size={22} className="text-blue-400" />,
-              value: stats.my_uploads,
-              label: "Your Uploads",
-            },
-            {
-              icon: <BookOpen size={22} className="text-blue-400" />,
-              value: stats.questions_in_courses,
-              label: "Past Questions Across Your Courses",
-            },
+            { icon: <Upload size={22} className="text-blue-400" />,  value: stats.my_uploads,             label: "Your Uploads" },
+            { icon: <BookOpen size={22} className="text-blue-400" />, value: stats.questions_in_courses, label: "Past Questions Across Your Courses" },
           ].map((item) => (
             <div
               key={item.label}
@@ -602,25 +603,20 @@ export default function ProfilePage() {
                 {item.icon}
               </div>
               <div>
-                <p className="text-2xl font-bold" style={{ color: "var(--sp-text)" }}>
-                  {item.value}
-                </p>
+                <p className="text-2xl font-bold" style={{ color: "var(--sp-text)" }}>{item.value}</p>
                 <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>{item.label}</p>
               </div>
             </div>
           ))}
         </div>
 
-        {/* ── Password ─────────────────────────────────────────────────────── */}
+        {/* ── Password ── */}
         <div
           className="mt-6 rounded-2xl border p-6 transition-colors"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
         >
           <div className="flex items-center justify-between">
-            <h2
-              className="flex items-center gap-2 text-lg font-semibold"
-              style={{ color: "var(--sp-text)" }}
-            >
+            <h2 className="flex items-center gap-2 text-lg font-semibold" style={{ color: "var(--sp-text)" }}>
               <KeyRound size={18} style={{ color: "var(--sp-text-3)" }} />
               Password
             </h2>
@@ -636,6 +632,7 @@ export default function ProfilePage() {
 
           {showPasswordForm && (
             <div className="mt-4 space-y-3">
+
               {/* Current password */}
               <div>
                 <label className="mb-1 block text-xs font-medium" style={{ color: "var(--sp-text-3)" }}>
@@ -701,27 +698,21 @@ export default function ProfilePage() {
                 />
               </div>
 
-              {passwordError && (
-                <p className="text-sm text-red-400">{passwordError}</p>
-              )}
+              {passwordError && <p className="text-sm text-red-400">{passwordError}</p>}
 
               <div className="flex gap-2 pt-1">
                 <button
                   onClick={cancelPassword}
                   disabled={savingPassword}
                   className="flex-1 rounded-lg border py-2 text-sm font-semibold transition disabled:opacity-60"
-                  style={{
-                    borderColor: "var(--sp-border)",
-                    color: "var(--sp-text-2)",
-                    background: "var(--sp-bg-muted)",
-                  }}
+                  style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-muted)" }}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={savePassword}
                   disabled={savingPassword || !currentPassword || !newPassword || !confirmPassword}
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition disabled:opacity-60"
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-60"
                 >
                   {savingPassword && <Loader2 size={14} className="animate-spin" />}
                   Update password
@@ -732,7 +723,7 @@ export default function ProfilePage() {
 
           {passwordSuccess && (
             <p className="mt-3 flex items-center gap-1.5 text-sm text-emerald-400">
-              <CheckCircle2 size={14} />Password updated successfully.
+              <CheckCircle2 size={14} /> Password updated successfully.
             </p>
           )}
         </div>
