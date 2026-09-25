@@ -75,50 +75,15 @@ async function fireStreakUpdate(
   }
 }
 
-// ── Global course search hook ─────────────────────────────────────────────────
-function useGlobalCourseSearch(
-  query: string,
-  supabase: ReturnType<typeof createClient>,
-) {
-  const [results, setResults]     = useState<CourseSearchResult[]>([]);
-  const [searching, setSearching] = useState(false);
-
-  useEffect(() => {
-    if (!query.trim()) { setResults([]); return; }
-
-    let cancelled = false;
-
-    const timer = setTimeout(async () => {
-      setSearching(true);
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session || cancelled) return;
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/courses/search?q=${encodeURIComponent(query.trim())}&limit=10`,
-          {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          },
-        );
-        if (res.ok && !cancelled) {
-          const json = await res.json();
-          setResults(json.courses ?? []);
-        }
-      } catch {
-        if (!cancelled) setResults([]);
-      } finally {
-        if (!cancelled) setSearching(false);
-      }
-    }, 300);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [query, supabase]);
-
-  return { results, searching };
+// ── local  course search hook ─────────────────────────────────────────────────
+function useLocalCourseSearch(query: string, courses: Course[]) {
+  const q = query.trim().toLowerCase();
+  if (!q) return { results: [] as Course[], searching: false };
+  return {
+    results: courses.filter(c => c.name.toLowerCase().includes(q)),
+    searching: false,
+  };
 }
-
 // ── Count-up hook ──────────────────────────────────────────────────────────────
 
 function useCountUp(target: number, duration = 1200) {
@@ -598,7 +563,7 @@ export default function DashboardHomePage() {
   }, []);
 
   // Global search
-  const { results: searchResults, searching: searchLoading } = useGlobalCourseSearch(query, supabase);
+  const { results: searchResults, searching: searchLoading } = useLocalCourseSearch(query, courses);
 
   const courses         = data?.profile.courses ?? [];
   const recentQuestions = data?.recent_questions ?? [];
@@ -708,7 +673,7 @@ export default function DashboardHomePage() {
                     {searchResults.map((c, i) => {
                       const p        = COURSE_PALETTE[i % COURSE_PALETTE.length];
                       const initials = courseInitials(c.name);
-                      const meta     = [c.department, c.institution].filter(Boolean).join(" · ");
+                      
                       return (
                         <Link
                           key={c.id}
@@ -724,9 +689,7 @@ export default function DashboardHomePage() {
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{c.name}</p>
-                            {meta && (
-                              <p className="truncate text-[10px]" style={{ color: "var(--sp-text-3)" }}>{meta}</p>
-                            )}
+                            
                           </div>
                           <ArrowRight className="ml-auto h-3 w-3 shrink-0" style={{ color: p.accent }} />
                         </Link>
