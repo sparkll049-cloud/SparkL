@@ -23,37 +23,8 @@ async def search_courses(
     if not raw:
         return {"courses": []}
 
-    pattern = f"%{raw}%"
     seen_ids: set[str] = set()
     courses: list[dict] = []
-
-    def fetch(pat: str) -> list[dict]:
-        res = (
-            supabase.table("courses")
-            .select(
-                "id, name, "
-                "department:departments(name, institution:institutions(name))"
-            )
-            .ilike("name", pat)
-            .order("name")
-            .limit(limit)
-            .execute()
-        )
-        return res.data or []
-
-    # If query looks like a course code (letters+digits), also try spaced variant
-    spaced_pattern = None
-    code_like = re.match(r'^([a-zA-Z]+)(\d+.*)$', raw)
-    if code_like:
-        spaced = f"{code_like.group(1)} {code_like.group(2)}"
-        spaced_pattern = f"%{spaced}%"
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        name_future   = pool.submit(fetch, pattern)
-        spaced_future = pool.submit(fetch, spaced_pattern) if spaced_pattern else None
-
-        name_rows   = name_future.result()
-        spaced_rows = spaced_future.result() if spaced_future else []
 
     def normalize(rows: list[dict]):
         for r in rows:
@@ -65,16 +36,37 @@ async def search_courses(
             courses.append({
                 "id":          r["id"],
                 "name":        r["name"],
-                "code":        None,   # column doesn't exist yet
+                "code":        None,
                 "department":  dept.get("name"),
                 "institution": inst.get("name"),
             })
 
-    normalize(name_rows)
-    normalize(spaced_rows)
+    # Primary search
+    res = (
+        supabase.table("courses")
+        .select("id, name, department:departments(name, institution:institutions(name))")
+        .ilike("name", f"%{raw}%")
+        .order("name")
+        .limit(limit)
+        .execute()
+    )
+    normalize(res.data or [])
+
+    # If looks like a course code (e.g. MTH201), also try spaced variant
+    code_like = re.match(r'^([a-zA-Z]+)(\d+.*)$', raw)
+    if code_like and len(courses) < limit:
+        spaced = f"{code_like.group(1)} {code_like.group(2)}"
+        res2 = (
+            supabase.table("courses")
+            .select("id, name, department:departments(name, institution:institutions(name))")
+            .ilike("name", f"%{spaced}%")
+            .order("name")
+            .limit(limit)
+            .execute()
+        )
+        normalize(res2.data or [])
 
     return {"courses": courses[:limit]}
-
 
 # ── List courses (enrolled) ────────────────────────────────────────────────────
 
