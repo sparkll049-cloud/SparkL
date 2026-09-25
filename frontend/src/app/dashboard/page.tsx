@@ -1,6 +1,7 @@
+
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -8,10 +9,13 @@ import {
   Search, BookOpen, Upload, FileText, GraduationCap,
   ChevronRight, ArrowRight, Clock, Plus, Flame,
   Users, TrendingUp, AlertCircle, Crown, Sparkles,
-  Target, Trophy, Zap, Star,
+  Target, Trophy, Zap, Star, Bell, BarChart2,
+  CheckCircle2, Calendar, Award, ChevronUp,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import Image from "next/image";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Course { id: string; name: string; code?: string; }
 interface Profile {
@@ -42,247 +46,347 @@ async function fetchDashboardSummary(
   return res.json();
 }
 
-// ── Skeleton ──────────────────────────────────────────────────────────────────
+// ── Count-up hook ─────────────────────────────────────────────────────────────
 
-function Bone({ className }: { className?: string }) {
-  return <div className={`sp-bone animate-pulse ${className}`} />;
-}
-
-function Skeleton() {
-  return (
-    <div className="min-h-screen px-4 py-6 lg:px-8 lg:py-8" style={{ background: "var(--sp-bg)" }}>
-      <div className="mx-auto max-w-5xl space-y-6">
-        <div className="flex items-center justify-between">
-          <Bone className="h-6 w-32" /> <Bone className="h-9 w-52 rounded-xl" />
-        </div>
-        <Bone className="h-32 rounded-2xl" />
-        <div className="grid grid-cols-3 gap-3">
-          {[...Array(3)].map((_, i) => <Bone key={i} className="h-16 rounded-2xl" />)}
-        </div>
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-          <div className="lg:col-span-2 space-y-3">
-            <Bone className="h-4 w-20" />
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-              {[...Array(5)].map((_, i) => <Bone key={i} className="h-28 rounded-2xl" />)}
-            </div>
-          </div>
-          <div className="space-y-3">
-            <Bone className="h-36 rounded-2xl" /> <Bone className="h-24 rounded-2xl" />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Course accent palette (uses CSS vars so both themes work) ─────────────────
-
-const ACCENTS = [
-  { text: "text-indigo-500", bgVar: "var(--sp-course-indigo-bg)", bdrVar: "var(--sp-course-indigo-bdr)" },
-  { text: "text-teal-500",   bgVar: "var(--sp-course-teal-bg)",   bdrVar: "var(--sp-course-teal-bdr)"   },
-  { text: "text-violet-500", bgVar: "var(--sp-course-violet-bg)", bdrVar: "var(--sp-course-violet-bdr)" },
-  { text: "text-sky-500",    bgVar: "var(--sp-course-sky-bg)",    bdrVar: "var(--sp-course-sky-bdr)"    },
-  { text: "text-rose-500",   bgVar: "var(--sp-course-rose-bg)",   bdrVar: "var(--sp-course-rose-bdr)"   },
-  { text: "text-amber-500",  bgVar: "var(--sp-course-amber-bg)",  bdrVar: "var(--sp-course-amber-bdr)"  },
-];
-
-// ── Count-up ──────────────────────────────────────────────────────────────────
-
-function useCountUp(target: number, duration = 900) {
+function useCountUp(target: number, duration = 1200) {
   const [value, setValue] = useState(0);
   useEffect(() => {
     if (target === 0) { setValue(0); return; }
     const start = performance.now();
     const tick = (now: number) => {
       const p = Math.min((now - start) / duration, 1);
-      setValue(Math.round((1 - Math.pow(1 - p, 3)) * target));
+      const ease = 1 - Math.pow(1 - p, 4);
+      setValue(Math.round(ease * target));
       if (p < 1) requestAnimationFrame(tick);
     };
-    requestAnimationFrame(tick);
+    const id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
   }, [target, duration]);
   return value;
 }
 
-// ── Course card ───────────────────────────────────────────────────────────────
+// ── Course palette ─────────────────────────────────────────────────────────────
 
-function CourseCard({ course, index }: { course: Course; index: number }) {
-  const a = ACCENTS[index % ACCENTS.length];
-  const initials = course.name.split(" ").map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
-  return (
-    <Link
-      href={`/dashboard/courses/${course.id}`}
-      className={`group flex flex-col rounded-2xl border p-4 transition-all duration-150 hover:scale-[1.02] hover:shadow-md`}
-      style={{ background: a.bgVar, borderColor: a.bdrVar }}
-    >
-      <span className={`mb-3 text-lg font-black leading-none ${a.text}`}>{initials}</span>
-      <p className={`flex-1 text-xs font-semibold leading-snug ${a.text}`}>{course.name}</p>
-      {course.code && (
-        <p className={`mt-1.5 font-mono text-[10px] font-bold ${a.text} opacity-60`}>{course.code}</p>
-      )}
-      <div className={`mt-3 flex items-center gap-1 text-[10px] font-semibold ${a.text} opacity-0 group-hover:opacity-80 transition-opacity`}>
-        Open <ChevronRight className="h-2.5 w-2.5" />
-      </div>
-    </Link>
-  );
+const COURSE_PALETTE = [
+  { accent: "#6366F1", light: "rgba(99,102,241,0.10)", border: "rgba(99,102,241,0.20)", label: "indigo" },
+  { accent: "#0EA5E9", light: "rgba(14,165,233,0.10)", border: "rgba(14,165,233,0.20)", label: "sky" },
+  { accent: "#8B5CF6", light: "rgba(139,92,246,0.10)", border: "rgba(139,92,246,0.20)", label: "violet" },
+  { accent: "#10B981", light: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.20)", label: "emerald" },
+  { accent: "#F59E0B", light: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.20)", label: "amber" },
+  { accent: "#EF4444", light: "rgba(239,68,68,0.10)",  border: "rgba(239,68,68,0.20)",  label: "red" },
+];
+
+// ── Skeleton ───────────────────────────────────────────────────────────────────
+
+function Bone({ className = "" }: { className?: string }) {
+  return <div className={`sp-bone rounded-xl ${className}`} />;
 }
 
-// ── Stat pill ─────────────────────────────────────────────────────────────────
-
-function StatPill({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
-  const count = useCountUp(value);
+function PageSkeleton() {
   return (
-    <div className="flex items-center gap-3 rounded-2xl border px-4 py-3.5"
-      style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
-      <div className="shrink-0">{icon}</div>
-      <div>
-        <p className="text-lg font-black tabular-nums leading-none" style={{ color: "var(--sp-text)" }}>{count}</p>
-        <p className="mt-0.5 text-[10px] font-medium" style={{ color: "var(--sp-text-3)" }}>{label}</p>
-      </div>
-    </div>
-  );
-}
-
-// ── Streak ring ───────────────────────────────────────────────────────────────
-
-function StreakRing({ streak = 0 }: { streak: number }) {
-  const r = 22; const circ = 2 * Math.PI * r;
-  const dash = Math.min(streak / 7, 1) * circ;
-  return (
-    <div className="flex flex-col items-center gap-1">
-      <div className="relative flex items-center justify-center">
-        <svg width="56" height="56" viewBox="0 0 56 56" className="-rotate-90">
-          <circle cx="28" cy="28" r={r} fill="none" stroke="var(--sp-ring-track)" strokeWidth="4" />
-          <circle cx="28" cy="28" r={r} fill="none"
-            stroke={streak >= 7 ? "#F59E0B" : "#6366F1"} strokeWidth="4"
-            strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
-            style={{ transition: "stroke-dasharray 1s cubic-bezier(0.34,1.56,0.64,1)" }}
-          />
-        </svg>
-        <div className="absolute flex flex-col items-center">
-          <Flame className={`h-3 w-3 ${streak >= 7 ? "text-amber-500" : "text-indigo-500"}`} />
-          <span className="text-xs font-black" style={{ color: "var(--sp-text)" }}>{streak}</span>
+    <div className="min-h-screen" style={{ background: "var(--sp-bg)" }}>
+      {/* topbar */}
+      <div className="h-16 border-b" style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
+        <div className="mx-auto flex h-full max-w-7xl items-center justify-between px-6">
+          <Bone className="h-7 w-24" /> <Bone className="h-9 w-56 rounded-full" /> <Bone className="h-9 w-9 rounded-full" />
         </div>
       </div>
-      <p className="text-[9px] font-medium" style={{ color: "var(--sp-text-3)" }}>
-        {streak === 1 ? "1 day" : `${streak} days`}
-      </p>
+      <div className="mx-auto max-w-7xl px-4 py-8 lg:px-6">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+          {/* left rail */}
+          <div className="space-y-4">
+            <Bone className="h-48 rounded-2xl" />
+            <Bone className="h-32 rounded-2xl" />
+            <Bone className="h-40 rounded-2xl" />
+          </div>
+          {/* main */}
+          <div className="space-y-6 lg:col-span-2">
+            <div className="grid grid-cols-3 gap-3">
+              {[...Array(3)].map((_, i) => <Bone key={i} className="h-24 rounded-2xl" />)}
+            </div>
+            <Bone className="h-10 rounded-full" />
+            <div className="grid grid-cols-2 gap-3">
+              {[...Array(6)].map((_, i) => <Bone key={i} className="h-28 rounded-2xl" />)}
+            </div>
+            <Bone className="h-48 rounded-2xl" />
+          </div>
+          {/* right rail */}
+          <div className="space-y-4">
+            <Bone className="h-52 rounded-2xl" />
+            <Bone className="h-36 rounded-2xl" />
+            <Bone className="h-28 rounded-2xl" />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── XP bar ────────────────────────────────────────────────────────────────────
+// ── Streak ring ────────────────────────────────────────────────────────────────
 
-function XPBar({ xp = 0 }: { xp: number }) {
+function StreakRing({ streak = 0, size = 80 }: { streak: number; size?: number }) {
+  const r = (size / 2) - 6;
+  const circ = 2 * Math.PI * r;
+  const fill = Math.min(streak / 7, 1) * circ;
+  const color = streak >= 7 ? "#F59E0B" : streak >= 3 ? "#6366F1" : "#94A3B8";
+  return (
+    <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--sp-ring-track)" strokeWidth="5" />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="5"
+          strokeDasharray={`${fill} ${circ}`} strokeLinecap="round"
+          style={{ transition: "stroke-dasharray 1.2s cubic-bezier(0.34,1.56,0.64,1)" }} />
+      </svg>
+      <div className="absolute flex flex-col items-center">
+        <Flame className="h-4 w-4" style={{ color }} />
+        <span className="text-sm font-black" style={{ color: "var(--sp-text)" }}>{streak}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Level badge ────────────────────────────────────────────────────────────────
+
+function LevelBadge({ xp = 0 }: { xp: number }) {
   const level = Math.floor(xp / 100) + 1;
   const progress = xp % 100;
+  const LEVEL_NAMES = ["Newcomer","Explorer","Scholar","Achiever","Expert","Master","Legend"];
+  const name = LEVEL_NAMES[Math.min(level - 1, LEVEL_NAMES.length - 1)];
   return (
-    <div className="flex-1 space-y-1">
+    <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1">
-          <Zap className="h-3 w-3 text-indigo-500" />
-          <span className="text-[11px] font-bold" style={{ color: "var(--sp-text)" }}>Level {level}</span>
+        <div className="flex items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500 text-white shadow-lg shadow-indigo-500/30">
+            <Zap className="h-3.5 w-3.5" fill="white" />
+          </div>
+          <div>
+            <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>Level {level} · {name}</p>
+            <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>{xp} XP total</p>
+          </div>
         </div>
-        <span className="text-[9px]" style={{ color: "var(--sp-text-3)" }}>{xp} XP</span>
+        <span className="text-[10px] font-bold text-indigo-500">{100 - progress} to next</span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full" style={{ background: "var(--sp-border)" }}>
-        <div className="h-full rounded-full bg-indigo-500 transition-all duration-1000" style={{ width: `${progress}%` }} />
+      <div className="h-2 w-full overflow-hidden rounded-full" style={{ background: "var(--sp-ring-track)" }}>
+        <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-1000"
+          style={{ width: `${progress}%` }} />
       </div>
-      <p className="text-[9px]" style={{ color: "var(--sp-text-3)" }}>{100 - progress} XP to next level</p>
     </div>
   );
 }
 
-// ── Today's focus ─────────────────────────────────────────────────────────────
+// ── Stat card ──────────────────────────────────────────────────────────────────
 
-function TodayFocus({ courses }: { courses: Course[] }) {
-  const [idx] = useState(() => Math.floor(Math.random() * courses.length));
-  const spotlight = courses[idx];
-  if (!spotlight) return null;
+function StatCard({ icon, label, value, accent, delta }: {
+  icon: React.ReactNode; label: string; value: number; accent: string; delta?: string;
+}) {
+  const count = useCountUp(value);
   return (
-    <Link href={`/dashboard/courses/${spotlight.id}`}
-      className="group flex items-center gap-3 rounded-2xl border p-4 transition-all"
-      style={{ borderColor: "var(--sp-course-indigo-bdr)", background: "var(--sp-course-indigo-bg)" }}
-    >
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-500">
-        <Target className="h-4 w-4" />
+    <div className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+      {/* accent glow */}
+      <div className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-20 blur-xl transition-opacity group-hover:opacity-40"
+        style={{ background: accent }} />
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ background: `${accent}20` }}>
+          <span style={{ color: accent }}>{icon}</span>
+        </div>
+        {delta && (
+          <span className="flex items-center gap-0.5 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-500">
+            <ChevronUp className="h-2.5 w-2.5" />{delta}
+          </span>
+        )}
       </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500 opacity-70">Today's focus</p>
-        <p className="truncate text-xs font-bold" style={{ color: "var(--sp-text)" }}>{spotlight.name}</p>
+      <p className="text-2xl font-black tabular-nums" style={{ color: "var(--sp-text)" }}>{count}</p>
+      <p className="mt-0.5 text-[11px] font-medium" style={{ color: "var(--sp-text-3)" }}>{label}</p>
+    </div>
+  );
+}
+
+// ── Course card ────────────────────────────────────────────────────────────────
+
+function CourseCard({ course, index }: { course: Course; index: number }) {
+  const p = COURSE_PALETTE[index % COURSE_PALETTE.length];
+  const initials = course.name.split(" ").map(w => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
+  return (
+    <Link href={`/dashboard/courses/${course.id}`}
+      className="group relative flex flex-col overflow-hidden rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-1 hover:shadow-xl"
+      style={{ background: p.light, borderColor: p.border }}>
+      {/* top accent bar */}
+      <div className="absolute inset-x-0 top-0 h-0.5 rounded-t-2xl opacity-60" style={{ background: p.accent }} />
+      {/* initials badge */}
+      <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl text-sm font-black text-white shadow-md"
+        style={{ background: p.accent, boxShadow: `0 4px 12px ${p.accent}40` }}>
+        {initials}
       </div>
-      <ArrowRight className="h-3.5 w-3.5 shrink-0 text-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+      <p className="flex-1 text-xs font-bold leading-snug" style={{ color: p.accent }}>{course.name}</p>
+      {course.code && (
+        <p className="mt-1.5 font-mono text-[10px] font-bold opacity-50" style={{ color: p.accent }}>{course.code}</p>
+      )}
+      <div className="mt-3 flex items-center gap-1 text-[10px] font-bold opacity-0 transition-opacity group-hover:opacity-100"
+        style={{ color: p.accent }}>
+        Study now <ArrowRight className="h-2.5 w-2.5" />
+      </div>
     </Link>
   );
 }
 
-// ── Upgrade banner ────────────────────────────────────────────────────────────
+// ── Activity item ──────────────────────────────────────────────────────────────
 
-function UpgradeBanner() {
+function ActivityItem({ q, index }: { q: RecentQuestion; index: number }) {
+  const p = COURSE_PALETTE[index % COURSE_PALETTE.length];
   return (
-    <div className="relative overflow-hidden rounded-2xl border p-4"
-      style={{ background: "var(--sp-course-indigo-bg)", borderColor: "var(--sp-course-indigo-bdr)" }}
-    >
-      <div className="pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full bg-indigo-400/20 blur-2xl" />
-      <div className="pointer-events-none absolute -bottom-4 -left-4 h-16 w-16 rounded-full bg-violet-400/20 blur-2xl" />
-      <div className="relative">
-        <div className="mb-2.5 flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500/20">
-            <Crown className="h-3.5 w-3.5 text-indigo-500" />
-          </div>
-          <p className="text-xs font-black text-indigo-500">Upgrade to Pro</p>
-        </div>
-        <p className="text-[11px] leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
-          Unlock unlimited past questions, AI explanations, practice mode, and priority uploads.
+    <Link href={`/questions/${q.id}`}
+      className="group flex items-center gap-3 rounded-xl border p-3 transition-all hover:border-indigo-500/30 hover:shadow-md"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white"
+        style={{ background: p.accent, boxShadow: `0 3px 10px ${p.accent}35` }}>
+        <FileText className="h-4 w-4" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{q.title}</p>
+        <p className="truncate text-[10px] mt-0.5" style={{ color: "var(--sp-text-3)" }}>
+          {q.course?.name ?? "—"}{q.year ? ` · ${q.year}` : ""}
         </p>
-        <div className="mt-3 space-y-1.5">
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <span className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+          {new Date(q.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short" })}
+        </span>
+        {q.views != null && (
+          <span className="flex items-center gap-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+            <Users className="h-2.5 w-2.5" />{q.views}
+          </span>
+        )}
+      </div>
+    </Link>
+  );
+}
+
+// ── Upgrade card ───────────────────────────────────────────────────────────────
+
+function UpgradeCard() {
+  return (
+    <div className="relative overflow-hidden rounded-2xl p-5 text-white"
+      style={{ background: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 50%, #9333EA 100%)" }}>
+      {/* decorative */}
+      <div className="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-white/10 blur-2xl" />
+      <div className="pointer-events-none absolute -bottom-6 -left-6 h-20 w-20 rounded-full bg-white/10 blur-xl" />
+      <div className="pointer-events-none absolute right-4 top-4 h-2 w-2 rounded-full bg-white/40" />
+      <div className="pointer-events-none absolute right-8 top-10 h-1 w-1 rounded-full bg-white/30" />
+
+      <div className="relative">
+        <div className="mb-3 flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/20 backdrop-blur">
+            <Crown className="h-4 w-4 text-yellow-300" fill="currentColor" />
+          </div>
+          <div>
+            <p className="text-xs font-black">SparkL Pro</p>
+            <p className="text-[10px] text-white/60">Student edition</p>
+          </div>
+        </div>
+
+        <p className="text-[11px] text-white/80 leading-relaxed">
+          Supercharge your studies with AI-powered tools built for Nigerian tertiary students.
+        </p>
+
+        <div className="mt-3 space-y-2">
           {[
-            { icon: <Sparkles className="h-3 w-3" />, text: "AI-powered answer explanations" },
-            { icon: <Trophy className="h-3 w-3" />,   text: "Full practice mode — unlimited" },
-            { icon: <Star className="h-3 w-3" />,     text: "Download any past question" },
-          ].map((f) => (
+            { icon: <Sparkles className="h-3 w-3" />,  text: "AI answer explanations" },
+            { icon: <BarChart2 className="h-3 w-3" />, text: "Unlimited practice mode" },
+            { icon: <Award className="h-3 w-3" />,     text: "Certificates & badges" },
+            { icon: <CheckCircle2 className="h-3 w-3"/>,text: "Download past questions" },
+          ].map(f => (
             <div key={f.text} className="flex items-center gap-2">
-              <span className="text-indigo-500">{f.icon}</span>
-              <span className="text-[10px] font-medium" style={{ color: "var(--sp-text-2)" }}>{f.text}</span>
+              <span className="text-yellow-300">{f.icon}</span>
+              <span className="text-[10px] font-medium text-white/80">{f.text}</span>
             </div>
           ))}
         </div>
+
         <Link href="/dashboard/subscribe"
-          className="mt-4 flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 py-2.5 text-[11px] font-black text-white transition hover:bg-indigo-500"
-        >
-          <Crown className="h-3 w-3" /> Unlock Pro
+          className="mt-4 flex items-center justify-center gap-1.5 rounded-xl bg-white py-2.5 text-[11px] font-black text-indigo-700 transition hover:bg-yellow-50">
+          <Crown className="h-3 w-3 text-yellow-500" fill="currentColor" />
+          Unlock Pro — ₦2,500/mo
         </Link>
       </div>
     </div>
   );
 }
 
-// ── Empty state ───────────────────────────────────────────────────────────────
+// ── Today focus ────────────────────────────────────────────────────────────────
+
+function TodayFocus({ courses }: { courses: Course[] }) {
+  const [idx] = useState(() => Math.floor(Math.random() * courses.length));
+  const c = courses[idx];
+  if (!c) return null;
+  const p = COURSE_PALETTE[idx % COURSE_PALETTE.length];
+  return (
+    <Link href={`/dashboard/courses/${c.id}`}
+      className="group flex items-center gap-4 rounded-full border px-4 py-3 transition-all hover:shadow-md"
+      style={{ background: `${p.accent}10`, borderColor: `${p.accent}30` }}>
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white text-xs font-black"
+        style={{ background: p.accent }}>
+        <Target className="h-3.5 w-3.5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: p.accent }}>Today's focus</p>
+        <p className="truncate text-xs font-bold" style={{ color: "var(--sp-text)" }}>{c.name}</p>
+      </div>
+      <ArrowRight className="h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: p.accent }} />
+    </Link>
+  );
+}
+
+// ── Quick action ───────────────────────────────────────────────────────────────
+
+function QuickAction({ href, icon, label, sub, color }: {
+  href: string; icon: React.ReactNode; label: string; sub: string; color: string;
+}) {
+  return (
+    <Link href={href}
+      className="group flex items-center gap-3 rounded-xl border p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white transition-transform group-hover:scale-110"
+        style={{ background: color, boxShadow: `0 4px 12px ${color}40` }}>
+        {icon}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>{label}</p>
+        <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>{sub}</p>
+      </div>
+      <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-30 group-hover:opacity-70 transition-opacity" style={{ color }} />
+    </Link>
+  );
+}
+
+// ── Empty state ────────────────────────────────────────────────────────────────
 
 function EmptyState({ icon, title, body, cta }: {
   icon: React.ReactNode; title: string; body: string; cta: { href: string; label: string };
 }) {
   return (
-    <div className="flex flex-col items-center rounded-2xl border border-dashed px-6 py-10 text-center"
+    <div className="flex flex-col items-center rounded-2xl border-2 border-dashed px-8 py-12 text-center"
       style={{ borderColor: "var(--sp-border)" }}>
-      <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-500">{icon}</div>
-      <p className="text-xs font-bold" style={{ color: "var(--sp-text-2)" }}>{title}</p>
-      <p className="mt-1.5 max-w-[200px] text-[11px] leading-relaxed" style={{ color: "var(--sp-text-3)" }}>{body}</p>
+      <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-500">{icon}</div>
+      <p className="text-sm font-bold" style={{ color: "var(--sp-text-2)" }}>{title}</p>
+      <p className="mt-1.5 max-w-[200px] text-xs leading-relaxed" style={{ color: "var(--sp-text-3)" }}>{body}</p>
       <Link href={cta.href}
-        className="mt-5 rounded-xl bg-indigo-600 px-4 py-2 text-[11px] font-bold text-white hover:bg-indigo-500 transition-colors">
-        {cta.label}
+        className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5">
+        {cta.label} <ArrowRight className="h-3.5 w-3.5" />
       </Link>
     </div>
   );
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function DashboardHomePage() {
   const supabase = createClient();
-  const router = useRouter();
+  const router   = useRouter();
   const [query, setQuery]         = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [isPro, setIsPro]         = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
   const { data, isLoading, error } = useQuery({
@@ -295,22 +399,24 @@ export default function DashboardHomePage() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`,
+        const r1 = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`,
           { headers: { Authorization: `Bearer ${session.access_token}` } });
-        if (res.ok) { const j = await res.json(); if (j.avatar_url) setAvatarUrl(j.avatar_url); }
-      } catch { /* silent */ }
+        if (r1.ok) { const j = await r1.json(); if (j.avatar_url) setAvatarUrl(j.avatar_url); }
+      } catch {}
       try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`,
+        const r2 = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`,
           { headers: { Authorization: `Bearer ${session.access_token}` } });
-        if (res.ok) { const j = await res.json(); setIsPro(j.is_paid === true); }
-      } catch { /* silent */ }
+        if (r2.ok) { const j = await r2.json(); setIsPro(j.is_paid === true); }
+      } catch {}
     }
     load();
   }, [supabase]);
 
   useEffect(() => {
     const h = (e: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) setQuery("");
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setQuery(""); setSearchFocused(false);
+      }
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
@@ -324,24 +430,23 @@ export default function DashboardHomePage() {
 
   const searchResults = useMemo(() => {
     if (!query.trim()) return [];
-    return courses.filter((c) => c.name.toLowerCase().includes(query.toLowerCase())).slice(0, 6);
+    return courses.filter(c => c.name.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
   }, [query, courses]);
 
-  if (isLoading) return <Skeleton />;
+  if (isLoading) return <PageSkeleton />;
 
   if (error || !data) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-6 text-center" style={{ background: "var(--sp-bg)" }}>
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/10">
-          <AlertCircle className="h-5 w-5 text-red-500" />
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-center" style={{ background: "var(--sp-bg)" }}>
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/10">
+          <AlertCircle className="h-6 w-6 text-red-500" />
         </div>
         <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>
-          {error instanceof Error ? error.message : "Couldn't load your dashboard."}
+          {error instanceof Error ? error.message : "Something went wrong."}
         </p>
         <button onClick={() => window.location.reload()}
-          className="rounded-xl border px-5 py-2.5 text-xs font-bold transition hover:border-indigo-500/40"
-          style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
-          Try again
+          className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-indigo-500 transition">
+          Reload
         </button>
       </div>
     );
@@ -349,261 +454,402 @@ export default function DashboardHomePage() {
 
   const firstName = (data.profile.full_name ?? "there").split(" ")[0];
   const hour      = new Date().getHours();
-  const greeting  = hour < 5 ? "Up late" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const greeting  = hour < 5 ? "Still up?" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const today     = new Date().toLocaleDateString("en-NG", { weekday: "long", day: "numeric", month: "long" });
 
   return (
-    <div className="min-h-screen transition-colors duration-300" style={{ background: "var(--sp-bg)" }}>
+    <div className="min-h-screen" style={{ background: "var(--sp-bg)" }}>
       <style>{`
-        @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
-        .fu  { animation:fadeUp 0.35s ease both }
-        .fu1 { animation-delay:.05s } .fu2 { animation-delay:.10s }
-        .fu3 { animation-delay:.15s } .fu4 { animation-delay:.20s }
-        .fu5 { animation-delay:.25s }
+        @keyframes slideDown { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes fadeUp    { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+        .anim-slide { animation: slideDown 0.3s ease both }
+        .anim-1 { animation: fadeUp 0.4s ease both; animation-delay: 0.05s }
+        .anim-2 { animation: fadeUp 0.4s ease both; animation-delay: 0.10s }
+        .anim-3 { animation: fadeUp 0.4s ease both; animation-delay: 0.15s }
+        .anim-4 { animation: fadeUp 0.4s ease both; animation-delay: 0.20s }
+        .anim-5 { animation: fadeUp 0.4s ease both; animation-delay: 0.25s }
+        .anim-6 { animation: fadeUp 0.4s ease both; animation-delay: 0.30s }
       `}</style>
 
-      {/* ── Topbar ── */}
-      <header className="sticky top-0 z-30 border-b backdrop-blur-md transition-colors"
+      {/* ════════════════════════════════════════
+          TOPBAR
+      ════════════════════════════════════════ */}
+      <header className="sticky top-0 z-40 border-b backdrop-blur-xl transition-colors"
         style={{ background: "var(--sp-header-bg)", borderColor: "var(--sp-border)" }}>
-        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4 lg:px-8">
+        <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 lg:px-6">
 
-          <Link href="/dashboard" className="flex items-center gap-2">
-            <Image src="/images/logo.jpg" alt="SparkL" width={28} height={28} className="rounded-lg object-cover" />
-            <span className="text-sm font-black tracking-tight" style={{ color: "var(--sp-text)" }}>SparkL</span>
+          {/* Logo */}
+          <Link href="/dashboard" className="flex shrink-0 items-center gap-2.5 mr-2">
+            <Image src="/images/logo.jpg" alt="SparkL" width={32} height={32} className="rounded-xl object-cover shadow-md" />
+            <span className="hidden text-base font-black tracking-tight sm:block" style={{ color: "var(--sp-text)" }}>SparkL</span>
           </Link>
 
-          {/* Search */}
-          <div className="relative w-48 lg:w-64" ref={searchRef}>
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" style={{ color: "var(--sp-text-3)" }} />
-            <input value={query} onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search courses…"
-              className="w-full rounded-xl border py-2 pl-9 pr-3 text-xs outline-none transition focus:border-indigo-500/60"
-              style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }}
+          {/* Search — center */}
+          <div className="relative flex-1 max-w-md mx-auto" ref={searchRef}>
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 transition-colors"
+              style={{ color: searchFocused ? "#6366F1" : "var(--sp-text-3)" }} />
+            <input value={query}
+              onChange={e => setQuery(e.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              placeholder="Search courses, topics…"
+              className="w-full rounded-full border py-2.5 pl-11 pr-4 text-sm outline-none transition-all"
+              style={{
+                background: "var(--sp-input-bg)",
+                borderColor: searchFocused ? "rgba(99,102,241,0.5)" : "var(--sp-border)",
+                color: "var(--sp-text)",
+                boxShadow: searchFocused ? "0 0 0 3px rgba(99,102,241,0.10)" : "none",
+              }}
             />
             {query.trim() && (
-              <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-xl border shadow-xl"
+              <div className="anim-slide absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border shadow-2xl"
                 style={{ background: "var(--sp-search-popup)", borderColor: "var(--sp-border)" }}>
-                {searchResults.length === 0
-                  ? <p className="px-4 py-3 text-xs" style={{ color: "var(--sp-text-3)" }}>No match for &ldquo;{query}&rdquo;</p>
-                  : searchResults.map((c, i) => {
-                    const a = ACCENTS[i % ACCENTS.length];
-                    return (
-                      <Link key={c.id} href={`/dashboard/courses/${c.id}`}
-                        className="flex items-center gap-2.5 px-3 py-2.5 transition-colors hover:bg-indigo-500/5"
-                        onClick={() => setQuery("")}>
-                        <div className={`h-1.5 w-1.5 rounded-full ${a.text} bg-current`} />
-                        <span className="text-xs font-medium" style={{ color: "var(--sp-text-2)" }}>{c.name}</span>
-                      </Link>
-                    );
-                  })
-                }
+                {searchResults.length === 0 ? (
+                  <div className="flex flex-col items-center py-8 gap-2">
+                    <Search className="h-5 w-5 opacity-30" style={{ color: "var(--sp-text-3)" }} />
+                    <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>No courses match &ldquo;{query}&rdquo;</p>
+                  </div>
+                ) : (
+                  <div className="p-2">
+                    <p className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
+                      Courses
+                    </p>
+                    {searchResults.map((c, i) => {
+                      const p = COURSE_PALETTE[i % COURSE_PALETTE.length];
+                      return (
+                        <Link key={c.id} href={`/dashboard/courses/${c.id}`}
+                          className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-500/5"
+                          onClick={() => setQuery("")}>
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-black text-white"
+                            style={{ background: p.accent }}>
+                            {c.name.split(" ").map(w=>w[0]).filter(Boolean).slice(0,2).join("").toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{c.name}</p>
+                            {c.code && <p className="text-[10px] font-mono" style={{ color: "var(--sp-text-3)" }}>{c.code}</p>}
+                          </div>
+                          <ArrowRight className="ml-auto h-3 w-3 shrink-0" style={{ color: p.accent }} />
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
 
-          {/* Avatar */}
-          <Link href="/dashboard/profile">
-            {avatarUrl ? (
-              <img src={avatarUrl} alt="Profile"
-                className="h-8 w-8 rounded-full object-cover ring-2 ring-indigo-500/40 transition hover:ring-indigo-500/70" />
-            ) : (
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-black text-white ring-2 ring-indigo-500/30 transition hover:ring-indigo-500/60">
-                {firstName.slice(0, 2).toUpperCase()}
-              </div>
-            )}
-          </Link>
+          {/* Right actions */}
+          <div className="flex items-center gap-2">
+            <button className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <Bell className="h-4 w-4" style={{ color: "var(--sp-text-2)" }} />
+              <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-indigo-500" />
+            </button>
+            <Link href="/dashboard/profile">
+              {avatarUrl ? (
+                <img src={avatarUrl} alt="Profile"
+                  className="h-9 w-9 rounded-xl object-cover ring-2 ring-indigo-500/30 transition hover:ring-indigo-500/60" />
+              ) : (
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-[11px] font-black text-white shadow-md shadow-indigo-500/30">
+                  {firstName.slice(0, 2).toUpperCase()}
+                </div>
+              )}
+            </Link>
+          </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-4 py-6 lg:px-8 lg:py-8">
+      {/* ════════════════════════════════════════
+          MAIN LAYOUT  — 4-col grid
+      ════════════════════════════════════════ */}
+      <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-4">
 
-        {/* ── Greeting ── */}
-        <div className="fu mb-5 rounded-2xl border p-5 sm:p-6"
-          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-xs font-medium" style={{ color: "var(--sp-text-3)" }}>{greeting},</p>
-              <h1 className="mt-0.5 text-2xl font-black tracking-tight sm:text-3xl" style={{ color: "var(--sp-text)" }}>
-                {firstName} 👋
-              </h1>
-              {(data.profile.department?.name || data.profile.institution?.name) && (
-                <p className="mt-1.5 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                  {[data.profile.department?.name, data.profile.institution?.name, data.profile.level?.name].filter(Boolean).join(" · ")}
-                </p>
-              )}
-            </div>
-            <div className="flex items-center gap-4">
-              <StreakRing streak={streak} />
-              <div className="h-8 w-px" style={{ background: "var(--sp-border)" }} />
-              <XPBar xp={xp} />
-            </div>
-          </div>
-        </div>
+          {/* ── LEFT RAIL ── */}
+          <aside className="space-y-4 anim-1">
 
-        {/* ── Stats ── */}
-        <div className="fu fu1 mb-5 grid grid-cols-3 gap-2.5">
-          <StatPill icon={<BookOpen className="h-4 w-4 text-indigo-500" />}  label="Courses"        value={courses.length} />
-          <StatPill icon={<FileText className="h-4 w-4 text-violet-500" />}  label="Past questions" value={stats.questions_in_courses} />
-          <StatPill icon={<TrendingUp className="h-4 w-4 text-teal-500" />}  label="My uploads"     value={stats.my_uploads} />
-        </div>
+            {/* User card */}
+            <div className="relative overflow-hidden rounded-2xl border p-5"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              {/* subtle gradient bg */}
+              <div className="pointer-events-none absolute inset-0 opacity-30"
+                style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, transparent 60%)" }} />
+              <div className="relative">
+                <div className="flex items-center gap-3 mb-4">
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt="Profile" className="h-12 w-12 rounded-2xl object-cover ring-2 ring-indigo-500/20" />
+                  ) : (
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-black text-white shadow-lg shadow-indigo-500/30">
+                      {firstName.slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="font-black truncate" style={{ color: "var(--sp-text)" }}>{data.profile.full_name ?? firstName}</p>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-500">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                        Active
+                      </span>
+                    </div>
+                  </div>
+                </div>
 
-        {/* ── Body grid ── */}
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+                {data.profile.department?.name && (
+                  <div className="mb-4 space-y-1">
+                    <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>Academic</p>
+                    {[data.profile.institution?.name, data.profile.department?.name, data.profile.level?.name]
+                      .filter(Boolean).map(v => (
+                      <p key={v} className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--sp-text-2)" }}>
+                        <span className="h-1 w-1 rounded-full bg-indigo-500 shrink-0" />
+                        {v}
+                      </p>
+                    ))}
+                  </div>
+                )}
 
-          {/* Left */}
-          <div className="space-y-5 lg:col-span-2">
+                <LevelBadge xp={xp} />
 
-            {courses.length > 0 && <div className="fu fu2"><TodayFocus courses={courses} /></div>}
-
-            {/* Courses */}
-            <section className="fu fu3">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-bold" style={{ color: "var(--sp-text)" }}>Your courses</h2>
-                <Link href="/onboarding"
-                  className="flex items-center gap-0.5 text-[11px] font-medium text-indigo-500 opacity-60 hover:opacity-100 transition-opacity">
-                  Manage <ChevronRight className="h-3 w-3" />
+                <Link href="/dashboard/profile"
+                  className="mt-4 flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:border-indigo-500/40 hover:bg-indigo-500/5 hover:text-indigo-500"
+                  style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
+                  Edit profile <ChevronRight className="h-3 w-3" />
                 </Link>
               </div>
+            </div>
+
+            {/* Streak card */}
+            <div className="rounded-2xl border p-4"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>Study streak</p>
+                <span className="text-[10px] font-bold text-indigo-500">Goal: 7 days</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <StreakRing streak={streak} size={72} />
+                <div className="flex-1 space-y-2">
+                  {/* Day dots */}
+                  <div className="flex gap-1">
+                    {["M","T","W","T","F","S","S"].map((d, i) => (
+                      <div key={i} className="flex flex-1 flex-col items-center gap-1">
+                        <div className={`h-5 w-5 rounded-full flex items-center justify-center text-[8px] font-black transition-all ${
+                          i < streak ? "text-white shadow-md" : ""
+                        }`} style={{
+                          background: i < streak ? "#6366F1" : "var(--sp-ring-track)",
+                          color: i < streak ? "white" : "var(--sp-text-3)",
+                          boxShadow: i < streak ? "0 2px 8px rgba(99,102,241,0.35)" : "none",
+                        }}>{d}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] leading-relaxed" style={{ color: "var(--sp-text-3)" }}>
+                    {streak === 0
+                      ? "Start your streak today!"
+                      : streak >= 7
+                      ? "🔥 Full week! Amazing!"
+                      : `${7 - streak} more day${7 - streak !== 1 ? "s" : ""} to complete the week`}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick actions */}
+            <div className="space-y-2">
+              <p className="px-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>Quick actions</p>
+              <QuickAction href="/dashboard/upload" label="Upload paper" sub="Earn 50 XP per upload"
+                icon={<Upload className="h-4 w-4" />} color="#6366F1" />
+              <QuickAction href="/dashboard/courses" label="Browse courses" sub="Find past questions"
+                icon={<BookOpen className="h-4 w-4" />} color="#0EA5E9" />
+              <QuickAction href="/dashboard/profile" label="My profile" sub="Account & settings"
+                icon={<GraduationCap className="h-4 w-4" />} color="#8B5CF6" />
+            </div>
+          </aside>
+
+          {/* ── MAIN CONTENT ── */}
+          <main className="space-y-5 lg:col-span-2">
+
+            {/* Greeting banner */}
+            <div className="anim-1 relative overflow-hidden rounded-2xl p-5"
+              style={{ background: "linear-gradient(135deg, var(--sp-bg-card) 0%, var(--sp-bg-card) 100%)", borderColor: "var(--sp-border)", border: "1px solid var(--sp-border)" }}>
+              <div className="pointer-events-none absolute right-0 top-0 h-32 w-32 opacity-10"
+                style={{ background: "radial-gradient(circle, #6366F1 0%, transparent 70%)" }} />
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Calendar className="h-3.5 w-3.5" style={{ color: "var(--sp-text-3)" }} />
+                    <span className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>{today}</span>
+                  </div>
+                  <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>{greeting},</p>
+                  <h1 className="text-2xl font-black tracking-tight mt-0.5" style={{ color: "var(--sp-text)" }}>
+                    {firstName} 👋
+                  </h1>
+                  {data.profile.department?.name && (
+                    <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+                      {data.profile.department.name} · {data.profile.institution?.name}
+                    </p>
+                  )}
+                </div>
+                {!isPro && (
+                  <Link href="/dashboard/subscribe"
+                    className="shrink-0 flex items-center gap-1.5 rounded-full bg-indigo-600 px-3.5 py-2 text-[11px] font-black text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5">
+                    <Crown className="h-3 w-3 text-yellow-300" fill="currentColor" />
+                    Go Pro
+                  </Link>
+                )}
+              </div>
+            </div>
+
+            {/* Stats */}
+            <div className="anim-2 grid grid-cols-3 gap-3">
+              <StatCard icon={<BookOpen className="h-4 w-4" />} label="My courses"
+                value={courses.length} accent="#6366F1" />
+              <StatCard icon={<FileText className="h-4 w-4" />} label="Past papers"
+                value={stats.questions_in_courses} accent="#8B5CF6" />
+              <StatCard icon={<Trophy className="h-4 w-4" />} label="Uploads"
+                value={stats.my_uploads} accent="#10B981"
+                delta={stats.my_uploads > 0 ? `${stats.my_uploads}` : undefined} />
+            </div>
+
+            {/* Today's focus pill */}
+            {courses.length > 0 && (
+              <div className="anim-3"><TodayFocus courses={courses} /></div>
+            )}
+
+            {/* Courses section */}
+            <section className="anim-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-black" style={{ color: "var(--sp-text)" }}>Your courses</h2>
+                  <p className="text-[10px] mt-0.5" style={{ color: "var(--sp-text-3)" }}>{courses.length} enrolled this semester</p>
+                </div>
+                <Link href="/onboarding"
+                  className="flex items-center gap-1 rounded-full border px-3 py-1.5 text-[10px] font-bold transition-all hover:border-indigo-500/40 hover:text-indigo-500"
+                  style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
+                  <Plus className="h-3 w-3" /> Manage
+                </Link>
+              </div>
+
               {courses.length === 0 ? (
-                <EmptyState icon={<BookOpen className="h-5 w-5" />} title="No courses yet"
-                  body="Choose your courses to unlock past questions for your semester."
+                <EmptyState icon={<BookOpen className="h-6 w-6" />} title="No courses enrolled yet"
+                  body="Enrol in your courses to unlock all past questions for your semester."
                   cta={{ href: "/onboarding", label: "Choose courses" }} />
               ) : (
-                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-                  {courses.map((course, i) => <CourseCard key={course.id} course={course} index={i} />)}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {courses.map((c, i) => <CourseCard key={c.id} course={c} index={i} />)}
                   <Link href="/onboarding"
-                    className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border border-dashed p-4 transition-colors"
+                    className="flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-4 transition-all hover:border-indigo-500/40 hover:bg-indigo-500/[0.03]"
                     style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
-                    <Plus className="h-4 w-4" />
-                    <span className="text-[10px] font-semibold">Add course</span>
+                    <Plus className="h-5 w-5" />
+                    <span className="text-[10px] font-bold">Add course</span>
                   </Link>
                 </div>
               )}
             </section>
 
             {/* Recent uploads */}
-            <section className="fu fu4">
+            <section className="anim-5">
               <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-bold" style={{ color: "var(--sp-text)" }}>Recent uploads</h2>
+                <h2 className="text-sm font-black" style={{ color: "var(--sp-text)" }}>Recent uploads</h2>
                 {recentQuestions.length > 0 && (
                   <Link href="/dashboard/courses"
-                    className="flex items-center gap-0.5 text-[11px] font-medium text-indigo-500 opacity-60 hover:opacity-100 transition-opacity">
-                    See all <ChevronRight className="h-3 w-3" />
+                    className="text-[11px] font-bold text-indigo-500 hover:underline">
+                    See all
                   </Link>
                 )}
               </div>
+
               {recentQuestions.length === 0 ? (
-                <EmptyState icon={<FileText className="h-5 w-5" />} title="Nothing here yet"
-                  body={`Be the first to share a past question for ${data.profile.department?.name ?? "your department"}.`}
-                  cta={{ href: "/dashboard/upload", label: "Upload now" }} />
+                <EmptyState icon={<FileText className="h-6 w-6" />} title="No papers yet"
+                  body={`Be the first to upload for ${data.profile.department?.name ?? "your department"}.`}
+                  cta={{ href: "/dashboard/upload", label: "Upload a paper" }} />
               ) : (
-                <div className="overflow-hidden rounded-2xl border"
-                  style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-                  {recentQuestions.map((q, i) => (
-                    <Link key={q.id} href={`/questions/${q.id}`}
-                      className={`group flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-indigo-500/[0.04] ${i > 0 ? "border-t" : ""}`}
-                      style={i > 0 ? { borderColor: "var(--sp-border)" } : {}}>
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-500 group-hover:bg-violet-500/15 transition-colors">
-                        <FileText className="h-3.5 w-3.5" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>{q.title}</p>
-                        <p className="truncate text-[10px] mt-0.5" style={{ color: "var(--sp-text-3)" }}>
-                          {q.course?.name ?? "—"}{q.year ? ` · ${q.year}` : ""}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 flex-col items-end gap-1">
-                        <span className="flex items-center gap-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-                          <Clock className="h-2.5 w-2.5" />
-                          {new Date(q.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short" })}
-                        </span>
-                        {q.views != null && (
-                          <span className="flex items-center gap-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-                            <Users className="h-2.5 w-2.5" />{q.views}
-                          </span>
-                        )}
-                      </div>
-                    </Link>
-                  ))}
+                <div className="space-y-2">
+                  {recentQuestions.map((q, i) => <ActivityItem key={q.id} q={q} index={i} />)}
                 </div>
               )}
             </section>
-          </div>
+          </main>
 
-          {/* Right sidebar */}
-          <div className="fu fu5 space-y-4">
+          {/* ── RIGHT RAIL ── */}
+          <aside className="space-y-4 anim-6">
 
-            {/* Upload CTA */}
-            <Link href="/dashboard/upload"
-              className="group flex items-center gap-3 rounded-2xl border p-4 transition-all hover:scale-[1.01]"
-              style={{ background: "var(--sp-course-indigo-bg)", borderColor: "var(--sp-course-indigo-bdr)" }}>
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white group-hover:bg-indigo-500 transition-colors">
-                <Upload className="h-4 w-4" />
+            {/* Upgrade — only free users */}
+            {!isPro && <UpgradeCard />}
+
+            {/* Pro welcome */}
+            {isPro && (
+              <div className="rounded-2xl border p-4 text-center"
+                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+                <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600">
+                  <Crown className="h-5 w-5 text-yellow-300" fill="currentColor" />
+                </div>
+                <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>SparkL Pro Active</p>
+                <p className="mt-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>All features unlocked</p>
               </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>Upload a past question</p>
-                <p className="text-[10px] mt-0.5" style={{ color: "var(--sp-text-3)" }}>Help your department · earn XP</p>
-              </div>
-              <ArrowRight className="h-3.5 w-3.5 shrink-0 text-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-            </Link>
+            )}
 
-            {!isPro && <UpgradeBanner />}
-
+            {/* Streak nudge — first upload */}
             {stats.my_uploads === 0 && (
               <div className="rounded-2xl border p-4"
-                style={{ background: "var(--sp-course-amber-bg)", borderColor: "var(--sp-course-amber-bdr)" }}>
+                style={{ background: "rgba(245,158,11,0.07)", borderColor: "rgba(245,158,11,0.22)" }}>
                 <div className="mb-2 flex items-center gap-2">
-                  <Flame className="h-3.5 w-3.5 text-amber-500" />
-                  <p className="text-xs font-bold text-amber-600 dark:text-amber-400">Start your streak</p>
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/20">
+                    <Flame className="h-3.5 w-3.5 text-amber-500" />
+                  </div>
+                  <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>Start contributing</p>
                 </div>
                 <p className="text-[11px] leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
-                  Your first upload earns 50 XP and kicks off your contribution streak.
+                  Upload your first past question and earn 50 XP instantly. Help your department grow.
                 </p>
                 <Link href="/dashboard/upload"
-                  className="mt-3 inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:opacity-80 transition-opacity">
-                  Upload now <ArrowRight className="h-3 w-3" />
+                  className="mt-3 flex items-center justify-center gap-1.5 rounded-xl bg-amber-500 py-2.5 text-[11px] font-black text-white hover:bg-amber-400 transition-all">
+                  <Upload className="h-3 w-3" /> Upload now
                 </Link>
               </div>
             )}
 
-            {/* Profile summary */}
-            <div className="rounded-2xl border p-4"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <div className="mb-3 flex items-center gap-2">
-                <GraduationCap className="h-3.5 w-3.5 text-indigo-500" />
-                <h3 className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>Your profile</h3>
+            {/* Leaderboard teaser */}
+            <div className="rounded-2xl border p-4" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Trophy className="h-3.5 w-3.5 text-amber-500" />
+                  <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>Department board</p>
+                </div>
+                <Link href="/dashboard/leaderboard" className="text-[10px] font-bold text-indigo-500 hover:underline">
+                  Full board
+                </Link>
               </div>
-              <div className="space-y-1.5">
-                {[data.profile.institution?.name, data.profile.department?.name, data.profile.level?.name]
-                  .filter(Boolean).map((val) => (
-                  <p key={val} className="truncate text-[11px]" style={{ color: "var(--sp-text-3)" }}>{val}</p>
-                ))}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2.5 rounded-xl border px-3 py-2.5"
+                  style={{ background: "rgba(99,102,241,0.07)", borderColor: "rgba(99,102,241,0.20)" }}>
+                  <span className="text-xs font-black text-indigo-500 w-4">—</span>
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-[10px] font-black text-white">
+                    {firstName.slice(0, 2).toUpperCase()}
+                  </div>
+                  <span className="flex-1 text-xs font-semibold" style={{ color: "var(--sp-text)" }}>You</span>
+                  <div className="flex items-center gap-1">
+                    <Star className="h-3 w-3 text-amber-500" fill="currentColor" />
+                    <span className="text-[11px] font-black" style={{ color: "var(--sp-text-2)" }}>{stats.my_uploads}</span>
+                  </div>
+                </div>
+                <p className="text-center text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+                  Upload more to climb the ranks
+                </p>
               </div>
-              <Link href="/dashboard/profile"
-                className="mt-4 flex items-center justify-center gap-1 rounded-xl border py-2 text-[11px] font-semibold transition-colors hover:border-indigo-500/40 hover:text-indigo-500"
-                style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
-                Edit profile <ChevronRight className="h-3 w-3" />
-              </Link>
             </div>
 
-            {/* Quick links */}
-            <div className="overflow-hidden rounded-2xl border"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              {[
-                { href: "/dashboard/courses", icon: <BookOpen className="h-3.5 w-3.5" />, label: "Browse all courses" },
-                { href: "/dashboard/upload",  icon: <Zap className="h-3.5 w-3.5" />,      label: "My uploads" },
-              ].map((item, i) => (
-                <Link key={item.href} href={item.href}
-                  className={`group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-indigo-500/[0.05] ${i > 0 ? "border-t" : ""}`}
-                  style={i > 0 ? { borderColor: "var(--sp-border)" } : {}}>
-                  <span style={{ color: "var(--sp-text-3)" }}>{item.icon}</span>
-                  <span className="flex-1 text-xs font-medium" style={{ color: "var(--sp-text-2)" }}>{item.label}</span>
-                  <ChevronRight className="h-3 w-3 text-indigo-500 opacity-20 group-hover:opacity-70 transition-opacity" />
-                </Link>
-              ))}
+            {/* Study tip */}
+            <div className="rounded-2xl border p-4" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <div className="mb-2 flex items-center gap-2">
+                <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+                <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>Study tip</p>
+              </div>
+              <p className="text-[11px] leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
+                Students who practice with past questions score <span className="font-bold text-indigo-500">40% higher</span> on average. Try practice mode on any AI-processed paper.
+              </p>
             </div>
-          </div>
+
+          </aside>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
