@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -6,7 +7,7 @@ import {
   School, BookOpen, GraduationCap, FileText, Users, Layers, CalendarDays,
   Loader2, ArrowRight, Clock, CheckCircle2, XCircle, TrendingUp,
   TrendingDown, Activity, AlertTriangle, Eye, Upload, UserCheck,
-  BarChart3, Zap, RefreshCw,
+  BarChart3, Zap, RefreshCw, ShieldAlert,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
@@ -45,6 +46,56 @@ interface OverviewData {
   user_trend: number[];
 }
 
+// ── Sparkline ─────────────────────────────────────────────────────────────────
+
+function Sparkline({ data, color, height = 40 }: { data: number[]; color: string; height?: number }) {
+  const w = 140;
+  const max = Math.max(...data, 1);
+  const step = w / (data.length - 1);
+  const pts = data.map((v, i) => `${i * step},${height - (v / max) * (height - 4)}`).join(" ");
+  const last = data[data.length - 1];
+  const cx = (data.length - 1) * step;
+  const cy = height - (last / max) * (height - 4);
+  return (
+    <svg width={w} height={height} viewBox={`0 0 ${w} ${height}`} fill="none">
+      <polyline points={pts} stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" opacity="0.6" />
+      <circle cx={cx} cy={cy} r="3.5" fill={color} />
+    </svg>
+  );
+}
+
+// ── Status pill ───────────────────────────────────────────────────────────────
+
+function StatusPill({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    pending:  "bg-amber-400/10 text-amber-400 ring-1 ring-amber-400/25",
+    approved: "bg-emerald-400/10 text-emerald-400 ring-1 ring-emerald-400/25",
+    rejected: "bg-red-400/10 text-red-400 ring-1 ring-red-400/25",
+  };
+  return (
+    <span className={`inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] font-semibold capitalize ${styles[status] ?? "bg-slate-400/10 text-slate-400"}`}>
+      {status}
+    </span>
+  );
+}
+
+// ── Avatar initials ───────────────────────────────────────────────────────────
+
+function Avatar({ name, size = 8 }: { name: string; size?: number }) {
+  const colors = ["#2B6FEB", "#8B5CF6", "#10B981", "#F59E0B", "#EF4444"];
+  const idx = name.charCodeAt(0) % colors.length;
+  return (
+    <div
+      className={`flex h-${size} w-${size} shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white`}
+      style={{ background: colors[idx] }}
+    >
+      {name.charAt(0).toUpperCase()}
+    </div>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
 export default function AdminOverviewPage() {
   const supabase = createClient();
   const [data, setData] = useState<OverviewData | null>(null);
@@ -77,8 +128,8 @@ export default function AdminOverviewPage() {
     return (
       <div className="flex min-h-[70vh] items-center justify-center">
         <div className="flex flex-col items-center gap-3">
-          <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
-          <p className="text-sm text-slate-500">Loading admin data…</p>
+          <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+          <p className="text-xs text-slate-600">Loading…</p>
         </div>
       </div>
     );
@@ -87,11 +138,11 @@ export default function AdminOverviewPage() {
   if (error || !data) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center">
-        <div className="rounded-2xl border border-red-500/20 bg-red-500/5 p-8 text-center">
-          <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-red-400" />
-          <p className="text-sm font-medium text-red-400">{error || "No data available."}</p>
-          <button onClick={load} className="mt-4 rounded-lg bg-red-500/10 px-4 py-2 text-xs font-medium text-red-400 transition hover:bg-red-500/20">
-            Try again
+        <div className="max-w-xs rounded-2xl border border-red-500/20 bg-red-500/5 p-8 text-center">
+          <AlertTriangle className="mx-auto mb-3 h-7 w-7 text-red-400" />
+          <p className="text-sm font-medium text-red-300">{error || "No data."}</p>
+          <button onClick={load} className="mt-4 rounded-lg bg-red-500/10 px-4 py-2 text-xs font-semibold text-red-400 hover:bg-red-500/20 transition">
+            Retry
           </button>
         </div>
       </div>
@@ -99,253 +150,203 @@ export default function AdminOverviewPage() {
   }
 
   const { stats, recent_users, recent_questions } = data;
+  const uploadTrend = data.upload_trend?.length ? data.upload_trend : [2, 5, 3, 8, 6, 11, 9];
+  const userTrend   = data.user_trend?.length   ? data.user_trend   : [1, 3, 2, 4, 5, 3, 7];
 
-  const total = stats.total_questions || 1;
-  const pendingPct = Math.round((stats.pending_questions / total) * 100);
+  const total       = Math.max(stats.total_questions, 1);
   const approvedPct = Math.round((stats.approved_questions / total) * 100);
-  const rejectedPct = Math.max(0, 100 - pendingPct - approvedPct);
-  const healthScore = Math.round(approvedPct - (stats.suspended_users / Math.max(stats.total_users, 1)) * 100);
-  const uploadTrend = data.upload_trend ?? [2, 5, 3, 8, 6, 11, 9];
-  const userTrend = data.user_trend ?? [1, 3, 2, 4, 5, 3, 7];
+  const pendingPct  = Math.round((stats.pending_questions / total) * 100);
+  const rejectedPct = Math.max(0, 100 - approvedPct - pendingPct);
 
   return (
-    <div className="space-y-8 pb-10">
+    <div className="space-y-6 pb-12" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
 
       {/* ── Page header ── */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-center justify-between gap-4 pb-2 border-b border-white/[0.05]">
         <div>
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500/15">
-              <Zap className="h-3.5 w-3.5 text-blue-400" fill="currentColor" />
-            </div>
-            <h1 className="text-xl font-bold text-white">Admin Dashboard</h1>
-          </div>
-          <p className="mt-1 text-sm text-slate-500">
-            Platform health · Last refreshed {lastRefresh.toLocaleTimeString()}
+          <h1 className="text-lg font-bold text-white tracking-tight">Overview</h1>
+          <p className="mt-0.5 text-xs text-slate-600">
+            Refreshed at {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </p>
         </div>
         <button
           onClick={load}
-          className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-[#0D1230] px-4 py-2 text-xs font-medium text-slate-400 transition hover:border-blue-500/30 hover:text-blue-400"
+          disabled={loading}
+          className="flex items-center gap-2 rounded-lg border border-white/[0.07] bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-white hover:border-white/15 transition disabled:opacity-40"
         >
-          <RefreshCw className="h-3.5 w-3.5" />
+          <RefreshCw className="h-3 w-3" />
           Refresh
         </button>
       </div>
 
-      {/* ── Health score banner ── */}
-      <div className="relative overflow-hidden rounded-2xl border border-white/[0.05] bg-[#0D1230] p-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-slate-600">Platform Health Score</p>
-            <div className="mt-1 flex items-end gap-3">
-              <span className="text-5xl font-black tabular-nums text-white">{Math.max(0, healthScore)}</span>
-              <span className="mb-1.5 text-lg text-slate-600">/100</span>
-              <div className={`mb-1.5 flex items-center gap-1 text-xs font-semibold ${healthScore >= 70 ? "text-emerald-400" : healthScore >= 40 ? "text-amber-400" : "text-red-400"}`}>
-                {healthScore >= 70 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
-                {healthScore >= 70 ? "Healthy" : healthScore >= 40 ? "Fair" : "Needs attention"}
-              </div>
-            </div>
-            <p className="mt-1 text-xs text-slate-600">
-              Based on approval rate, user activity, and content moderation
-            </p>
-          </div>
-          <div className="grid grid-cols-3 gap-3 sm:gap-4">
-            <MiniStat label="Approval rate" value={`${approvedPct}%`} color="text-emerald-400" />
-            <MiniStat label="Pending review" value={String(stats.pending_questions)} color="text-amber-400" />
-            <MiniStat label="Suspended" value={String(stats.suspended_users)} color="text-red-400" />
-          </div>
-        </div>
-        {/* Background decoration */}
-        <div className="pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full bg-blue-500/5" />
-      </div>
-
-      {/* ── Alert banner ── */}
+      {/* ── Pending alert ── */}
       {stats.pending_questions > 0 && (
         <Link
           href="/admin/questions?status=pending"
-          className="flex items-center justify-between gap-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 px-5 py-4 transition hover:border-amber-500/40 hover:bg-amber-500/10"
+          className="flex items-center justify-between gap-4 rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-4 py-3 hover:bg-amber-500/10 transition"
         >
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10">
-              <Clock className="h-4 w-4 text-amber-400" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-amber-300">
-                {stats.pending_questions} upload{stats.pending_questions !== 1 ? "s" : ""} waiting for review
-              </p>
-              <p className="text-xs text-amber-500/70">
-                Students can't access these until approved
-              </p>
-            </div>
+            <ShieldAlert className="h-4 w-4 shrink-0 text-amber-400" />
+            <p className="text-sm font-semibold text-amber-300">
+              {stats.pending_questions} upload{stats.pending_questions !== 1 ? "s" : ""} awaiting review
+            </p>
+            <span className="hidden sm:inline text-xs text-amber-600">— students can't see these until approved</span>
           </div>
-          <ArrowRight className="h-4 w-4 shrink-0 text-amber-500" />
+          <ArrowRight className="h-3.5 w-3.5 shrink-0 text-amber-500" />
         </Link>
       )}
 
-      {/* ── Key metrics ── */}
-      <div>
-        <SectionLabel>Key metrics</SectionLabel>
-        <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <MetricCard
-            icon={<Users className="h-4 w-4" />}
-            iconClass="bg-blue-500/15 text-blue-400"
-            label="Total users"
-            value={stats.total_users.toLocaleString()}
-            sub={`+${stats.new_users_this_week ?? 0} this week`}
-            trend="up"
-            href="/admin/users"
-          />
-          <MetricCard
-            icon={<FileText className="h-4 w-4" />}
-            iconClass="bg-violet-500/15 text-violet-400"
-            label="Past questions"
-            value={stats.total_questions.toLocaleString()}
-            sub={`${stats.new_questions_this_week ?? 0} new this week`}
-            trend="up"
-            href="/admin/questions"
-          />
-          <MetricCard
-            icon={<Eye className="h-4 w-4" />}
-            iconClass="bg-cyan-500/15 text-cyan-400"
-            label="Total views"
-            value={(stats.total_views ?? 0).toLocaleString()}
-            sub="Across all content"
-            href="/admin/questions"
-          />
-          <MetricCard
-            icon={<School className="h-4 w-4" />}
-            iconClass="bg-emerald-500/15 text-emerald-400"
-            label="Institutions"
-            value={stats.total_institutions.toLocaleString()}
-            sub={`${stats.total_departments} departments`}
-            href="/admin/institutions"
-          />
-        </div>
+      {/* ── Stat row ── */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          label="Total users"
+          value={stats.total_users}
+          delta={`+${stats.new_users_this_week ?? 0} this week`}
+          deltaUp
+          accent="#2B6FEB"
+          href="/admin/users"
+          sparkData={userTrend}
+        />
+        <StatCard
+          label="Past questions"
+          value={stats.total_questions}
+          delta={`${stats.new_questions_this_week ?? 0} new this week`}
+          deltaUp
+          accent="#8B5CF6"
+          href="/admin/questions"
+          sparkData={uploadTrend}
+        />
+        <StatCard
+          label="Total views"
+          value={stats.total_views ?? 0}
+          delta="All time"
+          accent="#06B6D4"
+          href="/admin/questions"
+        />
+        <StatCard
+          label="Institutions"
+          value={stats.total_institutions}
+          delta={`${stats.total_departments} dept${stats.total_departments !== 1 ? "s" : ""}`}
+          accent="#10B981"
+          href="/admin/institutions"
+        />
       </div>
 
-      {/* ── Moderation pipeline + Sparkline ── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* ── Mid row: pipeline + activity ── */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-5">
 
-        {/* Pipeline */}
-        <div className="rounded-2xl border border-white/[0.05] bg-[#0D1230] p-5">
-          <div className="flex items-center justify-between">
-            <SectionLabel>Moderation pipeline</SectionLabel>
+        {/* Moderation pipeline — 3 cols */}
+        <div className="lg:col-span-3 rounded-xl border border-white/[0.06] bg-[#0C1428] p-5">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm font-semibold text-slate-200">Moderation pipeline</p>
             <span className="text-xs text-slate-600">{stats.total_questions} total</span>
           </div>
 
           {stats.total_questions === 0 ? (
-            <div className="mt-6 rounded-xl border border-white/[0.04] bg-white/[0.02] py-8 text-center">
-              <Upload className="mx-auto mb-2 h-6 w-6 text-slate-600" />
-              <p className="text-sm text-slate-600">No uploads yet</p>
+            <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+              <Upload className="h-5 w-5 text-slate-700" />
+              <p className="text-xs text-slate-600">No uploads yet</p>
             </div>
           ) : (
             <>
-              <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
-                {pendingPct > 0 && <div className="inline-block h-full bg-amber-400 rounded-l-full" style={{ width: `${pendingPct}%` }} />}
-                {approvedPct > 0 && <div className="inline-block h-full bg-emerald-500" style={{ width: `${approvedPct}%` }} />}
-                {rejectedPct > 0 && <div className="inline-block h-full bg-red-500 rounded-r-full" style={{ width: `${rejectedPct}%` }} />}
+              {/* Stacked bar */}
+              <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-white/[0.05]">
+                <div className="h-full bg-amber-400 transition-all" style={{ width: `${pendingPct}%` }} />
+                <div className="h-full bg-emerald-500 transition-all" style={{ width: `${approvedPct}%` }} />
+                <div className="h-full bg-red-500 transition-all"   style={{ width: `${rejectedPct}%` }} />
               </div>
-              <div className="mt-4 space-y-2.5">
+
+              {/* Rows */}
+              <div className="mt-5 space-y-1">
                 <PipelineRow
-                  color="bg-amber-400"
-                  icon={<Clock className="h-3 w-3" />}
+                  icon={<Clock className="h-3.5 w-3.5" />}
                   label="Pending review"
                   value={stats.pending_questions}
                   pct={pendingPct}
+                  dotColor="bg-amber-400"
+                  textColor="text-amber-400"
                   href="/admin/questions?status=pending"
                 />
                 <PipelineRow
-                  color="bg-emerald-500"
-                  icon={<CheckCircle2 className="h-3 w-3" />}
+                  icon={<CheckCircle2 className="h-3.5 w-3.5" />}
                   label="Approved"
                   value={stats.approved_questions}
                   pct={approvedPct}
+                  dotColor="bg-emerald-500"
+                  textColor="text-emerald-400"
                   href="/admin/questions?status=approved"
                 />
                 <PipelineRow
-                  color="bg-red-500"
-                  icon={<XCircle className="h-3 w-3" />}
+                  icon={<XCircle className="h-3.5 w-3.5" />}
                   label="Rejected"
                   value={stats.rejected_questions}
                   pct={rejectedPct}
+                  dotColor="bg-red-500"
+                  textColor="text-red-400"
                   href="/admin/questions?status=rejected"
                 />
+              </div>
+
+              {/* Approval rate callout */}
+              <div className="mt-5 rounded-lg bg-emerald-500/[0.07] border border-emerald-500/15 px-4 py-3 flex items-center justify-between">
+                <p className="text-xs text-slate-500">Approval rate</p>
+                <p className="text-xl font-black tabular-nums text-emerald-400">{approvedPct}%</p>
               </div>
             </>
           )}
         </div>
 
-        {/* Weekly activity */}
-        <div className="rounded-2xl border border-white/[0.05] bg-[#0D1230] p-5">
-          <SectionLabel>Weekly activity</SectionLabel>
-          <div className="mt-4 space-y-4">
-            <SparklineRow label="Uploads" color="#8b5cf6" data={uploadTrend} />
-            <SparklineRow label="New users" color="#3b82f6" data={userTrend} />
-          </div>
-          <div className="mt-5 grid grid-cols-2 gap-3">
-            <div className="rounded-xl border border-white/[0.04] bg-white/[0.02] p-3">
-              <p className="text-[11px] text-slate-600">Users today</p>
-              <p className="mt-1 text-xl font-bold text-white">{stats.new_users_today ?? 0}</p>
-              <div className="mt-1 flex items-center gap-1 text-[11px] text-emerald-400">
-                <TrendingUp className="h-3 w-3" /> Active today
-              </div>
-            </div>
-            <div className="rounded-xl border border-white/[0.04] bg-white/[0.02] p-3">
-              <p className="text-[11px] text-slate-600">Courses listed</p>
-              <p className="mt-1 text-xl font-bold text-white">{stats.total_courses.toLocaleString()}</p>
-              <div className="mt-1 flex items-center gap-1 text-[11px] text-blue-400">
-                <Activity className="h-3 w-3" /> Across all levels
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+        {/* Weekly activity — 2 cols */}
+        <div className="lg:col-span-2 rounded-xl border border-white/[0.06] bg-[#0C1428] p-5 flex flex-col gap-5">
+          <p className="text-sm font-semibold text-slate-200">This week</p>
 
-      {/* ── Quick manage grid ── */}
-      <div>
-        <SectionLabel>Manage</SectionLabel>
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-          <ManageTile icon={<School className="h-4 w-4" />} label="Institutions" count={stats.total_institutions} href="/admin/institutions" color="text-emerald-400 bg-emerald-500/10" />
-          <ManageTile icon={<BookOpen className="h-4 w-4" />} label="Departments" count={stats.total_departments} href="/admin/departments" color="text-blue-400 bg-blue-500/10" />
-          <ManageTile icon={<GraduationCap className="h-4 w-4" />} label="Courses" count={stats.total_courses} href="/admin/courses" color="text-violet-400 bg-violet-500/10" />
-          <ManageTile icon={<Layers className="h-4 w-4" />} label="Levels" href="/admin/levels" color="text-cyan-400 bg-cyan-500/10" />
-          <ManageTile icon={<Layers className="h-4 w-4" />} label="Study Modes" href="/admin/study-modes" color="text-pink-400 bg-pink-500/10" />
-          <ManageTile icon={<CalendarDays className="h-4 w-4" />} label="Semesters" href="/admin/semesters" color="text-amber-400 bg-amber-500/10" />
-          <ManageTile icon={<FileText className="h-4 w-4" />} label="Questions" count={stats.total_questions} href="/admin/questions" color="text-red-400 bg-red-500/10" />
-          <ManageTile icon={<Users className="h-4 w-4" />} label="Users" count={stats.total_users} href="/admin/users" color="text-slate-400 bg-slate-500/10" />
+          <div className="flex-1 space-y-5">
+            <ActivityRow
+              label="Uploads"
+              value={stats.new_questions_this_week ?? 0}
+              color="#8B5CF6"
+              data={uploadTrend}
+            />
+            <ActivityRow
+              label="New users"
+              value={stats.new_users_this_week ?? 0}
+              color="#2B6FEB"
+              data={userTrend}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/[0.05]">
+            <MiniStat label="Today's signups" value={String(stats.new_users_today ?? 0)} />
+            <MiniStat label="Courses" value={String(stats.total_courses)} />
+          </div>
         </div>
       </div>
 
       {/* ── Recent activity ── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
 
         {/* Recent sign-ups */}
-        <div className="rounded-2xl border border-white/[0.05] bg-[#0D1230] overflow-hidden">
-          <div className="flex items-center justify-between border-b border-white/[0.05] px-5 py-4">
-            <div className="flex items-center gap-2">
-              <UserCheck className="h-4 w-4 text-blue-400" />
-              <p className="text-sm font-semibold text-slate-200">Recent sign-ups</p>
+        <div className="rounded-xl border border-white/[0.06] bg-[#0C1428] overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.05]">
+            <div className="flex items-center gap-2 text-slate-300">
+              <UserCheck className="h-3.5 w-3.5 text-blue-400" />
+              <p className="text-sm font-semibold">Recent sign-ups</p>
             </div>
             <Link href="/admin/users" className="text-xs font-medium text-blue-500 hover:text-blue-400 transition">
-              View all →
+              All users →
             </Link>
           </div>
           <div className="divide-y divide-white/[0.04]">
             {recent_users.length === 0 ? (
-              <EmptyState icon={<Users className="h-5 w-5" />} text="No sign-ups yet" />
+              <EmptyRow icon={<Users className="h-4 w-4" />} text="No sign-ups yet" />
             ) : recent_users.map((u) => (
-              <div key={u.id} className="flex items-center justify-between gap-3 px-5 py-3 transition hover:bg-white/[0.02]">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1E3A8A] text-xs font-bold text-blue-200">
-                    {(u.full_name ?? "?").charAt(0).toUpperCase()}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-slate-200">{u.full_name ?? "Unnamed"}</p>
-                    <p className="truncate text-xs text-slate-600">{u.institution?.name ?? "No institution"}</p>
-                  </div>
+              <div key={u.id} className="flex items-center gap-3 px-5 py-3 hover:bg-white/[0.02] transition">
+                <Avatar name={u.full_name ?? "?"} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-200">{u.full_name ?? "Unnamed"}</p>
+                  <p className="truncate text-xs text-slate-600">{u.institution?.name ?? "No institution"}</p>
                 </div>
-                <p className="shrink-0 text-xs text-slate-600">
+                <p className="shrink-0 text-xs text-slate-700">
                   {new Date(u.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
                 </p>
               </div>
@@ -354,22 +355,22 @@ export default function AdminOverviewPage() {
         </div>
 
         {/* Recent uploads */}
-        <div className="rounded-2xl border border-white/[0.05] bg-[#0D1230] overflow-hidden">
-          <div className="flex items-center justify-between border-b border-white/[0.05] px-5 py-4">
-            <div className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-violet-400" />
-              <p className="text-sm font-semibold text-slate-200">Recent uploads</p>
+        <div className="rounded-xl border border-white/[0.06] bg-[#0C1428] overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.05]">
+            <div className="flex items-center gap-2 text-slate-300">
+              <FileText className="h-3.5 w-3.5 text-violet-400" />
+              <p className="text-sm font-semibold">Recent uploads</p>
             </div>
             <Link href="/admin/questions" className="text-xs font-medium text-blue-500 hover:text-blue-400 transition">
-              View all →
+              All uploads →
             </Link>
           </div>
           <div className="divide-y divide-white/[0.04]">
             {recent_questions.length === 0 ? (
-              <EmptyState icon={<FileText className="h-5 w-5" />} text="No uploads yet" />
+              <EmptyRow icon={<FileText className="h-4 w-4" />} text="No uploads yet" />
             ) : recent_questions.map((q) => (
-              <div key={q.id} className="flex items-center justify-between gap-3 px-5 py-3 transition hover:bg-white/[0.02]">
-                <div className="min-w-0">
+              <div key={q.id} className="flex items-center gap-3 px-5 py-3 hover:bg-white/[0.02] transition">
+                <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-slate-200">{q.title}</p>
                   <p className="truncate text-xs text-slate-600">
                     {q.course?.name ?? "—"} · {q.uploader?.full_name ?? "Unknown"}
@@ -381,80 +382,98 @@ export default function AdminOverviewPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Manage shortcuts ── */}
+      <div>
+        <p className="mb-3 text-xs font-semibold text-slate-600">Quick access</p>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          <ManageTile icon={<School className="h-3.5 w-3.5" />}        label="Institutions" count={stats.total_institutions}  href="/admin/institutions"  color="#10B981" />
+          <ManageTile icon={<BookOpen className="h-3.5 w-3.5" />}      label="Departments"  count={stats.total_departments}   href="/admin/departments"   color="#2B6FEB" />
+          <ManageTile icon={<GraduationCap className="h-3.5 w-3.5" />} label="Courses"      count={stats.total_courses}       href="/admin/courses"       color="#8B5CF6" />
+          <ManageTile icon={<Layers className="h-3.5 w-3.5" />}        label="Levels"                                         href="/admin/levels"        color="#06B6D4" />
+          <ManageTile icon={<Layers className="h-3.5 w-3.5" />}        label="Study Modes"                                    href="/admin/study-modes"   color="#EC4899" />
+          <ManageTile icon={<CalendarDays className="h-3.5 w-3.5" />}  label="Semesters"                                      href="/admin/semesters"     color="#F59E0B" />
+          <ManageTile icon={<FileText className="h-3.5 w-3.5" />}      label="Questions"    count={stats.total_questions}     href="/admin/questions"     color="#EF4444" />
+          <ManageTile icon={<Users className="h-3.5 w-3.5" />}         label="Users"        count={stats.total_users}         href="/admin/users"         color="#94A3B8" />
+        </div>
+      </div>
+
     </div>
   );
 }
 
-/* ── Sub-components ── */
+/* ── Sub-components ──────────────────────────────────────────────────────────── */
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <p className="text-xs font-semibold uppercase tracking-widest text-slate-600">{children}</p>;
-}
-
-function MiniStat({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <div className="rounded-xl border border-white/[0.04] bg-white/[0.03] px-3 py-2.5 text-center">
-      <p className={`text-lg font-black tabular-nums ${color}`}>{value}</p>
-      <p className="mt-0.5 text-[10px] text-slate-600">{label}</p>
-    </div>
-  );
-}
-
-function MetricCard({
-  icon, iconClass, label, value, sub, trend, href,
+function StatCard({
+  label, value, delta, deltaUp, accent, href, sparkData,
 }: {
-  icon: React.ReactNode; iconClass: string; label: string; value: string;
-  sub?: string; trend?: "up" | "down"; href: string;
+  label: string; value: number; delta?: string; deltaUp?: boolean;
+  accent: string; href: string; sparkData?: number[];
 }) {
   return (
-    <Link href={href} className="group rounded-2xl border border-white/[0.05] bg-[#0D1230] p-4 transition hover:border-blue-500/25 hover:bg-[#111a3d]">
-      <div className={`flex h-8 w-8 items-center justify-center rounded-xl ${iconClass}`}>{icon}</div>
-      <p className="mt-3 text-2xl font-black tabular-nums text-white">{value}</p>
-      <p className="text-xs text-slate-500">{label}</p>
-      {sub && (
-        <p className={`mt-1 flex items-center gap-1 text-[11px] font-medium ${trend === "up" ? "text-emerald-400" : trend === "down" ? "text-red-400" : "text-slate-600"}`}>
-          {trend === "up" && <TrendingUp className="h-3 w-3" />}
-          {trend === "down" && <TrendingDown className="h-3 w-3" />}
-          {sub}
-        </p>
-      )}
+    <Link
+      href={href}
+      className="group relative rounded-xl border border-white/[0.06] bg-[#0C1428] p-4 overflow-hidden hover:border-white/[0.12] transition block"
+    >
+      {/* Left accent stripe */}
+      <div className="absolute inset-y-0 left-0 w-0.5 rounded-l-xl" style={{ background: accent }} />
+
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs text-slate-600 mb-1">{label}</p>
+          <p className="text-3xl font-black tabular-nums text-white leading-none">{value.toLocaleString()}</p>
+          {delta && (
+            <p className={`mt-1.5 flex items-center gap-1 text-[11px] font-medium ${deltaUp ? "text-emerald-400" : "text-slate-600"}`}>
+              {deltaUp && <TrendingUp className="h-3 w-3" />}
+              {delta}
+            </p>
+          )}
+        </div>
+        {sparkData && <Sparkline data={sparkData} color={accent} height={36} />}
+      </div>
     </Link>
   );
 }
 
 function PipelineRow({
-  color, icon, label, value, pct, href,
+  icon, label, value, pct, dotColor, textColor, href,
 }: {
-  color: string; icon: React.ReactNode; label: string; value: number; pct: number; href: string;
+  icon: React.ReactNode; label: string; value: number; pct: number;
+  dotColor: string; textColor: string; href: string;
 }) {
   return (
-    <Link href={href} className="flex items-center gap-3 rounded-lg px-2 py-1.5 transition hover:bg-white/[0.03]">
-      <span className={`h-2 w-2 shrink-0 rounded-full ${color}`} />
-      <span className="flex items-center gap-1.5 text-xs text-slate-500 min-w-0 flex-1">
-        {icon}{label}
+    <Link
+      href={href}
+      className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-white/[0.03] transition"
+    >
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} />
+      <span className={`flex items-center gap-1.5 text-xs flex-1 min-w-0 ${textColor}`}>
+        {icon}
+        <span className="text-slate-500">{label}</span>
       </span>
-      <span className="text-xs font-semibold tabular-nums text-slate-300">{value}</span>
-      <span className="text-xs text-slate-600 w-8 text-right">{pct}%</span>
+      <span className="text-sm font-bold tabular-nums text-slate-200">{value}</span>
+      <span className="w-8 text-right text-xs text-slate-700">{pct}%</span>
     </Link>
   );
 }
 
-function SparklineRow({ label, color, data }: { label: string; color: string; data: number[] }) {
-  const max = Math.max(...data, 1);
-  const h = 36;
-  const w = 120;
-  const step = w / (data.length - 1);
-  const points = data.map((v, i) => `${i * step},${h - (v / max) * h}`).join(" ");
+function ActivityRow({ label, value, color, data }: { label: string; value: number; color: string; data: number[] }) {
   return (
-    <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0">
-        <p className="text-xs text-slate-500">{label}</p>
-        <p className="text-lg font-bold text-white tabular-nums">{data[data.length - 1]}</p>
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <p className="text-xs text-slate-600">{label}</p>
+        <p className="text-2xl font-black tabular-nums text-white">{value}</p>
       </div>
-      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} fill="none">
-        <polyline points={points} stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" fill="none" opacity="0.8" />
-        <circle cx={(data.length - 1) * step} cy={h - (data[data.length - 1] / max) * h} r="3" fill={color} />
-      </svg>
+      <Sparkline data={data} color={color} height={38} />
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-white/[0.03] border border-white/[0.04] px-3 py-2.5">
+      <p className="text-[11px] text-slate-600">{label}</p>
+      <p className="mt-0.5 text-lg font-black tabular-nums text-white">{value}</p>
     </div>
   );
 }
@@ -465,33 +484,26 @@ function ManageTile({
   icon: React.ReactNode; label: string; count?: number; href: string; color: string;
 }) {
   return (
-    <Link href={href} className="group flex items-center gap-3 rounded-xl border border-white/[0.05] bg-[#0D1230] px-4 py-3 transition hover:border-blue-500/25 hover:bg-[#111a3d]">
-      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${color}`}>{icon}</span>
+    <Link
+      href={href}
+      className="flex items-center gap-3 rounded-xl border border-white/[0.06] bg-[#0C1428] px-3.5 py-3 hover:border-white/[0.12] hover:bg-white/[0.03] transition"
+    >
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: `${color}18`, color }}>
+        {icon}
+      </span>
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-slate-300 group-hover:text-white transition">{label}</p>
-        {count !== undefined && <p className="text-xs text-slate-600">{count.toLocaleString()}</p>}
+        <p className="truncate text-sm font-medium text-slate-300">{label}</p>
+        {count !== undefined && <p className="text-xs text-slate-700">{count.toLocaleString()}</p>}
       </div>
     </Link>
   );
 }
 
-function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
+function EmptyRow({ icon, text }: { icon: React.ReactNode; text: string }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 py-10 text-slate-600">
-      {icon}<p className="text-sm">{text}</p>
+    <div className="flex flex-col items-center gap-2 py-10 text-slate-700">
+      {icon}
+      <p className="text-xs">{text}</p>
     </div>
-  );
-}
-
-function StatusPill({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    pending:  "bg-amber-500/10  text-amber-400  border-amber-500/20",
-    approved: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    rejected: "bg-red-500/10   text-red-400    border-red-500/20",
-  };
-  return (
-    <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-medium capitalize ${map[status] ?? "bg-slate-500/10 text-slate-400 border-slate-500/20"}`}>
-      {status}
-    </span>
   );
 }
