@@ -302,33 +302,72 @@ export default function CommunityPage() {
           { id: "s3", name: "CSC 301", count: 86 },
           { id: "s4", name: "PHY 204", count: 72 },
         ];
+return (
+  <main className="min-h-screen bg-slate-50">
 
-  return (
-    <main className="min-h-screen bg-slate-50">
+    {/* ── Header ── */}
+    <section className="border-b border-slate-200 bg-white">
+      <div className="mx-auto max-w-7xl px-6 py-8">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-sm text-slate-500">
+              <Link href="/" className="transition hover:text-slate-900">Home</Link>
+              <span>/</span>
+              <span className="text-blue-600">Community</span>
+            </div>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-950">Community</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+              Ask questions, share solutions, and learn with students across Nigerian institutions.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/community/ask"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
+            >
+              <Plus size={18} />
+              Ask a Question
+            </Link>
+            <Link href="/dashboard/profile">
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt="Profile"
+                  className="h-10 w-10 rounded-xl object-cover ring-2 ring-blue-500/30 transition hover:ring-blue-500/60"
+                />
+              ) : (
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-[11px] font-black text-white shadow-md">
+                  {firstName ? firstName.slice(0, 2).toUpperCase() : "?"}
+                </div>
+              )}
+            </Link>
+          </div>
+        </div>
 
-      
-<div className="flex items-center gap-3">
-  <Link
-    href="/community/ask"
-    className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
-  >
-    <Plus size={18} />
-    Ask a Question
-  </Link>
-  <Link href="/dashboard/profile">
-    {avatarUrl ? (
-      <img
-        src={avatarUrl}
-        alt="Profile"
-        className="h-10 w-10 rounded-xl object-cover ring-2 ring-blue-500/30 transition hover:ring-blue-500/60"
-      />
-    ) : (
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-[11px] font-black text-white shadow-md">
-        {firstName ? firstName.slice(0, 2).toUpperCase() : "?"}
+        {/* Search */}
+        <div className="mt-7 flex max-w-3xl items-center rounded-xl border border-slate-200 bg-slate-50 px-4 transition focus-within:border-blue-400 focus-within:bg-white">
+          <Search size={19} className="shrink-0 text-slate-400" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search questions, courses, topics..."
+            className="w-full bg-transparent px-3 py-3.5 text-sm text-slate-900 outline-none placeholder:text-slate-400"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+            >
+              <X size={16} />
+            </button>
+          )}
+        </div>
       </div>
-    )}
-  </Link>
-</div>
+    </section>
+
+    {/* ── Main ── */}
           {/* Search */}
           <div className="mt-7 flex max-w-3xl items-center rounded-xl border border-slate-200 bg-slate-50 px-4 transition focus-within:border-blue-400 focus-within:bg-white">
             <Search size={19} className="shrink-0 text-slate-400" />
