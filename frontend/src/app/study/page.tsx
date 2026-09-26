@@ -3,14 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   FileText, Image as ImageIcon, Type, Upload, X, Send,
-  Sparkles, BookOpen, Zap, AlignLeft, Loader2, ChevronDown,
-  RotateCcw, Trash2,
+  Sparkles, BookOpen, Zap, AlignLeft, Loader2, RotateCcw, Trash2,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type Mode     = "chat" | "quiz" | "summary" | "explain";
+type Mode       = "chat" | "quiz" | "summary" | "explain";
 type SourceType = "pdf" | "docx" | "image" | "text";
 
 interface Message {
@@ -39,8 +38,8 @@ const ACCEPTED = ".pdf,.docx,.doc,.txt,.png,.jpg,.jpeg,.webp";
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function sourceIcon(type: SourceType) {
-  if (type === "pdf" || type === "docx")  return <FileText size={13} className="text-indigo-400" />;
-  if (type === "image") return <ImageIcon size={13} className="text-violet-400" />;
+  if (type === "pdf" || type === "docx") return <FileText size={13} className="text-indigo-400" />;
+  if (type === "image")                  return <ImageIcon size={13} className="text-violet-400" />;
   return <Type size={13} className="text-slate-400" />;
 }
 
@@ -48,7 +47,7 @@ function formatTime(iso: string) {
   return new Date(iso).toLocaleDateString("en-NG", { day: "numeric", month: "short" });
 }
 
-// ── Message bubble ─────────────────────────────────────────────────────────────
+// ── Bubble ─────────────────────────────────────────────────────────────────────
 
 function Bubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
@@ -94,9 +93,7 @@ function UploadZone({
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium truncate" style={{ color: "var(--sp-text)" }}>{file.name}</p>
-          <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>
-            {(file.size / 1024).toFixed(0)} KB
-          </p>
+          <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>{(file.size / 1024).toFixed(0)} KB</p>
         </div>
         <button
           onClick={onClear}
@@ -118,12 +115,8 @@ function UploadZone({
       style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}
     >
       <Upload size={20} className="text-indigo-400" />
-      <p className="text-sm font-medium" style={{ color: "var(--sp-text-2)" }}>
-        Drop your notes here
-      </p>
-      <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>
-        PDF, DOCX, image, or plain text · max 10 MB
-      </p>
+      <p className="text-sm font-medium" style={{ color: "var(--sp-text-2)" }}>Drop your notes here</p>
+      <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>PDF, DOCX, image, or plain text · max 10 MB</p>
       <input
         ref={inputRef}
         type="file"
@@ -137,37 +130,28 @@ function UploadZone({
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 
-export default function StudyPage() {
+export default function CramPage() {
   const supabase = createClient();
 
-  // ── Session state ──────────────────────────────────────────────────
   const [sessions,        setSessions]        = useState<Session[]>([]);
   const [activeSession,   setActiveSession]   = useState<Session | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(true);
 
-  // ── Upload / input state ───────────────────────────────────────────
-  const [file,        setFile]        = useState<File | null>(null);
-  const [textContent, setTextContent] = useState("");
-  const [inputMode,   setInputMode]   = useState<"file" | "text">("file");
+  const [file,         setFile]         = useState<File | null>(null);
+  const [textContent,  setTextContent]  = useState("");
+  const [inputMode,    setInputMode]    = useState<"file" | "text">("file");
   const [sessionTitle, setSessionTitle] = useState("");
 
-  // ── Chat state ─────────────────────────────────────────────────────
-  const [messages,  setMessages]  = useState<Message[]>([]);
-  const [input,     setInput]     = useState("");
-  const [mode,      setMode]      = useState<Mode>("chat");
-  const [sending,   setSending]   = useState(false);
-  const [starting,  setStarting]  = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input,    setInput]    = useState("");
+  const [mode,     setMode]     = useState<Mode>("chat");
+  const [sending,  setSending]  = useState(false);
+  const [starting, setStarting] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // ── Load sessions ──────────────────────────────────────────────────
-  useEffect(() => {
-    loadSessions();
-  }, []);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  useEffect(() => { loadSessions(); }, []);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   async function getToken(): Promise<string> {
     const { data: { session } } = await supabase.auth.getSession();
@@ -188,31 +172,21 @@ export default function StudyPage() {
     }
   }
 
-  // ── Start a new session ────────────────────────────────────────────
   async function startSession() {
     if (!file && !textContent.trim()) return;
     if (!sessionTitle.trim()) return;
 
     setStarting(true);
     try {
-      const token      = await getToken();
+      const token = await getToken();
+
       const sourceType: SourceType =
-        inputMode === "text" ? "text"
+        inputMode === "text"            ? "text"
         : file?.type.startsWith("image/") ? "image"
-        : file?.name.endsWith(".docx") ? "docx"
+        : file?.name.endsWith(".docx")    ? "docx"
         : "pdf";
 
-      // Create session row (tiny DB write — no file content)
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/study/session`, {
-        method:  "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body:    Object.assign(new FormData(), {
-          title:       sessionTitle,
-          source_type: sourceType,
-        } as any),
-      });
-
-      // Build FormData properly
+      // Single session creation — bug fix: removed duplicate fetch
       const fd = new FormData();
       fd.append("title",       sessionTitle);
       fd.append("source_type", sourceType);
@@ -228,10 +202,16 @@ export default function StudyPage() {
 
       setActiveSession(session);
       setSessions(s => [session, ...s]);
+
+      // Clear messages first so history sent on first message is empty
       setMessages([]);
 
-      // Send first message to load the notes context
-      await sendMessage("Hello! I've shared my notes — please confirm you can see them.", session, true);
+      await sendMessage(
+        "Hello! I've shared my notes — please confirm you can see them.",
+        session,
+        [],   // empty history — fresh session
+        true,
+      );
 
     } catch (e) {
       alert(e instanceof Error ? e.message : "Something went wrong");
@@ -240,18 +220,17 @@ export default function StudyPage() {
     }
   }
 
-  // ── Send message ───────────────────────────────────────────────────
   async function sendMessage(
-    text:             string,
-    session:          Session | null = activeSession,
-    attachFile:       boolean        = false,
+    text:        string,
+    session:     Session | null = activeSession,
+    msgHistory:  Message[]     = messages,
+    attachFile:  boolean       = false,
   ) {
     if (!text.trim() || !session) return;
     setSending(true);
 
     const userMsg: Message = { role: "user", content: text };
-    const newMessages      = [...messages, userMsg];
-    setMessages(newMessages);
+    setMessages(prev => [...prev, userMsg]);
     setInput("");
 
     try {
@@ -260,14 +239,10 @@ export default function StudyPage() {
 
       fd.append("message", text);
       fd.append("mode",    mode);
-      fd.append("history", JSON.stringify(messages.slice(-12)));   // last 6 exchanges
+      fd.append("history", JSON.stringify(msgHistory.slice(-12)));
 
-      // Only attach file on first message of session
-      if (attachFile && file) {
-        fd.append("file", file);
-      } else if (attachFile && textContent) {
-        fd.append("text_content", textContent);
-      }
+      if (attachFile && file)        fd.append("file",         file);
+      if (attachFile && textContent) fd.append("text_content", textContent);
 
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/study/chat`, {
         method:  "POST",
@@ -280,7 +255,7 @@ export default function StudyPage() {
         throw new Error(d.detail ?? "Failed to get response");
       }
 
-      // Stream response
+      // Stream
       const reader  = res.body!.getReader();
       const decoder = new TextDecoder();
       let   aiText  = "";
@@ -332,20 +307,17 @@ export default function StudyPage() {
     setMode("chat");
   }
 
-  // ── Render ─────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div
-      className="min-h-screen"
-      style={{ background: "var(--sp-bg)" }}
-    >
+    <div className="min-h-screen" style={{ background: "var(--sp-bg)" }}>
       <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6">
 
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-xl font-bold" style={{ color: "var(--sp-text)" }}>
-              Study AI
+              SparkL Cram ⚡
             </h1>
             <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
               Upload your notes — chat, quiz, summarise
@@ -362,7 +334,6 @@ export default function StudyPage() {
           )}
         </div>
 
-        {/* ── Active chat ── */}
         {activeSession ? (
           <div className="flex flex-col gap-4">
 
@@ -375,8 +346,10 @@ export default function StudyPage() {
               <span className="text-sm font-medium flex-1 truncate" style={{ color: "var(--sp-text-2)" }}>
                 {activeSession.title}
               </span>
-              <span className="text-[10px] rounded-full border px-2 py-0.5 font-medium"
-                style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
+              <span
+                className="text-[10px] rounded-full border px-2 py-0.5 font-medium"
+                style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
+              >
                 {activeSession.source_type.toUpperCase()}
               </span>
             </div>
@@ -445,20 +418,18 @@ export default function StudyPage() {
               />
               <button
                 onClick={() => sendMessage(input)}
-                disabled={sending || !input.trim()}
+                // Fix: quiz/summary enabled even with empty input
+                disabled={sending || (mode === "chat" || mode === "explain" ? !input.trim() : false)}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white transition hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {sending
-                  ? <Loader2 size={15} className="animate-spin" />
-                  : <Send size={15} />
-                }
+                {sending ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
               </button>
             </div>
           </div>
 
         ) : (
 
-          /* ── New session setup ── */
+          /* New session setup */
           <div className="flex flex-col gap-5">
 
             {/* Title */}
@@ -471,51 +442,32 @@ export default function StudyPage() {
                 onChange={e => setSessionTitle(e.target.value)}
                 placeholder="e.g. Data Structures Week 3 Notes"
                 className="w-full rounded-xl border px-4 py-3 text-sm bg-transparent outline-none"
-                style={{
-                  borderColor: "var(--sp-border)",
-                  color: "var(--sp-text)",
-                  background: "var(--sp-bg-card)",
-                }}
+                style={{ borderColor: "var(--sp-border)", color: "var(--sp-text)", background: "var(--sp-bg-card)" }}
               />
             </div>
 
             {/* Input mode toggle */}
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setInputMode("file")}
-                className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                  inputMode === "file" ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-400" : ""
-                }`}
-                style={inputMode !== "file" ? {
-                  borderColor: "var(--sp-border)",
-                  color: "var(--sp-text-3)",
-                  background: "var(--sp-bg-muted)",
-                } : {}}
-              >
-                <Upload size={12} /> Upload file
-              </button>
-              <button
-                onClick={() => setInputMode("text")}
-                className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                  inputMode === "text" ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-400" : ""
-                }`}
-                style={inputMode !== "text" ? {
-                  borderColor: "var(--sp-border)",
-                  color: "var(--sp-text-3)",
-                  background: "var(--sp-bg-muted)",
-                } : {}}
-              >
-                <Type size={12} /> Paste text
-              </button>
+              {(["file", "text"] as const).map(im => (
+                <button
+                  key={im}
+                  onClick={() => setInputMode(im)}
+                  className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                    inputMode === im ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-400" : ""
+                  }`}
+                  style={inputMode !== im ? {
+                    borderColor: "var(--sp-border)",
+                    color: "var(--sp-text-3)",
+                    background: "var(--sp-bg-muted)",
+                  } : {}}
+                >
+                  {im === "file" ? <><Upload size={12} /> Upload file</> : <><Type size={12} /> Paste text</>}
+                </button>
+              ))}
             </div>
 
-            {/* Upload or text input */}
             {inputMode === "file" ? (
-              <UploadZone
-                file={file}
-                onFile={setFile}
-                onClear={() => setFile(null)}
-              />
+              <UploadZone file={file} onFile={setFile} onClear={() => setFile(null)} />
             ) : (
               <textarea
                 value={textContent}
@@ -523,11 +475,7 @@ export default function StudyPage() {
                 placeholder="Paste your notes here…"
                 rows={8}
                 className="w-full rounded-xl border px-4 py-3 text-sm bg-transparent resize-none outline-none leading-7"
-                style={{
-                  borderColor: "var(--sp-border)",
-                  color: "var(--sp-text)",
-                  background: "var(--sp-bg-card)",
-                }}
+                style={{ borderColor: "var(--sp-border)", color: "var(--sp-text)", background: "var(--sp-bg-card)" }}
               />
             )}
 
@@ -539,7 +487,7 @@ export default function StudyPage() {
             >
               {starting
                 ? <><Loader2 size={15} className="animate-spin" /> Starting…</>
-                : <><Sparkles size={15} /> Start studying</>
+                : <><Sparkles size={15} /> Start cramming</>
               }
             </button>
 
@@ -561,9 +509,7 @@ export default function StudyPage() {
                         {sourceIcon(s.source_type)}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate" style={{ color: "var(--sp-text)" }}>
-                          {s.title}
-                        </p>
+                        <p className="text-sm font-medium truncate" style={{ color: "var(--sp-text)" }}>{s.title}</p>
                         <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
                           {formatTime(s.created_at)} · {s.source_type.toUpperCase()}
                         </p>
@@ -580,7 +526,6 @@ export default function StudyPage() {
                 </div>
               </div>
             )}
-
           </div>
         )}
       </div>
