@@ -1,9 +1,22 @@
 # app/routers/admin_community.py
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import get_current_user, require_admin  # use whatever your admin guard is
+from app.auth import get_current_user
 from app.supabase_client import supabase
 
 router = APIRouter(prefix="/api/admin/community", tags=["admin-community"])
+
+
+def require_admin(user_id: str = Depends(get_current_user)) -> str:
+    res = (
+        supabase.table("profiles")
+        .select("is_admin")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if not res.data or not res.data.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return user_id
 
 
 # ── List all reports ──────────────────────────────────────────────────────────
@@ -24,7 +37,7 @@ async def list_reports(user_id: str = Depends(require_admin)):
     return res.data or []
 
 
-# ── Dismiss a report (mark reviewed, keep content visible) ───────────────────
+# ── Dismiss a report ──────────────────────────────────────────────────────────
 
 @router.post("/reports/{report_id}/dismiss")
 async def dismiss_report(report_id: str, user_id: str = Depends(require_admin)):
@@ -39,7 +52,7 @@ async def dismiss_report(report_id: str, user_id: str = Depends(require_admin)):
     return {"dismissed": True}
 
 
-# ── Unhide content (override auto-hide) ──────────────────────────────────────
+# ── Unhide content ────────────────────────────────────────────────────────────
 
 @router.post("/questions/{question_id}/unhide")
 async def unhide_question(question_id: str, user_id: str = Depends(require_admin)):
@@ -47,7 +60,6 @@ async def unhide_question(question_id: str, user_id: str = Depends(require_admin
         {"is_hidden": False}
     ).eq("id", question_id).execute()
 
-    # Mark all reports for this question as reviewed
     supabase.table("community_reports").update(
         {"is_reviewed": True}
     ).eq("question_id", question_id).execute()
