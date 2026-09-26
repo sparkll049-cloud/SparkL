@@ -156,7 +156,7 @@ export default function SignupPage() {
           </Link>
 
           <h1 className="text-3xl font-extrabold text-white">Create your account</h1>
-          <p className="mt-2 text-slate-400 text-sm">Free forever. No card needed.</p>
+          
 
           <form onSubmit={handleSubmit} className="mt-10 space-y-5">
 
