@@ -59,7 +59,7 @@ const socialLinks = [
   {
     label: "LinkedIn",
     href: "#",
-    icon: <Linkedin className="h-4 w-4" />,
+    icon: <LinkedinIcon className="h-4 w-4" />,
   },
 ];
 
