@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   LogOut,
   Menu,
+  MessageCircle,
   Loader2,
   Crown,
 } from "lucide-react";
