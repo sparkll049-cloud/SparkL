@@ -11,6 +11,7 @@ from app.routers import (
     admin_lookup,
     avatar,
 viewer,
+admin_community,
     admin_questions,
     admin_users,
     admin_overview,
@@ -60,6 +61,7 @@ app.include_router(community.router)
 app.include_router(payments_router)
 app.include_router(avatar.router)
 app.include_router(viewer.router)
+app.include_router(admin_community.router)
 @app.get("/")
 def root():
     return {"status": "SparkL API running"}
