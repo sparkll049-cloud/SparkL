@@ -4,19 +4,9 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
-  ArrowLeft,
-  CheckCircle2,
-  Clock3,
-  Eye,
-  MessageCircle,
-  Send,
-  Upload,
-  ThumbsUp,
-  MoreHorizontal,
-  Flag,
-  Paperclip,
-  Loader2,
-  AlertCircle,
+  ArrowLeft, CheckCircle2, Clock3, Eye, MessageCircle,
+  Send, Upload, ThumbsUp, MoreHorizontal, Flag,
+  Loader2, AlertCircle, X, Check,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
@@ -55,12 +45,89 @@ function timeAgo(dateStr: string): string {
 
 function getInitials(name: string | null | undefined): string {
   if (!name) return "?";
-  return name
-    .split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
+  return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
+}
+
+function Avatar({
+  userId, name, avatarCache, size = "md",
+}: {
+  userId: string | undefined;
+  name: string | null | undefined;
+  avatarCache: Record<string, string | null>;
+  size?: "sm" | "md";
+}) {
+  const url = userId ? avatarCache[userId] : null;
+  const dim = size === "sm" ? "h-5 w-5 text-[9px]" : "h-10 w-10 text-sm";
+  if (url) {
+    return (
+      <img
+        src={url}
+        alt={name ?? ""}
+        className={`${dim} shrink-0 rounded-full object-cover`}
+      />
+    );
+  }
+  return (
+    <div className={`${dim} shrink-0 flex items-center justify-center rounded-full bg-blue-100 font-semibold text-blue-700`}>
+      {getInitials(name)}
+    </div>
+  );
+}
+
+// ── Report modal ──────────────────────────────────────────────────────────────
+
+const REPORT_REASONS = [
+  "Spam or misleading",
+  "Inappropriate content",
+  "Off-topic",
+  "Plagiarism",
+  "Other",
+];
+
+function ReportModal({
+  onClose, onSubmit, loading,
+}: {
+  onClose: () => void;
+  onSubmit: (reason: string) => void;
+  loading: boolean;
+}) {
+  const [reason, setReason] = useState(REPORT_REASONS[0]);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-slate-950">Report</h3>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100">
+            <X size={18} />
+          </button>
+        </div>
+        <p className="text-sm text-slate-500 mb-4">Why are you reporting this?</p>
+        <div className="space-y-2">
+          {REPORT_REASONS.map((r) => (
+            <button
+              key={r}
+              type="button"
+              onClick={() => setReason(r)}
+              className={`w-full rounded-xl border px-4 py-2.5 text-left text-sm font-medium transition ${
+                reason === r
+                  ? "border-blue-500 bg-blue-50 text-blue-700"
+                  : "border-slate-200 text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => onSubmit(reason)}
+          disabled={loading}
+          className="mt-5 w-full rounded-xl bg-red-600 py-2.5 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-50 transition"
+        >
+          {loading ? "Submitting…" : "Submit Report"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export default function QuestionDetailsPage() {
@@ -75,63 +142,77 @@ export default function QuestionDetailsPage() {
   const [loadingQuestion, setLoadingQuestion] = useState(true);
   const [loadingAnswers, setLoadingAnswers] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [avatarCache, setAvatarCache] = useState<Record<string, string | null>>({});
 
   const [solutionText, setSolutionText] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isPosting, setIsPosting] = useState(false);
   const [postError, setPostError] = useState("");
   const [votingId, setVotingId] = useState<string | null>(null);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+
+  const [reportTarget, setReportTarget] = useState<{ type: "question" | "answer"; id: string } | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportSuccess, setReportSuccess] = useState(false);
+
+  const [toast, setToast] = useState<string | null>(null);
+
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  }
 
   async function getToken() {
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token ?? null;
   }
 
-  // Load avatar + current user id
-  useEffect(() => {
-    async function loadAvatar() {
-      const token = await getToken();
-      if (!token) return;
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) setCurrentUserId(user.id);
-
-        const r = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (r.ok) {
-          const j = await r.json();
-          if (j.avatar_url) setAvatarUrl(j.avatar_url);
-        }
-      } catch {}
+  async function fetchAvatar(userId: string, token: string) {
+    if (avatarCache[userId] !== undefined) return;
+    try {
+      const r = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/community/users/${userId}/avatar`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (r.ok) {
+        const j = await r.json();
+        setAvatarCache((prev) => ({ ...prev, [userId]: j.avatar_url ?? null }));
+      } else {
+        setAvatarCache((prev) => ({ ...prev, [userId]: null }));
+      }
+    } catch {
+      setAvatarCache((prev) => ({ ...prev, [userId]: null }));
     }
-    loadAvatar();
+  }
+
+  // Load current user
+  useEffect(() => {
+    async function load() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) setCurrentUserId(user.id);
+    }
+    load();
   }, []);
 
   // Load question
   useEffect(() => {
-    if (questionId.startsWith("seed-")) {
-      setNotFound(true);
-      setLoadingQuestion(false);
-      return;
-    }
-
+    if (questionId.startsWith("seed-")) { setNotFound(true); setLoadingQuestion(false); return; }
     async function load() {
       setLoadingQuestion(true);
       const token = await getToken();
       if (!token) { router.push("/auth/login"); return; }
-
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/community/questions/${questionId}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-
       if (res.status === 404) { setNotFound(true); setLoadingQuestion(false); return; }
-      if (res.ok) setQuestion(await res.json());
+      if (res.ok) {
+        const q = await res.json();
+        setQuestion(q);
+        if (q.asker?.id) fetchAvatar(q.asker.id, token);
+      }
       setLoadingQuestion(false);
     }
     load();
@@ -140,18 +221,21 @@ export default function QuestionDetailsPage() {
   // Load answers
   useEffect(() => {
     if (questionId.startsWith("seed-")) { setLoadingAnswers(false); return; }
-
     async function load() {
       setLoadingAnswers(true);
       const token = await getToken();
       if (!token) return;
-
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/community/questions/${questionId}/answers`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-
-      if (res.ok) setAnswers(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setAnswers(data);
+        data.forEach((a: Answer) => {
+          if (a.answerer?.id) fetchAvatar(a.answerer.id, token);
+        });
+      }
       setLoadingAnswers(false);
     }
     load();
@@ -161,33 +245,28 @@ export default function QuestionDetailsPage() {
     if (!solutionText.trim()) return;
     setIsPosting(true);
     setPostError("");
-
     const token = await getToken();
-    if (!token) { setPostError("Session expired. Please log in."); setIsPosting(false); return; }
-
+    if (!token) { setPostError("Session expired."); setIsPosting(false); return; }
     try {
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/community/questions/${questionId}/answers`,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({ content: solutionText.trim() }),
         }
       );
-
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? "Failed to post answer.");
       }
-
       const newAnswer: Answer = await res.json();
-      setAnswers((prev) => [...prev, newAnswer]);
+      if (currentUserId) fetchAvatar(currentUserId, token);
+      setAnswers((prev) => [...prev, { ...newAnswer, voted_helpful: false }]);
       setSolutionText("");
       setSelectedFile(null);
       setQuestion((prev) => prev ? { ...prev, is_answered: true } : prev);
+      showToast("Answer posted!");
     } catch (err) {
       setPostError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -199,19 +278,11 @@ export default function QuestionDetailsPage() {
     setVotingId(answerId);
     const token = await getToken();
     if (!token) { setVotingId(null); return; }
-
     setAnswers((prev) =>
-      prev.map((a) =>
-        a.id === answerId
-          ? {
-              ...a,
-              voted_helpful: !a.voted_helpful,
-              helpful_count: a.helpful_count + (a.voted_helpful ? -1 : 1),
-            }
-          : a
-      )
+      prev.map((a) => a.id === answerId
+        ? { ...a, voted_helpful: !a.voted_helpful, helpful_count: a.helpful_count + (a.voted_helpful ? -1 : 1) }
+        : a)
     );
-
     try {
       await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/community/answers/${answerId}/vote`,
@@ -219,22 +290,58 @@ export default function QuestionDetailsPage() {
       );
     } catch {
       setAnswers((prev) =>
-        prev.map((a) =>
-          a.id === answerId
-            ? {
-                ...a,
-                voted_helpful: !a.voted_helpful,
-                helpful_count: a.helpful_count + (a.voted_helpful ? -1 : 1),
-              }
-            : a
-        )
+        prev.map((a) => a.id === answerId
+          ? { ...a, voted_helpful: !a.voted_helpful, helpful_count: a.helpful_count + (a.voted_helpful ? -1 : 1) }
+          : a)
       );
     } finally {
       setVotingId(null);
     }
   }
 
-  // ── Not found ──
+  async function acceptAnswer(answerId: string) {
+    setAcceptingId(answerId);
+    const token = await getToken();
+    if (!token) { setAcceptingId(null); return; }
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/community/answers/${answerId}/accept`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        setAnswers((prev) =>
+          prev.map((a) => ({ ...a, is_accepted: a.id === answerId }))
+        );
+        setQuestion((prev) => prev ? { ...prev, is_answered: true } : prev);
+        showToast("Answer accepted!");
+      }
+    } catch {} finally {
+      setAcceptingId(null);
+    }
+  }
+
+  async function submitReport(reason: string) {
+    if (!reportTarget) return;
+    setReportLoading(true);
+    const token = await getToken();
+    if (!token) { setReportLoading(false); return; }
+    try {
+      const url = reportTarget.type === "question"
+        ? `${process.env.NEXT_PUBLIC_API_URL}/api/community/questions/${reportTarget.id}/report`
+        : `${process.env.NEXT_PUBLIC_API_URL}/api/community/answers/${reportTarget.id}/report`;
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ reason }),
+      });
+      setReportSuccess(true);
+      setTimeout(() => { setReportTarget(null); setReportSuccess(false); }, 1500);
+      showToast("Report submitted. Thank you.");
+    } catch {} finally {
+      setReportLoading(false);
+    }
+  }
+
   if (notFound) {
     return (
       <main className="min-h-screen bg-slate-50">
@@ -243,22 +350,15 @@ export default function QuestionDetailsPage() {
             <AlertCircle size={26} className="text-slate-400" />
           </div>
           <h1 className="text-2xl font-bold text-slate-900">Question not found</h1>
-          <p className="mt-2 text-slate-500">
-            This question may have been removed or doesn't exist.
-          </p>
-          <Link
-            href="/community"
-            className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700"
-          >
-            <ArrowLeft size={16} />
-            Back to Community
+          <p className="mt-2 text-slate-500">This question may have been removed or doesn't exist.</p>
+          <Link href="/community" className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700">
+            <ArrowLeft size={16} /> Back to Community
           </Link>
         </div>
       </main>
     );
   }
 
-  // ── Loading ──
   if (loadingQuestion) {
     return (
       <main className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -270,18 +370,32 @@ export default function QuestionDetailsPage() {
   if (!question) return null;
 
   const isMyQuestion = currentUserId && question.asker?.id === currentUserId;
+  const myAvatarUrl = currentUserId ? avatarCache[currentUserId] : null;
 
   return (
     <main className="min-h-screen bg-slate-50">
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed top-4 right-4 z-50 flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-xl">
+          <CheckCircle2 size={16} className="text-emerald-400" />
+          {toast}
+        </div>
+      )}
+
+      {/* Report modal */}
+      {reportTarget && (
+        <ReportModal
+          onClose={() => setReportTarget(null)}
+          onSubmit={submitReport}
+          loading={reportLoading}
+        />
+      )}
+
       <div className="mx-auto max-w-5xl px-6 py-8">
 
-        {/* Back */}
-        <Link
-          href="/community"
-          className="mb-6 inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition hover:text-slate-900"
-        >
-          <ArrowLeft size={17} />
-          Back to Community
+        <Link href="/community" className="mb-6 inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition hover:text-slate-900">
+          <ArrowLeft size={17} /> Back to Community
         </Link>
 
         {/* ── Question ── */}
@@ -296,75 +410,52 @@ export default function QuestionDetailsPage() {
             <span className="text-xs font-medium text-slate-500">
               {question.institution?.name ?? "Unknown institution"}
             </span>
-            <span
-              className={`ml-auto inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
-                question.is_answered
-                  ? "bg-emerald-50 text-emerald-700"
-                  : "bg-amber-50 text-amber-700"
-              }`}
-            >
-              {question.is_answered ? (
-                <><CheckCircle2 size={13} /> Answered</>
-              ) : (
-                "Unanswered"
-              )}
+            <span className={`ml-auto inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
+              question.is_answered ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+            }`}>
+              {question.is_answered ? <><CheckCircle2 size={13} /> Answered</> : "Unanswered"}
             </span>
           </div>
 
           <h1 className="mt-5 text-2xl font-bold leading-9 text-slate-950 sm:text-3xl">
             {question.title}
           </h1>
-
           <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-600">
             {question.description}
           </p>
 
-          {/* Metadata */}
           <div className="mt-6 flex flex-wrap items-center gap-5 border-t border-slate-100 pt-5 text-xs text-slate-400">
             <span className="flex items-center gap-1.5">
-              {isMyQuestion && avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt="Profile"
-                  className="h-5 w-5 rounded-full object-cover"
-                />
-              ) : (
-                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[9px] font-bold text-slate-600">
-                  {getInitials(question.asker?.full_name)}
-                </div>
-              )}
+              <Avatar userId={question.asker?.id} name={question.asker?.full_name} avatarCache={avatarCache} size="sm" />
               {question.asker?.full_name ?? "Anonymous"}
             </span>
             <span className="flex items-center gap-1.5">
-              <Clock3 size={14} />
-              Asked {timeAgo(question.created_at)}
+              <Clock3 size={14} /> Asked {timeAgo(question.created_at)}
             </span>
             <span className="flex items-center gap-1.5">
-              <MessageCircle size={14} />
-              {answers.length} {answers.length === 1 ? "answer" : "answers"}
+              <MessageCircle size={14} /> {answers.length} {answers.length === 1 ? "answer" : "answers"}
             </span>
             <span className="flex items-center gap-1.5">
-              <Eye size={14} />
-              {question.views} views
+              <Eye size={14} /> {question.views} views
             </span>
-            <button
-              type="button"
-              className="ml-auto inline-flex items-center gap-1.5 transition hover:text-slate-700"
-            >
-              <Flag size={14} />
-              Report
-            </button>
+            {!isMyQuestion && (
+              <button
+                type="button"
+                onClick={() => setReportTarget({ type: "question", id: question.id })}
+                className="ml-auto inline-flex items-center gap-1.5 transition hover:text-red-500"
+              >
+                <Flag size={14} /> Report
+              </button>
+            )}
           </div>
         </article>
 
         {/* ── Answers ── */}
         <section className="mt-8">
-          <div className="flex items-end justify-between gap-4">
+          <div className="flex items-end justify-between gap-4 mb-5">
             <div>
               <h2 className="text-xl font-bold text-slate-950">Community Answers</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Solutions shared by other students.
-              </p>
+              <p className="mt-1 text-sm text-slate-500">Solutions shared by other students.</p>
             </div>
             <span className="hidden rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500 sm:inline-flex">
               {answers.length} {answers.length === 1 ? "answer" : "answers"}
@@ -372,81 +463,103 @@ export default function QuestionDetailsPage() {
           </div>
 
           {loadingAnswers ? (
-            <div className="mt-5 flex justify-center py-10">
+            <div className="flex justify-center py-10">
               <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
             </div>
           ) : answers.length === 0 ? (
-            <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
               <MessageCircle size={28} className="mx-auto text-slate-300" />
               <h3 className="mt-4 text-sm font-semibold text-slate-800">No answers yet</h3>
               <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
                 Be the first student to share a helpful explanation.
               </p>
-              <a
-                href="#answer"
-                className="mt-5 inline-flex rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
-              >
+              <a href="#answer" className="mt-5 inline-flex rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700">
                 Share an Answer
               </a>
             </div>
           ) : (
-            <div className="mt-5 space-y-4">
+            <div className="space-y-4">
               {answers.map((answer) => {
                 const isMyAnswer = currentUserId && answer.answerer?.id === currentUserId;
+                const menuOpen = openMenuId === answer.id;
                 return (
                   <article
                     key={answer.id}
                     className={`rounded-2xl border bg-white p-6 ${
-                      answer.is_accepted
-                        ? "border-emerald-200 bg-emerald-50/30"
-                        : "border-slate-200"
+                      answer.is_accepted ? "border-emerald-300 bg-emerald-50/30" : "border-slate-200"
                     }`}
                   >
                     {answer.is_accepted && (
                       <div className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                        <CheckCircle2 size={12} />
-                        Accepted Answer
+                        <CheckCircle2 size={12} /> Accepted Answer
                       </div>
                     )}
 
                     <div className="flex items-center gap-3">
-                      {isMyAnswer && avatarUrl ? (
-                        <img
-                          src={avatarUrl}
-                          alt="Profile"
-                          className="h-10 w-10 shrink-0 rounded-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700">
-                          {getInitials(answer.answerer?.full_name)}
-                        </div>
-                      )}
+                      <Avatar
+                        userId={answer.answerer?.id}
+                        name={answer.answerer?.full_name}
+                        avatarCache={avatarCache}
+                      />
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-semibold text-slate-900">
                           {answer.answerer?.full_name ?? "Anonymous"}
+                          {isMyAnswer && <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-500">You</span>}
                         </p>
-                        <p className="text-xs text-slate-400">
-                          {timeAgo(answer.created_at)}
-                        </p>
+                        <p className="text-xs text-slate-400">{timeAgo(answer.created_at)}</p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setOpenMenuId(openMenuId === answer.id ? null : answer.id)}
-                        className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-50 hover:text-slate-700"
-                      >
-                        <MoreHorizontal size={18} />
-                      </button>
+
+                      {/* More menu */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setOpenMenuId(menuOpen ? null : answer.id)}
+                          className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-50 hover:text-slate-700"
+                        >
+                          <MoreHorizontal size={18} />
+                        </button>
+                        {menuOpen && (
+                          <div className="absolute right-0 top-10 z-20 w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                            {isMyQuestion && !answer.is_accepted && (
+                              <button
+                                type="button"
+                                onClick={() => { acceptAnswer(answer.id); setOpenMenuId(null); }}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+                              >
+                                <Check size={13} /> Accept this answer
+                              </button>
+                            )}
+                            {!isMyAnswer && (
+                              <button
+                                type="button"
+                                onClick={() => { setReportTarget({ type: "answer", id: answer.id }); setOpenMenuId(null); }}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50"
+                              >
+                                <Flag size={13} /> Report answer
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setOpenMenuId(null)}
+                              className="w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-500 hover:bg-slate-50"
+                            >
+                              Close
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
-                    <p className="mt-5 text-sm leading-7 text-slate-600">
+                    <p className="mt-5 text-sm leading-7 text-slate-600 whitespace-pre-wrap">
                       {answer.content}
                     </p>
 
-                    <div className="mt-5 border-t border-slate-100 pt-4">
+                    <div className="mt-5 flex items-center gap-3 border-t border-slate-100 pt-4">
                       <button
                         type="button"
                         onClick={() => toggleHelpful(answer.id)}
-                        disabled={votingId === answer.id}
+                        disabled={votingId === answer.id || !!isMyAnswer}
+                        title={isMyAnswer ? "You can't vote on your own answer" : ""}
                         className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition disabled:opacity-50 ${
                           answer.voted_helpful
                             ? "bg-emerald-50 text-emerald-700"
@@ -456,11 +569,31 @@ export default function QuestionDetailsPage() {
                         {votingId === answer.id ? (
                           <Loader2 size={14} className="animate-spin" />
                         ) : (
-                          <ThumbsUp size={14} />
+                          <ThumbsUp size={14} className={answer.voted_helpful ? "fill-emerald-500" : ""} />
                         )}
                         Helpful
-                        {answer.helpful_count > 0 && ` · ${answer.helpful_count}`}
+                        {answer.helpful_count > 0 && (
+                          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px]">
+                            {answer.helpful_count}
+                          </span>
+                        )}
                       </button>
+
+                      {isMyQuestion && !answer.is_accepted && (
+                        <button
+                          type="button"
+                          onClick={() => acceptAnswer(answer.id)}
+                          disabled={acceptingId === answer.id}
+                          className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-50"
+                        >
+                          {acceptingId === answer.id ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            <Check size={14} />
+                          )}
+                          Accept answer
+                        </button>
+                      )}
                     </div>
                   </article>
                 );
@@ -470,27 +603,18 @@ export default function QuestionDetailsPage() {
         </section>
 
         {/* ── Answer box ── */}
-        <section
-          id="answer"
-          className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 sm:p-7"
-        >
-          <div className="flex items-center gap-3 mb-4">
-            {avatarUrl ? (
-              <img
-                src={avatarUrl}
-                alt="Profile"
-                className="h-9 w-9 rounded-full object-cover shrink-0"
-              />
+        <section id="answer" className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 sm:p-7">
+          <div className="flex items-center gap-3 mb-5">
+            {myAvatarUrl ? (
+              <img src={myAvatarUrl} alt="You" className="h-9 w-9 rounded-full object-cover shrink-0" />
             ) : (
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-[11px] font-black text-white">
-                ?
+                {currentUserId ? "?" : "?"}
               </div>
             )}
             <div>
               <h2 className="text-lg font-semibold text-slate-950">Share your answer</h2>
-              <p className="text-sm text-slate-500">
-                Help this student by explaining how you would approach this question.
-              </p>
+              <p className="text-sm text-slate-500">Help this student by explaining your approach.</p>
             </div>
           </div>
 
@@ -499,7 +623,7 @@ export default function QuestionDetailsPage() {
             onChange={(e) => setSolutionText(e.target.value)}
             placeholder="Write your answer or explanation..."
             rows={6}
-            className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+            className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
           />
 
           {postError && (
@@ -523,27 +647,19 @@ export default function QuestionDetailsPage() {
                 onClick={() => fileInputRef.current?.click()}
                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
               >
-                <Upload size={16} />
-                Attach file
+                <Upload size={16} /> Attach file
               </button>
               {selectedFile && (
-                <p className="mt-2 max-w-[260px] truncate text-xs text-slate-400">
-                  {selectedFile.name}
-                </p>
+                <p className="mt-2 max-w-[260px] truncate text-xs text-slate-400">{selectedFile.name}</p>
               )}
             </div>
-
             <button
               type="button"
               onClick={handlePostSolution}
               disabled={!solutionText.trim() || isPosting}
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isPosting ? (
-                <><Loader2 size={16} className="animate-spin" /> Posting...</>
-              ) : (
-                <><Send size={16} /> Post Answer</>
-              )}
+              {isPosting ? <><Loader2 size={16} className="animate-spin" /> Posting...</> : <><Send size={16} /> Post Answer</>}
             </button>
           </div>
         </section>
