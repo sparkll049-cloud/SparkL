@@ -41,7 +41,7 @@ const navGroups = [
       { href: "/admin/courses", label: "Courses", icon: GraduationCap },
       { href: "/admin/levels", label: "Levels", icon: Layers },
       { href: "/admin/study-modes", label: "Study Modes", icon: Layers },
-      { href: "/admin/reports", label: "Levels", icon: ShieldCheck },
+      { href: "/admin/reports", label: "Reports", icon: ShieldCheck },
       { href: "/admin/semesters", label: "Semesters", icon: CalendarDays },
     ],
   },
