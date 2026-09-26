@@ -14,7 +14,7 @@ export default function Navbar() {
     { name: "Pricing", href: "/dashboard/subscribe" },
     { name: "Community", href: "/community" },
     { name: "Resources", href: "#resources" },
-    { name: "About", href: "#about" },
+    { name: "About", href: "/about" },
   ];
 
   const closeMenu = () => setIsOpen(false);
