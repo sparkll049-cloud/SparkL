@@ -1,6 +1,6 @@
 import os
 import asyncio
-from contextlib import asynccontextmanager 
+from contextlib import asynccontextmanager
 from app.routers.payments import router as payments_router
 
 from fastapi import FastAPI
@@ -9,12 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import (
     dashboard,
     admin_lookup,
-    avatar,
-viewer,
-admin_community,
+    admin_community,
     admin_questions,
     admin_users,
     admin_overview,
+    avatar,
+    viewer,
     courses,
     uploads,
     questions,
@@ -26,7 +26,6 @@ from app.services.extraction_worker import run_extraction_worker
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start the background extraction worker once, when the app boots.
     task = asyncio.create_task(run_extraction_worker())
     yield
     task.cancel()
@@ -34,9 +33,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SparkL API", lifespan=lifespan)
 
-# Reads allowed origins from an env var in production (comma-separated),
-# falls back to localhost for local dev. Avoids hardcoding a URL that
-# breaks the moment the frontend is deployed somewhere new.
 default_origins = "http://localhost:3000"
 allowed_origins = os.getenv("ALLOWED_ORIGINS", default_origins).split(",")
 
@@ -50,18 +46,20 @@ app.add_middleware(
 
 app.include_router(dashboard.router)
 app.include_router(admin_lookup.router)
+app.include_router(admin_community.router)
 app.include_router(admin_questions.router)
 app.include_router(admin_users.router)
 app.include_router(admin_overview.router)
+app.include_router(avatar.router)
+app.include_router(viewer.router)
 app.include_router(courses.router)
 app.include_router(uploads.router)
 app.include_router(questions.router)
 app.include_router(answers.router)
 app.include_router(community.router)
 app.include_router(payments_router)
-app.include_router(avatar.router)
-app.include_router(viewer.router)
-app.include_router(admin_community.router)
+
+
 @app.get("/")
 def root():
     return {"status": "SparkL API running"}
