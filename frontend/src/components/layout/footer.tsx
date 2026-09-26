@@ -3,7 +3,7 @@ import Image from "next/image";
 import {
   ArrowUpRight,
   Instagram,
-  Linkedin,
+  Linkedin as LinkedinIcon,
 } from "lucide-react";
 
 const footerLinks = [
