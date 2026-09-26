@@ -1,33 +1,164 @@
-
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   ChevronLeft, ChevronRight, Loader2, AlertCircle, Lock, ZoomIn, ZoomOut, X,
 } from "lucide-react";
 import Link from "next/link";
 import { createClient } from "@/utils/supabase/client";
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
 interface SecureViewerProps {
   questionId: string;
-  onClose: () => void;
-  isPaid: boolean;
-  inline?: boolean;   // true = embedded in page; false/undefined = fullscreen modal
+  onClose:    () => void;
+  isPaid:     boolean;
+  inline?:    boolean; // true = embedded in page; false/undefined = fullscreen modal
 }
 
+// ── Canvas page renderer with watermark ───────────────────────────────────────
+
+interface SecurePageProps {
+  blobUrl: string;
+  zoom:    number;
+  onDrawn: () => void; // called after canvas draw so caller can revoke the blob
+}
+
+function SecurePage({ blobUrl, zoom, onDrawn }: SecurePageProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    if (!blobUrl || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const ctx    = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const img = new Image();
+
+    img.onload = () => {
+      // Size canvas to image
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+
+      // Draw the page
+      ctx.drawImage(img, 0, 0);
+
+      // ── Watermark layer ──────────────────────────────────────────────
+      // Tiled diagonal "SparkL" text across the full page
+      ctx.save();
+      ctx.globalAlpha   = 0.09;          // very faint — visible but not intrusive
+      ctx.fillStyle     = "#6366f1";     // indigo to match brand
+      ctx.font          = `bold ${Math.max(28, canvas.width * 0.035)}px Inter, sans-serif`;
+      ctx.textAlign     = "center";
+
+      const tileW = canvas.width  * 0.38;
+      const tileH = canvas.height * 0.18;
+
+      // Rotate around centre and tile
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(-Math.PI / 7); // ~26°
+
+      const cols = Math.ceil(canvas.width  / tileW) + 2;
+      const rows = Math.ceil(canvas.height / tileH) + 2;
+
+      for (let row = -rows; row <= rows; row++) {
+        for (let col = -cols; col <= cols; col++) {
+          const x = col * tileW;
+          const y = row * tileH;
+          ctx.fillText("SparkL", x, y);
+        }
+      }
+      ctx.restore();
+
+      // ── "Property of SparkL" footer stamp ───────────────────────────
+      ctx.save();
+      ctx.globalAlpha = 0.13;
+      ctx.fillStyle   = "#6366f1";
+      ctx.font        = `${Math.max(14, canvas.width * 0.016)}px Inter, sans-serif`;
+      ctx.textAlign   = "right";
+      ctx.fillText(
+        "Property of SparkL · sparkl.app",
+        canvas.width - 16,
+        canvas.height - 14,
+      );
+      ctx.restore();
+
+      // Blob no longer needed — revoke to remove from memory & network cache
+      onDrawn();
+    };
+
+    img.onerror = () => {
+      onDrawn(); // still revoke on error
+    };
+
+    img.src = blobUrl;
+  }, [blobUrl]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      onContextMenu={e => e.preventDefault()}
+      onDragStart={e => e.preventDefault()}
+      style={{
+        transform:           `scale(${zoom})`,
+        transformOrigin:     "top center",
+        maxWidth:            "min(860px, 100%)",
+        display:             "block",
+        userSelect:          "none",
+        WebkitUserSelect:    "none",
+        borderRadius:        "8px",
+        boxShadow:           "0 4px 24px rgba(0,0,0,0.18)",
+        // Canvas blocks right-click save natively — this is the key defence
+      }}
+    />
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
 export default function SecureViewer({
-  questionId, onClose, isPaid, inline = false,
+  questionId,
+  onClose,
+  isPaid,
+  inline = false,
 }: SecureViewerProps) {
   const supabase = createClient();
 
-  const [pageCount, setPageCount]     = useState(0);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [imgSrc, setImgSrc]           = useState<string | null>(null);
-  const [loading, setLoading]         = useState(true);
-  const [error, setError]             = useState("");
-  const [zoom, setZoom]               = useState(1);
+  const [pageCount,    setPageCount]    = useState(0);
+  const [currentPage,  setCurrentPage]  = useState(1);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState("");
+  const [zoom,         setZoom]         = useState(1);
+
+  // Blob URL lives in a ref — not in React state so it never appears
+  // in React DevTools or gets serialised anywhere.
+  const blobUrlRef  = useRef<string | null>(null);
+  // Bump this to force SecurePage to re-render with the new blobUrl
+  const [drawKey,   setDrawKey]         = useState(0);
 
   const maxPage = isPaid ? pageCount : Math.min(pageCount, 2);
+
+  // ── Block devtools shortcuts ──────────────────────────────────────────
+  useEffect(() => {
+    function block(e: KeyboardEvent) {
+      if (
+        e.key === "F12" ||
+        (e.ctrlKey && e.shiftKey && ["I", "J", "C", "K"].includes(e.key.toUpperCase())) ||
+        (e.ctrlKey && ["u", "U", "s", "S", "p", "P"].includes(e.key))
+      ) {
+        e.preventDefault();
+      }
+    }
+    window.addEventListener("keydown", block);
+    return () => window.removeEventListener("keydown", block);
+  }, []);
+
+  // ── Block right-click everywhere inside the viewer ────────────────────
+  useEffect(() => {
+    function blockCtx(e: MouseEvent) { e.preventDefault(); }
+    document.addEventListener("contextmenu", blockCtx);
+    return () => document.removeEventListener("contextmenu", blockCtx);
+  }, []);
 
   // ── Page count ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -40,19 +171,24 @@ export default function SecureViewer({
           { headers: { Authorization: `Bearer ${session.access_token}` } }
         );
         if (res.ok) {
-          const data = await res.json();
-          setPageCount(data.page_count ?? 1);
+          const d = await res.json();
+          setPageCount(d.page_count ?? 1);
         }
       } catch { /* non-critical */ }
     }
     fetchPageCount();
   }, [questionId]);
 
-  // ── Fetch page image ──────────────────────────────────────────────────
+  // ── Fetch page as blob → store in ref (never in visible state) ────────
   const fetchPage = useCallback(async (page: number) => {
     setLoading(true);
     setError("");
-    setImgSrc(null);
+
+    // Revoke previous blob if still around
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
 
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { setError("Session expired."); setLoading(false); return; }
@@ -68,7 +204,10 @@ export default function SecureViewer({
         throw new Error(d.detail ?? "Failed to load page.");
       }
       const blob = await res.blob();
-      setImgSrc(URL.createObjectURL(blob));
+      // Store blob URL in ref — invisible to React DevTools
+      blobUrlRef.current = URL.createObjectURL(blob);
+      // Trigger SecurePage to draw by bumping the key
+      setDrawKey(k => k + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
@@ -78,13 +217,27 @@ export default function SecureViewer({
 
   useEffect(() => {
     fetchPage(currentPage);
-    return () => { if (imgSrc) URL.revokeObjectURL(imgSrc); };
-  }, [currentPage]);
+  }, [currentPage, fetchPage]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+    };
+  }, []);
+
+  // Called by SecurePage after it has drawn to canvas — blob no longer needed
+  function handleDrawn() {
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+  }
 
   function prev() { if (currentPage > 1) setCurrentPage(p => p - 1); }
   function next() { if (currentPage < maxPage) setCurrentPage(p => p + 1); }
 
-  // Keyboard nav — only in modal mode
+  // Keyboard nav — modal only
   useEffect(() => {
     if (inline) return;
     function onKey(e: KeyboardEvent) {
@@ -96,7 +249,7 @@ export default function SecureViewer({
     return () => window.removeEventListener("keydown", onKey);
   }, [currentPage, maxPage, inline]);
 
-  // ── Toolbar (shared between inline and modal) ─────────────────────────
+  // ── Toolbar ───────────────────────────────────────────────────────────
   const toolbar = (
     <div
       className="flex items-center justify-between gap-3 px-4 py-3 border-b"
@@ -134,7 +287,10 @@ export default function SecureViewer({
         >
           <ZoomOut className="h-3.5 w-3.5" />
         </button>
-        <span className="text-xs font-medium tabular-nums w-10 text-center" style={{ color: "var(--sp-text-3)" }}>
+        <span
+          className="text-xs font-medium tabular-nums w-10 text-center"
+          style={{ color: "var(--sp-text-3)" }}
+        >
           {Math.round(zoom * 100)}%
         </span>
         <button
@@ -165,9 +321,13 @@ export default function SecureViewer({
       className="flex items-start justify-center overflow-auto p-4"
       style={{
         background: "var(--sp-bg)",
-        minHeight: inline ? "520px" : undefined,
-        flex: 1,
+        minHeight:  inline ? "520px" : undefined,
+        flex:       1,
+        // Extra drag-prevention on the container
+        userSelect:       "none",
+        WebkitUserSelect: "none",
       }}
+      onDragStart={e => e.preventDefault()}
     >
       {loading && (
         <div className="flex flex-col items-center gap-3 mt-16">
@@ -209,23 +369,14 @@ export default function SecureViewer({
         </div>
       )}
 
-      {!loading && !error && imgSrc && (
-        <div style={{ transform: `scale(${zoom})`, transformOrigin: "top center" }}
-          className="transition-transform duration-150">
-          <img
-            src={imgSrc}
-            alt={`Page ${currentPage}`}
-            draggable={false}
-            onContextMenu={e => e.preventDefault()}
-            className="select-none rounded-lg shadow-lg"
-            style={{
-              maxWidth: "min(860px, 100%)",
-              userSelect: "none",
-              WebkitUserSelect: "none",
-              pointerEvents: "none",   // prevents long-press save on mobile
-            }}
-          />
-        </div>
+      {/* Canvas renderer — blob URL lives only in the ref, never in DOM/state */}
+      {!loading && !error && blobUrlRef.current && (
+        <SecurePage
+          key={drawKey}
+          blobUrl={blobUrlRef.current}
+          zoom={zoom}
+          onDrawn={handleDrawn}
+        />
       )}
     </div>
   );
@@ -254,9 +405,11 @@ export default function SecureViewer({
               key={p}
               onClick={() => setCurrentPage(p)}
               className={`h-2 rounded-full transition-all ${
-                p === currentPage ? "w-5 bg-indigo-500"
-                : p > maxPage ? "w-2 opacity-20"
-                : "w-2 opacity-40 hover:opacity-70"
+                p === currentPage
+                  ? "w-5 bg-indigo-500"
+                  : p > maxPage
+                  ? "w-2 opacity-20"
+                  : "w-2 opacity-40 hover:opacity-70"
               }`}
               style={{ background: p === currentPage ? undefined : "var(--sp-text-3)" }}
             />
@@ -278,11 +431,13 @@ export default function SecureViewer({
     </div>
   ) : null;
 
-  // ── Inline mode — renders inside the page ─────────────────────────────
+  // ── Inline mode ───────────────────────────────────────────────────────
   if (inline) {
     return (
-      <div className="flex flex-col rounded-2xl overflow-hidden border"
-        style={{ borderColor: "var(--sp-border)" }}>
+      <div
+        className="flex flex-col rounded-2xl overflow-hidden border"
+        style={{ borderColor: "var(--sp-border)" }}
+      >
         {toolbar}
         {pageArea}
         {bottomNav}
@@ -290,7 +445,7 @@ export default function SecureViewer({
     );
   }
 
-  // ── Modal mode — fullscreen overlay ───────────────────────────────────
+  // ── Modal / fullscreen mode ───────────────────────────────────────────
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "var(--sp-bg)" }}>
       {toolbar}
