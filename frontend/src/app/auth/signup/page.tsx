@@ -6,14 +6,10 @@ import { useRouter } from "next/navigation";
 import { User, Mail, Phone, Lock, Eye, EyeOff, ArrowRight, Check } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { Button } from "@/components/ui/button";
-import AuthModal from "@/components/auth/AuthModal";
 
 export default function SignupPage() {
   const router = useRouter();
   const supabase = createClient();
-
-  const [showTerms, setShowTerms] = useState(false);
-  const [showPrivacy, setShowPrivacy] = useState(false);
 
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
@@ -71,7 +67,6 @@ export default function SignupPage() {
     if (data.user) router.push("/onboarding");
   };
 
-  // Reusable input wrapper
   const Field = ({
     label,
     children,
@@ -93,249 +88,242 @@ export default function SignupPage() {
   const inputClass = "ml-3 w-full bg-transparent text-white placeholder:text-slate-600 outline-none text-sm";
 
   return (
-    <>
-      <div className="min-h-screen bg-[#0A0F2C] flex">
+    <div className="min-h-screen bg-[#0A0F2C] flex">
 
-        {/* ── Left panel ── */}
-        <div className="hidden lg:flex lg:w-[42%] relative flex-col justify-between p-14 overflow-hidden">
-          <div
-            className="absolute inset-0 opacity-[0.04]"
-            style={{
-              backgroundImage:
-                "linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)",
-              backgroundSize: "60px 60px",
-            }}
-          />
-          <div className="absolute top-1/3 -left-20 w-[400px] h-[400px] bg-blue-600/20 rounded-full blur-[120px] pointer-events-none" />
+      {/* ── Left panel ── */}
+      <div className="hidden lg:flex lg:w-[42%] relative flex-col justify-between p-14 overflow-hidden">
+        <div
+          className="absolute inset-0 opacity-[0.04]"
+          style={{
+            backgroundImage:
+              "linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)",
+            backgroundSize: "60px 60px",
+          }}
+        />
+        <div className="absolute top-1/3 -left-20 w-[400px] h-[400px] bg-blue-600/20 rounded-full blur-[120px] pointer-events-none" />
 
-          <div className="relative">
-            <Link href="/" className="inline-flex items-center gap-3">
-              <div className="h-9 w-9 rounded-xl bg-[#2563EB] flex items-center justify-center">
-                <span className="text-white font-black text-sm">S</span>
-              </div>
-              <span className="text-white font-bold text-xl tracking-tight">SparkL</span>
-            </Link>
-          </div>
-
-          <div className="relative">
-            <p className="text-3xl font-extrabold text-white leading-snug mb-6">
-              The smarter way to prepare for Nigerian tertiary exams.
-            </p>
-            <ul className="space-y-4">
-              {[
-                "Access thousands of verified past questions",
-                "Organized by department, level, and course",
-                "Free — for every student, always",
-                "Polytechnics, universities, colleges of education",
-              ].map((item) => (
-                <li key={item} className="flex items-start gap-3 text-sm text-slate-400">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-400">
-                    <Check size={11} strokeWidth={3} />
-                  </span>
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <p className="relative text-xs text-slate-600">
-            © {new Date().getFullYear()} SparkL. All rights reserved.
-          </p>
+        <div className="relative">
+          <Link href="/" className="inline-flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-[#2563EB] flex items-center justify-center">
+              <span className="text-white font-black text-sm">S</span>
+            </div>
+            <span className="text-white font-bold text-xl tracking-tight">SparkL</span>
+          </Link>
         </div>
 
-        {/* ── Right panel: form ── */}
-        <div className="w-full lg:w-[58%] flex items-start justify-center px-6 py-14 bg-[#060B1F] overflow-y-auto">
-          <div className="w-full max-w-md">
+        <div className="relative">
+          <p className="text-3xl font-extrabold text-white leading-snug mb-6">
+            The smarter way to prepare for Nigerian tertiary exams.
+          </p>
+          <ul className="space-y-4">
+            {[
+              "Access thousands of verified past questions",
+              "Organized by department, level, and course",
+              "Free — for every student, always",
+              "Polytechnics, universities, colleges of education",
+            ].map((item) => (
+              <li key={item} className="flex items-start gap-3 text-sm text-slate-400">
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-400">
+                  <Check size={11} strokeWidth={3} />
+                </span>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
 
-            {/* Mobile logo */}
-            <Link href="/" className="inline-flex items-center gap-3 mb-10 lg:hidden">
-              <div className="h-8 w-8 rounded-xl bg-[#2563EB] flex items-center justify-center">
-                <span className="text-white font-black text-xs">S</span>
+        <p className="relative text-xs text-slate-600">
+          © {new Date().getFullYear()} SparkL. All rights reserved.
+        </p>
+      </div>
+
+      {/* ── Right panel: form ── */}
+      <div className="w-full lg:w-[58%] flex items-start justify-center px-6 py-14 bg-[#060B1F] overflow-y-auto">
+        <div className="w-full max-w-md">
+
+          {/* Mobile logo */}
+          <Link href="/" className="inline-flex items-center gap-3 mb-10 lg:hidden">
+            <div className="h-8 w-8 rounded-xl bg-[#2563EB] flex items-center justify-center">
+              <span className="text-white font-black text-xs">S</span>
+            </div>
+            <span className="text-white font-bold text-lg">SparkL</span>
+          </Link>
+
+          <h1 className="text-3xl font-extrabold text-white">Create your account</h1>
+          <p className="mt-2 text-slate-400 text-sm">Free forever. No card needed.</p>
+
+          <form onSubmit={handleSubmit} className="mt-10 space-y-5">
+
+            {/* Full name */}
+            <Field label="Full name">
+              <User size={18} className="text-slate-500 shrink-0" />
+              <input
+                type="text"
+                placeholder="Your full name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className={inputClass}
+              />
+            </Field>
+
+            {/* Phone */}
+            <Field
+              label="Phone number"
+              hint={
+                phone && !phoneValid ? (
+                  <p className="mt-2 text-xs text-red-400">Enter a valid Nigerian phone number.</p>
+                ) : null
+              }
+            >
+              <Phone size={18} className="text-slate-500 shrink-0" />
+              <input
+                type="tel"
+                placeholder="08012345678"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                className={inputClass}
+              />
+            </Field>
+
+            {/* Email */}
+            <Field
+              label="Email address"
+              hint={
+                email && !emailValid ? (
+                  <p className="mt-2 text-xs text-red-400">Enter a valid email address.</p>
+                ) : null
+              }
+            >
+              <Mail size={18} className="text-slate-500 shrink-0" />
+              <input
+                type="email"
+                placeholder="your@email.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className={inputClass}
+              />
+            </Field>
+
+            {/* Password */}
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">Password</label>
+              <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
+                <Lock size={18} className="text-slate-500 shrink-0" />
+                <input
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Create a password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className={inputClass}
+                />
+                <button type="button" onClick={() => setShowPassword(!showPassword)} className="text-slate-500 hover:text-slate-300 transition-colors">
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
-              <span className="text-white font-bold text-lg">SparkL</span>
-            </Link>
 
-            <h1 className="text-3xl font-extrabold text-white">Create your account</h1>
-            <p className="mt-2 text-slate-400 text-sm">Free forever. No card needed.</p>
-
-            <form onSubmit={handleSubmit} className="mt-10 space-y-5">
-
-              {/* Full name */}
-              <Field label="Full name">
-                <User size={18} className="text-slate-500 shrink-0" />
-                <input
-                  type="text"
-                  placeholder="Your full name"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className={inputClass}
-                />
-              </Field>
-
-              {/* Phone */}
-              <Field
-                label="Phone number"
-                hint={
-                  phone && !phoneValid ? (
-                    <p className="mt-2 text-xs text-red-400">Enter a valid Nigerian phone number.</p>
-                  ) : null
-                }
-              >
-                <Phone size={18} className="text-slate-500 shrink-0" />
-                <input
-                  type="tel"
-                  placeholder="08012345678"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className={inputClass}
-                />
-              </Field>
-
-              {/* Email */}
-              <Field
-                label="Email address"
-                hint={
-                  email && !emailValid ? (
-                    <p className="mt-2 text-xs text-red-400">Enter a valid email address.</p>
-                  ) : null
-                }
-              >
-                <Mail size={18} className="text-slate-500 shrink-0" />
-                <input
-                  type="email"
-                  placeholder="your@email.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className={inputClass}
-                />
-              </Field>
-
-              {/* Password */}
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Password</label>
-                <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
-                  <Lock size={18} className="text-slate-500 shrink-0" />
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    placeholder="Create a password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className={inputClass}
-                  />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="text-slate-500 hover:text-slate-300 transition-colors">
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-
-                {password && (
-                  <div className="mt-3">
-                    {/* Strength bar */}
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="flex-1 h-1.5 rounded-full bg-white/10">
-                        <div className={`h-1.5 rounded-full transition-all duration-500 ${strength.width} ${strength.color}`} />
-                      </div>
-                      <span className="text-xs text-slate-400 w-10 text-right">{strength.label}</span>
+              {password && (
+                <div className="mt-3">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="flex-1 h-1.5 rounded-full bg-white/10">
+                      <div className={`h-1.5 rounded-full transition-all duration-500 ${strength.width} ${strength.color}`} />
                     </div>
-
-                    {/* Requirements */}
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {[
-                        { met: hasMinLength, label: "8+ characters" },
-                        { met: hasUpperCase, label: "Uppercase letter" },
-                        { met: hasNumber, label: "Number" },
-                        { met: hasSpecial, label: "Special character" },
-                      ].map(({ met, label }) => (
-                        <div key={label} className={`flex items-center gap-1.5 text-xs ${met ? "text-emerald-400" : "text-slate-600"}`}>
-                          <Check size={10} strokeWidth={3} className={met ? "opacity-100" : "opacity-30"} />
-                          {label}
-                        </div>
-                      ))}
-                    </div>
+                    <span className="text-xs text-slate-400 w-10 text-right">{strength.label}</span>
                   </div>
-                )}
-              </div>
-
-              {/* Confirm password */}
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Confirm password</label>
-                <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
-                  <Lock size={18} className="text-slate-500 shrink-0" />
-                  <input
-                    type={showConfirmPassword ? "text" : "password"}
-                    placeholder="Repeat your password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    className={inputClass}
-                  />
-                  <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="text-slate-500 hover:text-slate-300 transition-colors">
-                    {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {[
+                      { met: hasMinLength, label: "8+ characters" },
+                      { met: hasUpperCase, label: "Uppercase letter" },
+                      { met: hasNumber,    label: "Number" },
+                      { met: hasSpecial,   label: "Special character" },
+                    ].map(({ met, label }) => (
+                      <div key={label} className={`flex items-center gap-1.5 text-xs ${met ? "text-emerald-400" : "text-slate-600"}`}>
+                        <Check size={10} strokeWidth={3} className={met ? "opacity-100" : "opacity-30"} />
+                        {label}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                {confirmPassword && (
-                  <p className={`mt-2 text-xs ${passwordsMatch ? "text-emerald-400" : "text-red-400"}`}>
-                    {passwordsMatch ? "Passwords match" : "Passwords do not match"}
-                  </p>
-                )}
-              </div>
+              )}
+            </div>
 
-              {/* Terms */}
-              <label className="flex items-start gap-3 text-sm text-slate-400 cursor-pointer">
+            {/* Confirm password */}
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">Confirm password</label>
+              <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
+                <Lock size={18} className="text-slate-500 shrink-0" />
+                <input
+                  type={showConfirmPassword ? "text" : "password"}
+                  placeholder="Repeat your password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className={inputClass}
+                />
+                <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="text-slate-500 hover:text-slate-300 transition-colors">
+                  {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {confirmPassword && (
+                <p className={`mt-2 text-xs ${passwordsMatch ? "text-emerald-400" : "text-red-400"}`}>
+                  {passwordsMatch ? "Passwords match" : "Passwords do not match"}
+                </p>
+              )}
+            </div>
+
+            {/* ── Terms & policies agreement ── */}
+            <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4 space-y-3">
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Before you continue</p>
+
+              <label className="flex items-start gap-3 cursor-pointer group">
                 <input
                   type="checkbox"
-                  className="mt-0.5 rounded border-white/20 bg-white/5 accent-blue-500"
+                  className="mt-0.5 rounded border-white/20 bg-white/5 accent-blue-500 shrink-0"
                   checked={agreedToTerms}
                   onChange={(e) => setAgreedToTerms(e.target.checked)}
                 />
-                <span>
-                  I agree to the{" "}
-                  <button type="button" onClick={() => setShowTerms(true)} className="text-blue-400 hover:text-blue-300 font-medium transition-colors">
+                <span className="text-sm text-slate-400 leading-relaxed group-hover:text-slate-300 transition-colors">
+                  I have read and agree to the{" "}
+                  <Link href="/terms" target="_blank" className="text-blue-400 hover:text-blue-300 font-medium underline underline-offset-2">
                     Terms of Service
-                  </button>{" "}
-                  and{" "}
-                  <button type="button" onClick={() => setShowPrivacy(true)} className="text-blue-400 hover:text-blue-300 font-medium transition-colors">
+                  </Link>
+                  ,{" "}
+                  <Link href="/privacy-policy" target="_blank" className="text-blue-400 hover:text-blue-300 font-medium underline underline-offset-2">
                     Privacy Policy
-                  </button>
+                  </Link>
+                  , and{" "}
+                  <Link href="/content-guidelines" target="_blank" className="text-blue-400 hover:text-blue-300 font-medium underline underline-offset-2">
+                    Content Guidelines
+                  </Link>
+                  . I understand that uploaded content is subject to review.
                 </span>
               </label>
+            </div>
 
-              {/* Error */}
-              {errorMsg && (
-                <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3">
-                  <p className="text-sm text-red-400">{errorMsg}</p>
-                </div>
-              )}
+            {/* Error */}
+            {errorMsg && (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3">
+                <p className="text-sm text-red-400">{errorMsg}</p>
+              </div>
+            )}
 
-              {/* Submit */}
-              <Button
-                type="submit"
-                disabled={!formValid || loading}
-                className="w-full h-13 rounded-xl bg-[#2563EB] text-sm font-semibold text-white hover:bg-blue-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {loading ? "Creating account..." : "Create account"}
-                {!loading && <ArrowRight size={16} />}
-              </Button>
-            </form>
+            {/* Submit */}
+            <Button
+              type="submit"
+              disabled={!formValid || loading}
+              className="w-full h-13 rounded-xl bg-[#2563EB] text-sm font-semibold text-white hover:bg-blue-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {loading ? "Creating account..." : "Create account"}
+              {!loading && <ArrowRight size={16} />}
+            </Button>
+          </form>
 
-            <p className="mt-8 text-center text-sm text-slate-500">
-              Already have an account?{" "}
-              <Link href="/auth/login" className="text-blue-400 font-medium hover:text-blue-300 transition-colors">
-                Log in
-              </Link>
-            </p>
-          </div>
+          <p className="mt-8 text-center text-sm text-slate-500">
+            Already have an account?{" "}
+            <Link href="/auth/login" className="text-blue-400 font-medium hover:text-blue-300 transition-colors">
+              Log in
+            </Link>
+          </p>
         </div>
       </div>
-
-{showTerms && (
-  <AuthModal isOpen={showTerms} onClose={() => setShowTerms(false)} title="Terms of Service">
-    <p>Please read our terms of service carefully before using SparkL.</p>
-  </AuthModal>
-)}
-{showPrivacy && (
-  <AuthModal isOpen={showPrivacy} onClose={() => setShowPrivacy(false)} title="Privacy Policy">
-    <p>Please read our privacy policy to understand how we handle your data.</p>
-  </AuthModal>
-)}
-    </>
-   );
+    </div>
+  );
 }
