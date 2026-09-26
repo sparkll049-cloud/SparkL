@@ -18,6 +18,7 @@ type Plan       = "free" | "trial" | "pro" | "premium";
 interface Message {
   role:    "user" | "assistant";
   content: string;
+  isError?: boolean;
 }
 
 interface Session {
@@ -46,6 +47,89 @@ const MODES: { id: Mode; label: string; icon: React.ReactNode; hint: string }[] 
 
 const ACCEPTED = ".pdf,.docx,.doc,.txt,.png,.jpg,.jpeg,.webp";
 
+// ── KaTeX loader ───────────────────────────────────────────────────────────────
+// Loads KaTeX once from CDN and sets window.__katexReady = true
+
+let katexLoadPromise: Promise<void> | null = null;
+
+function loadKaTeX(): Promise<void> {
+  if (typeof window === "undefined") return Promise.resolve();
+  if ((window as any).__katexReady) return Promise.resolve();
+  if (katexLoadPromise) return katexLoadPromise;
+
+  katexLoadPromise = new Promise((resolve) => {
+    // CSS
+    if (!document.getElementById("katex-css")) {
+      const link = document.createElement("link");
+      link.id   = "katex-css";
+      link.rel  = "stylesheet";
+      link.href = "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css";
+      document.head.appendChild(link);
+    }
+    // JS
+    const script = document.createElement("script");
+    script.src   = "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js";
+    script.onload = () => {
+      (window as any).__katexReady = true;
+      resolve();
+    };
+    script.onerror = () => resolve(); // degrade gracefully
+    document.head.appendChild(script);
+  });
+
+  return katexLoadPromise;
+}
+
+// ── Math renderer ──────────────────────────────────────────────────────────────
+
+function MathSpan({ tex, display }: { tex: string; display: boolean }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [ready, setReady] = useState((window as any).__katexReady ?? false);
+
+  useEffect(() => {
+    if (!ready) {
+      loadKaTeX().then(() => setReady(true));
+    }
+  }, [ready]);
+
+  useEffect(() => {
+    if (!ready || !ref.current) return;
+    try {
+      (window as any).katex.render(tex, ref.current, {
+        throwOnError: false,
+        displayMode: display,
+      });
+    } catch {
+      if (ref.current) ref.current.textContent = tex;
+    }
+  }, [tex, display, ready]);
+
+  if (!ready) {
+    // fallback: show raw tex while loading
+    return (
+      <span
+        style={{
+          fontFamily: "monospace",
+          fontSize: "0.8em",
+          color: "var(--sp-text-3)",
+          background: "var(--sp-bg-muted)",
+          borderRadius: 4,
+          padding: "1px 4px",
+        }}
+      >
+        {tex}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      ref={ref}
+      style={display ? { display: "block", overflowX: "auto", margin: "8px 0", textAlign: "center" } : { display: "inline" }}
+    />
+  );
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function sourceIcon(type: SourceType) {
@@ -58,18 +142,54 @@ function formatTime(iso: string) {
   return new Date(iso).toLocaleDateString("en-NG", { day: "numeric", month: "short" });
 }
 
-// ── Markdown renderer ──────────────────────────────────────────────────────────
+// ── Markdown + Math renderer ───────────────────────────────────────────────────
+
+/**
+ * Splits a line into segments that are either plain text or inline math \(...\) / $...$
+ */
+function splitInlineMath(text: string): Array<{ type: "text" | "inlineMath"; value: string }> {
+  // Matches \( ... \) or $ ... $ (non-greedy, no newline inside $...$)
+  const re = /\\\((.+?)\\\)|\$([^$\n]+?)\$/g;
+  const parts: Array<{ type: "text" | "inlineMath"; value: string }> = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push({ type: "text", value: text.slice(last, m.index) });
+    parts.push({ type: "inlineMath", value: m[1] ?? m[2] });
+    last = m.index + m[0].length;
+  }
+
+  if (last < text.length) parts.push({ type: "text", value: text.slice(last) });
+  return parts;
+}
 
 function inlineFormat(text: string): React.ReactNode {
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**"))
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith("*") && part.endsWith("*"))
-      return <em key={i}>{part.slice(1, -1)}</em>;
-    if (part.startsWith("`") && part.endsWith("`"))
-      return <code key={i} className="rounded px-1 py-0.5 text-xs font-mono" style={{ background: "var(--sp-bg-muted)" }}>{part.slice(1, -1)}</code>;
-    return part;
+  // First handle bold/italic/code/inline-math
+  const segments = splitInlineMath(text);
+  return segments.map((seg, si) => {
+    if (seg.type === "inlineMath") {
+      return <MathSpan key={si} tex={seg.value} display={false} />;
+    }
+    // Now bold / italic / code
+    const parts = seg.value.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith("**") && part.endsWith("**"))
+        return <strong key={`${si}-${i}`}>{part.slice(2, -2)}</strong>;
+      if (part.startsWith("*") && part.endsWith("*"))
+        return <em key={`${si}-${i}`}>{part.slice(1, -1)}</em>;
+      if (part.startsWith("`") && part.endsWith("`"))
+        return (
+          <code
+            key={`${si}-${i}`}
+            className="rounded px-1 py-0.5 text-xs font-mono"
+            style={{ background: "var(--sp-bg-muted)" }}
+          >
+            {part.slice(1, -1)}
+          </code>
+        );
+      return part;
+    });
   });
 }
 
@@ -81,14 +201,70 @@ function MarkdownContent({ text }: { text: string }) {
   while (i < lines.length) {
     const line = lines[i];
 
-    const headingMatch = line.match(/^(#{1,4})\s+(.+)/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      const sizes = ["text-base font-bold mt-3 mb-1", "text-sm font-bold mt-2 mb-1", "text-sm font-semibold mt-2", "text-xs font-semibold mt-1"];
-      nodes.push(<p key={i} className={sizes[level - 1]} style={{ color: "var(--sp-text)" }}>{inlineFormat(headingMatch[2])}</p>);
+    // ── Display math: \[...\] spanning possibly multiple lines ─────────────
+    if (line.trim() === "\\[") {
+      const mathLines: string[] = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== "\\]") {
+        mathLines.push(lines[i]);
+        i++;
+      }
+      i++; // skip \]
+      nodes.push(
+        <div key={`math-${i}`} style={{ overflowX: "auto", margin: "8px 0" }}>
+          <MathSpan tex={mathLines.join("\n")} display={true} />
+        </div>
+      );
+      continue;
+    }
+
+    // ── Display math: $$ ... $$ spanning possibly multiple lines ──────────
+    if (line.trim().startsWith("$$") && line.trim() === "$$") {
+      const mathLines: string[] = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== "$$") {
+        mathLines.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing $$
+      nodes.push(
+        <div key={`math2-${i}`} style={{ overflowX: "auto", margin: "8px 0" }}>
+          <MathSpan tex={mathLines.join("\n")} display={true} />
+        </div>
+      );
+      continue;
+    }
+
+    // ── Display math: $$ ... $$ on a single line ──────────────────────────
+    const singleDollar = line.trim().match(/^\$\$(.+)\$\$$/);
+    if (singleDollar) {
+      nodes.push(
+        <div key={`math3-${i}`} style={{ overflowX: "auto", margin: "8px 0" }}>
+          <MathSpan tex={singleDollar[1]} display={true} />
+        </div>
+      );
       i++; continue;
     }
 
+    // ── Headings ───────────────────────────────────────────────────────────
+    const headingMatch = line.match(/^(#{1,4})\s+(.+)/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const sizes = [
+        "text-base font-bold mt-3 mb-1",
+        "text-sm font-bold mt-2 mb-1",
+        "text-sm font-semibold mt-2",
+        "text-xs font-semibold mt-1",
+      ];
+      nodes.push(
+        <p key={i} className={sizes[level - 1]} style={{ color: "var(--sp-text)" }}>
+          {inlineFormat(headingMatch[2])}
+        </p>
+      );
+      i++; continue;
+    }
+
+    // ── Tables ─────────────────────────────────────────────────────────────
     if (line.includes("|") && lines[i + 1]?.match(/^\|?[\s-]+\|/)) {
       const headers = line.split("|").map(h => h.trim()).filter(Boolean);
       i += 2;
@@ -102,13 +278,21 @@ function MarkdownContent({ text }: { text: string }) {
           <table className="w-full text-xs">
             <thead>
               <tr style={{ background: "var(--sp-bg-muted)" }}>
-                {headers.map((h, hi) => <th key={hi} className="px-3 py-2 text-left font-semibold" style={{ color: "var(--sp-text-2)" }}>{inlineFormat(h)}</th>)}
+                {headers.map((h, hi) => (
+                  <th key={hi} className="px-3 py-2 text-left font-semibold" style={{ color: "var(--sp-text-2)" }}>
+                    {inlineFormat(h)}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {rows.map((row, ri) => (
                 <tr key={ri} style={{ borderTop: "1px solid var(--sp-border)" }}>
-                  {row.map((cell, ci) => <td key={ci} className="px-3 py-2" style={{ color: "var(--sp-text)" }}>{inlineFormat(cell)}</td>)}
+                  {row.map((cell, ci) => (
+                    <td key={ci} className="px-3 py-2" style={{ color: "var(--sp-text)" }}>
+                      {inlineFormat(cell)}
+                    </td>
+                  ))}
                 </tr>
               ))}
             </tbody>
@@ -118,35 +302,48 @@ function MarkdownContent({ text }: { text: string }) {
       continue;
     }
 
+    // ── HR ─────────────────────────────────────────────────────────────────
     if (line.match(/^---+$/)) {
       nodes.push(<hr key={i} className="my-2" style={{ borderColor: "var(--sp-border)" }} />);
       i++; continue;
     }
 
+    // ── Unordered list ──────────────────────────────────────────────────────
     if (line.match(/^[-*]\s+/)) {
       nodes.push(
         <div key={i} className="flex gap-2 my-0.5">
           <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-400" />
-          <p className="text-sm leading-7" style={{ color: "var(--sp-text)" }}>{inlineFormat(line.replace(/^[-*]\s+/, ""))}</p>
+          <p className="text-sm leading-7" style={{ color: "var(--sp-text)" }}>
+            {inlineFormat(line.replace(/^[-*]\s+/, ""))}
+          </p>
         </div>
       );
       i++; continue;
     }
 
+    // ── Ordered list ────────────────────────────────────────────────────────
     const numMatch = line.match(/^(\d+)\.\s+(.+)/);
     if (numMatch) {
       nodes.push(
         <div key={i} className="flex gap-2 my-0.5">
           <span className="text-xs font-bold mt-1.5 text-indigo-400 shrink-0 w-4">{numMatch[1]}.</span>
-          <p className="text-sm leading-7" style={{ color: "var(--sp-text)" }}>{inlineFormat(numMatch[2])}</p>
+          <p className="text-sm leading-7" style={{ color: "var(--sp-text)" }}>
+            {inlineFormat(numMatch[2])}
+          </p>
         </div>
       );
       i++; continue;
     }
 
+    // ── Empty line ──────────────────────────────────────────────────────────
     if (!line.trim()) { nodes.push(<div key={i} className="h-1.5" />); i++; continue; }
 
-    nodes.push(<p key={i} className="text-sm leading-7" style={{ color: "var(--sp-text)" }}>{inlineFormat(line)}</p>);
+    // ── Plain paragraph ─────────────────────────────────────────────────────
+    nodes.push(
+      <p key={i} className="text-sm leading-7" style={{ color: "var(--sp-text)" }}>
+        {inlineFormat(line)}
+      </p>
+    );
     i++;
   }
 
@@ -157,6 +354,32 @@ function MarkdownContent({ text }: { text: string }) {
 
 function Bubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
+
+  if (msg.isError) {
+    return (
+      <div className="flex justify-start mb-3">
+        <div
+          className="max-w-[88%] rounded-2xl rounded-bl-sm px-4 py-3 flex items-start gap-2"
+          style={{
+            background: "rgba(239,68,68,0.08)",
+            border: "1px solid rgba(239,68,68,0.25)",
+          }}
+        >
+          <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-xs font-bold text-red-400 mb-0.5">Couldn't get a response</p>
+            <p className="text-sm leading-6" style={{ color: "var(--sp-text-2)" }}>
+              {msg.content}
+            </p>
+            <p className="text-[11px] mt-1.5" style={{ color: "var(--sp-text-3)" }}>
+              The AI may be on cooldown — wait a moment and try again.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
       <div
@@ -183,7 +406,10 @@ function UploadZone({ file, onFile, onClear }: { file: File | null; onFile: (f: 
 
   if (file) {
     return (
-      <div className="flex items-center gap-3 rounded-xl border px-4 py-3" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+      <div
+        className="flex items-center gap-3 rounded-xl border px-4 py-3"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+      >
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10">
           <FileText size={16} className="text-indigo-400" />
         </div>
@@ -191,7 +417,11 @@ function UploadZone({ file, onFile, onClear }: { file: File | null; onFile: (f: 
           <p className="text-sm font-medium truncate" style={{ color: "var(--sp-text)" }}>{file.name}</p>
           <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>{(file.size / 1024).toFixed(0)} KB</p>
         </div>
-        <button onClick={onClear} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-red-500/10" style={{ color: "var(--sp-text-3)" }}>
+        <button
+          onClick={onClear}
+          className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-red-500/10"
+          style={{ color: "var(--sp-text-3)" }}
+        >
           <X size={14} />
         </button>
       </div>
@@ -209,7 +439,13 @@ function UploadZone({ file, onFile, onClear }: { file: File | null; onFile: (f: 
       <Upload size={20} className="text-indigo-400" />
       <p className="text-sm font-medium" style={{ color: "var(--sp-text-2)" }}>Drop your notes here</p>
       <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>PDF, DOCX, image, or plain text · max 10 MB</p>
-      <input ref={inputRef} type="file" accept={ACCEPTED} className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ACCEPTED}
+        className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }}
+      />
     </div>
   );
 }
@@ -226,7 +462,10 @@ function FreeGate() {
         <h2 className="text-xl font-black" style={{ color: "var(--sp-text)" }}>SparkL Cram ⚡</h2>
         <p className="text-sm mt-1" style={{ color: "var(--sp-text-3)" }}>AI-powered study assistant</p>
       </div>
-      <div className="w-full max-w-sm rounded-2xl border p-5 space-y-3" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+      <div
+        className="w-full max-w-sm rounded-2xl border p-5 space-y-3"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+      >
         {[
           { icon: "✓", text: "Chat with your notes",   tier: "Pro",     premium: false },
           { icon: "✓", text: "Summarise any document", tier: "Pro",     premium: false },
@@ -261,7 +500,10 @@ function BetaBanner() {
   const [dismissed, setDismissed] = useState(false);
   if (dismissed) return null;
   return (
-    <div className="flex items-start gap-3 rounded-xl border px-4 py-3" style={{ background: "rgba(245,158,11,0.07)", borderColor: "rgba(245,158,11,0.25)" }}>
+    <div
+      className="flex items-start gap-3 rounded-xl border px-4 py-3"
+      style={{ background: "rgba(245,158,11,0.07)", borderColor: "rgba(245,158,11,0.25)" }}
+    >
       <AlertTriangle size={14} className="text-amber-400 mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="text-xs font-bold text-amber-400">SparkL Cram is in Beta ✦</p>
@@ -282,7 +524,10 @@ function SessionLimitBanner({ used, max }: { used: number; max: number }) {
   const remaining = max - used;
   if (remaining > 1) return null;
   return (
-    <div className="flex items-center gap-3 rounded-xl border px-4 py-3" style={{ background: "rgba(99,102,241,0.06)", borderColor: "rgba(99,102,241,0.25)" }}>
+    <div
+      className="flex items-center gap-3 rounded-xl border px-4 py-3"
+      style={{ background: "rgba(99,102,241,0.06)", borderColor: "rgba(99,102,241,0.25)" }}
+    >
       <Crown size={13} className="text-indigo-400 shrink-0" />
       <p className="text-xs flex-1" style={{ color: "var(--sp-text-2)" }}>
         {remaining === 0 ? "You've used all 3 Pro sessions." : `${remaining} session left on Pro.`}{" "}
@@ -294,15 +539,30 @@ function SessionLimitBanner({ used, max }: { used: number; max: number }) {
   );
 }
 
+// ── Friendly error message helper ──────────────────────────────────────────────
+
+function friendlyError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  if (/rate.?limit|too.?many|429|quota/i.test(raw))
+    return "The AI is on cooldown right now. Please wait a minute and try again.";
+  if (/timeout|timed.?out|network|fetch/i.test(raw))
+    return "Network hiccup — check your connection and retry.";
+  if (/5[0-9]{2}/.test(raw) || /server/i.test(raw))
+    return "The server had an issue. Hang on a sec and retry.";
+  if (/unauthori[sz]ed|401|403/i.test(raw))
+    return "Session expired — please refresh the page.";
+  return raw || "Something went wrong. Please try again.";
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function CramPage() {
   const supabase = createClient();
 
-  const [limits,        setLimits]        = useState<CramLimits | null>(null);
-  const [limitsLoading, setLimitsLoading] = useState(true);
-  const [sessions,      setSessions]      = useState<Session[]>([]);
-  const [activeSession, setActiveSession] = useState<Session | null>(null);
+  const [limits,         setLimits]         = useState<CramLimits | null>(null);
+  const [limitsLoading,  setLimitsLoading]  = useState(true);
+  const [sessions,       setSessions]       = useState<Session[]>([]);
+  const [activeSession,  setActiveSession]  = useState<Session | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
 
   const [file,         setFile]         = useState<File | null>(null);
@@ -317,6 +577,9 @@ export default function CramPage() {
   const [starting, setStarting] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Kick off KaTeX load early
+  useEffect(() => { loadKaTeX(); }, []);
 
   useEffect(() => { loadLimitsAndSessions(); }, []);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -370,9 +633,9 @@ export default function CramPage() {
       const token = await getToken();
 
       const sourceType: SourceType =
-        inputMode === "text"              ? "text"
-        : file?.type.startsWith("image/") ? "image"
-        : file?.name.endsWith(".docx")    ? "docx"
+        inputMode === "text"               ? "text"
+        : file?.type.startsWith("image/")  ? "image"
+        : file?.name.endsWith(".docx")     ? "docx"
         : "pdf";
 
       const fd = new FormData();
@@ -440,13 +703,14 @@ export default function CramPage() {
 
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail ?? "Failed to get response");
+        throw new Error(d.detail ?? `Server error ${res.status}`);
       }
 
       const reader  = res.body!.getReader();
       const decoder = new TextDecoder();
       let   aiText  = "";
 
+      // Add empty assistant bubble to stream into
       setMessages(prev => [...prev, { role: "assistant", content: "" }]);
 
       while (true) {
@@ -459,11 +723,37 @@ export default function CramPage() {
           return updated;
         });
       }
+
+      // Edge case: stream ended but aiText is still empty
+      if (!aiText.trim()) {
+        setMessages(prev => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            role:    "assistant",
+            content: "No response received. The AI may be on cooldown — please try again in a moment.",
+            isError: true,
+          };
+          return updated;
+        });
+      }
     } catch (e) {
-      setMessages(prev => [
-        ...prev,
-        { role: "assistant", content: `Sorry, something went wrong: ${e instanceof Error ? e.message : "Unknown error"}` },
-      ]);
+      // Replace the empty bubble (if added) or just append the error bubble
+      setMessages(prev => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        const errorMsg: Message = {
+          role:    "assistant",
+          content: friendlyError(e),
+          isError: true,
+        };
+        // If last message is the empty streaming placeholder, replace it
+        if (last?.role === "assistant" && !last.content && !last.isError) {
+          updated[updated.length - 1] = errorMsg;
+        } else {
+          updated.push(errorMsg);
+        }
+        return updated;
+      });
     } finally {
       setSending(false);
     }
@@ -556,10 +846,16 @@ export default function CramPage() {
           <div className="flex flex-col gap-4">
 
             {/* Session bar */}
-            <div className="flex items-center gap-2 rounded-xl border px-4 py-2.5" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+            <div
+              className="flex items-center gap-2 rounded-xl border px-4 py-2.5"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+            >
               {sourceIcon(activeSession.source_type)}
               <span className="text-sm font-medium flex-1 truncate" style={{ color: "var(--sp-text-2)" }}>{activeSession.title}</span>
-              <span className="text-[10px] rounded-full border px-2 py-0.5 font-medium" style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
+              <span
+                className="text-[10px] rounded-full border px-2 py-0.5 font-medium"
+                style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
+              >
                 {activeSession.source_type.toUpperCase()}
               </span>
             </div>
@@ -606,7 +902,10 @@ export default function CramPage() {
             </div>
 
             {/* Input */}
-            <div className="flex items-end gap-2 rounded-2xl border p-3" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+            <div
+              className="flex items-end gap-2 rounded-2xl border p-3"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+            >
               <textarea
                 value={input}
                 onChange={e => setInput(e.target.value)}
@@ -638,13 +937,21 @@ export default function CramPage() {
           <div className="flex flex-col gap-5">
 
             {sessionCapReached ? (
-              <div className="flex flex-col items-center gap-3 rounded-2xl border p-6 text-center" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <div
+                className="flex flex-col items-center gap-3 rounded-2xl border p-6 text-center"
+                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+              >
                 <Lock size={24} className="text-indigo-400" />
                 <div>
                   <p className="text-sm font-bold" style={{ color: "var(--sp-text)" }}>Session limit reached</p>
-                  <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>Pro plan includes 3 Cram sessions. Upgrade to Premium for unlimited.</p>
+                  <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>
+                    Pro plan includes 3 Cram sessions. Upgrade to Premium for unlimited.
+                  </p>
                 </div>
-                <Link href="/dashboard/subscribe" className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-black text-white hover:bg-indigo-500 transition">
+                <Link
+                  href="/dashboard/subscribe"
+                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-black text-white hover:bg-indigo-500 transition"
+                >
                   <Crown size={13} className="text-yellow-300" fill="currentColor" /> Upgrade to Premium
                 </Link>
               </div>
@@ -699,7 +1006,10 @@ export default function CramPage() {
                   disabled={starting || (!file && !textContent.trim()) || !sessionTitle.trim()}
                   className="flex items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white transition hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  {starting ? <><Loader2 size={15} className="animate-spin" /> Starting…</> : <><Sparkles size={15} /> Start cramming</>}
+                  {starting
+                    ? <><Loader2 size={15} className="animate-spin" /> Starting…</>
+                    : <><Sparkles size={15} /> Start cramming</>
+                  }
                 </button>
               </>
             )}
