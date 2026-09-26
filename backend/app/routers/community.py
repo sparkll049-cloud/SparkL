@@ -256,7 +256,99 @@ async def toggle_vote(
 
         return {"voted": True}
 
+# ── Public avatar ─────────────────────────────────────────────────────────────
 
+@router.get("/users/{target_user_id}/avatar")
+async def get_user_avatar(
+    target_user_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    res = (
+        supabase.table("profiles")
+        .select("avatar_url, full_name")
+        .eq("id", target_user_id)
+        .maybe_single()
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return {
+        "avatar_url": res.data.get("avatar_url"),
+        "full_name": res.data.get("full_name"),
+    }
+
+
+# ── Report ────────────────────────────────────────────────────────────────────
+
+class ReportPayload(BaseModel):
+    reason: Optional[str] = "inappropriate"
+
+@router.post("/questions/{question_id}/report")
+async def report_question(
+    question_id: str,
+    payload: ReportPayload,
+    user_id: str = Depends(get_current_user),
+):
+    supabase.table("community_reports").insert({
+        "reporter_id": user_id,
+        "question_id": question_id,
+        "reason": payload.reason,
+    }).execute()
+    return {"reported": True}
+
+@router.post("/answers/{answer_id}/report")
+async def report_answer(
+    answer_id: str,
+    payload: ReportPayload,
+    user_id: str = Depends(get_current_user),
+):
+    supabase.table("community_reports").insert({
+        "reporter_id": user_id,
+        "answer_id": answer_id,
+        "reason": payload.reason,
+    }).execute()
+    return {"reported": True}
+
+
+# ── Accept answer ─────────────────────────────────────────────────────────────
+
+@router.post("/answers/{answer_id}/accept")
+async def accept_answer(
+    answer_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    # Verify the current user owns the question
+    answer_res = (
+        supabase.table("community_answers")
+        .select("id, question_id")
+        .eq("id", answer_id)
+        .maybe_single()
+        .execute()
+    )
+    if not answer_res.data:
+        raise HTTPException(status_code=404, detail="Answer not found.")
+
+    question_res = (
+        supabase.table("community_questions")
+        .select("id, asked_by")
+        .eq("id", answer_res.data["question_id"])
+        .maybe_single()
+        .execute()
+    )
+    if not question_res.data or question_res.data["asked_by"] != user_id:
+        raise HTTPException(status_code=403, detail="Only the question author can accept answers.")
+
+    # Unaccept all other answers for this question
+    supabase.table("community_answers").update(
+        {"is_accepted": False}
+    ).eq("question_id", answer_res.data["question_id"]).execute()
+
+    # Accept this one
+    supabase.table("community_answers").update(
+        {"is_accepted": True}
+    ).eq("id", answer_id).execute()
+
+    return {"accepted": True}
 # ── Save / unsave ─────────────────────────────────────────────────────────────
 
 @router.post("/questions/{question_id}/save")
