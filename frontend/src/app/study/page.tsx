@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   FileText, Image as ImageIcon, Type, Upload, X, Send,
   Sparkles, BookOpen, Zap, AlignLeft, Loader2, RotateCcw,
-  Trash2, Crown, Lock, AlertTriangle, CheckCircle, XCircle,
+  Trash2, Crown, Lock, AlertTriangle,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import Link from "next/link";
@@ -214,7 +214,7 @@ function UploadZone({ file, onFile, onClear }: { file: File | null; onFile: (f: 
   );
 }
 
-// ── Free gate screen ───────────────────────────────────────────────────────────
+// ── Free gate ──────────────────────────────────────────────────────────────────
 
 function FreeGate() {
   return (
@@ -228,17 +228,17 @@ function FreeGate() {
       </div>
       <div className="w-full max-w-sm rounded-2xl border p-5 space-y-3" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
         {[
-          { icon: <CheckCircle size={14} className="text-emerald-400" />, text: "Chat with your notes", pro: true },
-          { icon: <CheckCircle size={14} className="text-emerald-400" />, text: "Summarise any document", pro: true },
-          { icon: <CheckCircle size={14} className="text-emerald-400" />, text: "AI explanations", pro: true },
-          { icon: <Crown size={14} className="text-yellow-400" />,        text: "Quiz mode", pro: false, premium: true },
-          { icon: <Crown size={14} className="text-yellow-400" />,        text: "Unlimited sessions", pro: false, premium: true },
+          { icon: "✓", text: "Chat with your notes",   tier: "Pro",     premium: false },
+          { icon: "✓", text: "Summarise any document", tier: "Pro",     premium: false },
+          { icon: "✓", text: "AI explanations",        tier: "Pro",     premium: false },
+          { icon: "★", text: "Quiz mode",              tier: "Premium", premium: true  },
+          { icon: "★", text: "Unlimited sessions",     tier: "Premium", premium: true  },
         ].map((f, i) => (
           <div key={i} className="flex items-center gap-3">
-            {f.icon}
+            <span className={`text-sm font-bold ${f.premium ? "text-yellow-400" : "text-emerald-400"}`}>{f.icon}</span>
             <span className="text-sm flex-1 text-left" style={{ color: "var(--sp-text-2)" }}>{f.text}</span>
             <span className={`text-[10px] font-bold rounded-full px-2 py-0.5 ${f.premium ? "bg-yellow-500/10 text-yellow-500" : "bg-indigo-500/10 text-indigo-400"}`}>
-              {f.premium ? "Premium" : "Pro"}
+              {f.tier}
             </span>
           </div>
         ))}
@@ -269,14 +269,14 @@ function BetaBanner() {
           AI can make mistakes — always verify answers with your lecturer or textbook. Do not rely solely on Cram for exams.
         </p>
       </div>
-      <button onClick={() => setDismissed(true)} className="shrink-0 mt-0.5" style={{ color: "var(--sp-text-3)" }}>
+      <button onClick={() => setDismissed(true)} style={{ color: "var(--sp-text-3)" }}>
         <X size={13} />
       </button>
     </div>
   );
 }
 
-// ── Pro session limit banner ───────────────────────────────────────────────────
+// ── Session limit banner ───────────────────────────────────────────────────────
 
 function SessionLimitBanner({ used, max }: { used: number; max: number }) {
   const remaining = max - used;
@@ -285,11 +285,9 @@ function SessionLimitBanner({ used, max }: { used: number; max: number }) {
     <div className="flex items-center gap-3 rounded-xl border px-4 py-3" style={{ background: "rgba(99,102,241,0.06)", borderColor: "rgba(99,102,241,0.25)" }}>
       <Crown size={13} className="text-indigo-400 shrink-0" />
       <p className="text-xs flex-1" style={{ color: "var(--sp-text-2)" }}>
-        {remaining === 0
-          ? "You've used all 3 Pro sessions."
-          : `${remaining} session left on Pro.`}{" "}
+        {remaining === 0 ? "You've used all 3 Pro sessions." : `${remaining} session left on Pro.`}{" "}
         <Link href="/dashboard/subscribe" className="text-indigo-400 font-bold hover:underline">
-          Upgrade to Premium for unlimited →
+          Upgrade to Premium →
         </Link>
       </p>
     </div>
@@ -301,10 +299,11 @@ function SessionLimitBanner({ used, max }: { used: number; max: number }) {
 export default function CramPage() {
   const supabase = createClient();
 
-  const [limits,          setLimits]          = useState<CramLimits | null>(null);
-  const [limitsLoading,   setLimitsLoading]   = useState(true);
-  const [sessions,        setSessions]        = useState<Session[]>([]);
-  const [activeSession,   setActiveSession]   = useState<Session | null>(null);
+  const [limits,        setLimits]        = useState<CramLimits | null>(null);
+  const [limitsLoading, setLimitsLoading] = useState(true);
+  const [sessions,      setSessions]      = useState<Session[]>([]);
+  const [activeSession, setActiveSession] = useState<Session | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const [file,         setFile]         = useState<File | null>(null);
   const [textContent,  setTextContent]  = useState("");
@@ -343,6 +342,25 @@ export default function CramPage() {
     }
   }
 
+  async function openSession(session: Session) {
+    setActiveSession(session);
+    setMessages([]);
+    setHistoryLoading(true);
+    try {
+      const token = await getToken();
+      const res   = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/study/sessions/${session.id}/messages`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        const history: Message[] = await res.json();
+        setMessages(history);
+      }
+    } catch { /* non-critical */ } finally {
+      setHistoryLoading(false);
+    }
+  }
+
   async function startSession() {
     if (!file && !textContent.trim()) return;
     if (!sessionTitle.trim()) return;
@@ -360,6 +378,8 @@ export default function CramPage() {
       const fd = new FormData();
       fd.append("title",       sessionTitle);
       fd.append("source_type", sourceType);
+      if (file)        fd.append("file",         file);
+      if (textContent) fd.append("text_content", textContent);
 
       const sessionRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/study/session`, {
         method:  "POST",
@@ -376,15 +396,13 @@ export default function CramPage() {
       setActiveSession(session);
       setSessions(s => [session, ...s]);
       setMessages([]);
-
-      // Update local limits count
       setLimits(prev => prev ? { ...prev, sessions_used: prev.sessions_used + 1 } : prev);
 
       await sendMessage(
-        "Hello! I've shared my notes — please confirm you can see them.",
+        "Hello! I've uploaded my notes — please confirm you can see them and give me a quick summary of what's covered.",
         session,
         [],
-        true,
+        sourceType === "image" ? file : undefined,
       );
     } catch (e) {
       alert(e instanceof Error ? e.message : "Something went wrong");
@@ -397,7 +415,7 @@ export default function CramPage() {
     text:       string,
     session:    Session | null = activeSession,
     msgHistory: Message[]     = messages,
-    attachFile: boolean       = false,
+    imageFile?: File | null,
   ) {
     if (!text.trim() || !session) return;
     setSending(true);
@@ -409,11 +427,10 @@ export default function CramPage() {
     try {
       const token = await getToken();
       const fd    = new FormData();
-      fd.append("message", text);
-      fd.append("mode",    mode);
-      fd.append("history", JSON.stringify(msgHistory.slice(-12)));
-      if (attachFile && file)        fd.append("file",         file);
-      if (attachFile && textContent) fd.append("text_content", textContent);
+      fd.append("session_id", session.id);
+      fd.append("message",    text);
+      fd.append("mode",       mode);
+      if (imageFile) fd.append("file", imageFile);
 
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/study/chat`, {
         method:  "POST",
@@ -482,27 +499,18 @@ export default function CramPage() {
     );
   }
 
-  // ── Free gate ──────────────────────────────────────────────────────────────
-
   if (!limits?.cram_access) {
     return (
       <div className="min-h-screen" style={{ background: "var(--sp-bg)" }}>
-        <div className="mx-auto max-w-lg px-4 py-6">
-          <FreeGate />
-        </div>
+        <div className="mx-auto max-w-lg px-4 py-6"><FreeGate /></div>
       </div>
     );
   }
 
-  const isPro      = limits.plan === "pro";
-  const isPremium  = limits.plan === "premium" || limits.plan === "trial";
-  const canQuiz    = limits.cram_modes.includes("quiz");
-  const sessionsLeft = limits.cram_max_sessions !== null
-    ? limits.cram_max_sessions - limits.sessions_used
-    : null;
+  const isPro             = limits.plan === "pro";
+  const isPremium         = limits.plan === "premium" || limits.plan === "trial";
+  const sessionsLeft      = limits.cram_max_sessions !== null ? limits.cram_max_sessions - limits.sessions_used : null;
   const sessionCapReached = sessionsLeft !== null && sessionsLeft <= 0;
-
-  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen" style={{ background: "var(--sp-bg)" }}>
@@ -513,23 +521,17 @@ export default function CramPage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-black" style={{ color: "var(--sp-text)" }}>SparkL Cram ⚡</h1>
-              <span className="rounded-full border px-2 py-0.5 text-[10px] font-bold text-amber-400 border-amber-400/30 bg-amber-400/10">
-                Beta
-              </span>
+              <span className="rounded-full border px-2 py-0.5 text-[10px] font-bold text-amber-400 border-amber-400/30 bg-amber-400/10">Beta</span>
               {isPremium && (
                 <span className="rounded-full border px-2 py-0.5 text-[10px] font-bold text-yellow-400 border-yellow-400/30 bg-yellow-400/10 flex items-center gap-1">
                   <Crown size={9} fill="currentColor" /> Premium
                 </span>
               )}
               {isPro && (
-                <span className="rounded-full border px-2 py-0.5 text-[10px] font-bold text-indigo-400 border-indigo-400/30 bg-indigo-400/10">
-                  Pro
-                </span>
+                <span className="rounded-full border px-2 py-0.5 text-[10px] font-bold text-indigo-400 border-indigo-400/30 bg-indigo-400/10">Pro</span>
               )}
             </div>
-            <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
-              Upload your notes — chat, quiz, summarise
-            </p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>Upload your notes — chat, quiz, summarise</p>
           </div>
           {activeSession && (
             <button
@@ -542,10 +544,8 @@ export default function CramPage() {
           )}
         </div>
 
-        {/* Beta banner */}
         <div className="mb-4"><BetaBanner /></div>
 
-        {/* Pro session limit banner */}
         {isPro && limits.cram_max_sessions && (
           <div className="mb-4">
             <SessionLimitBanner used={limits.sessions_used} max={limits.cram_max_sessions} />
@@ -555,7 +555,7 @@ export default function CramPage() {
         {activeSession ? (
           <div className="flex flex-col gap-4">
 
-            {/* Session info */}
+            {/* Session bar */}
             <div className="flex items-center gap-2 rounded-xl border px-4 py-2.5" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               {sourceIcon(activeSession.source_type)}
               <span className="text-sm font-medium flex-1 truncate" style={{ color: "var(--sp-text-2)" }}>{activeSession.title}</span>
@@ -567,24 +567,17 @@ export default function CramPage() {
             {/* Mode selector */}
             <div className="flex items-center gap-1.5 flex-wrap">
               {MODES.map(m => {
-                const allowed   = limits.cram_modes.includes(m.id);
-                const isActive  = mode === m.id;
+                const allowed  = limits.cram_modes.includes(m.id);
+                const isActive = mode === m.id;
                 return (
                   <button
                     key={m.id}
                     onClick={() => allowed && setMode(m.id)}
                     title={allowed ? m.hint : "Upgrade to Premium for Quiz mode"}
-                    className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
-                      isActive ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-400" : ""
-                    } ${!allowed ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
-                    style={!isActive ? {
-                      borderColor: "var(--sp-border)",
-                      color: "var(--sp-text-3)",
-                      background: "var(--sp-bg-muted)",
-                    } : {}}
+                    className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${isActive ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-400" : ""} ${!allowed ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
+                    style={!isActive ? { borderColor: "var(--sp-border)", color: "var(--sp-text-3)", background: "var(--sp-bg-muted)" } : {}}
                   >
-                    {m.icon}
-                    {m.label}
+                    {m.icon}{m.label}
                     {!allowed && <Lock size={10} className="ml-0.5" />}
                   </button>
                 );
@@ -596,13 +589,19 @@ export default function CramPage() {
               className="rounded-2xl border p-4 min-h-[400px] max-h-[520px] overflow-y-auto"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
             >
-              {messages.length === 0 && (
+              {historyLoading ? (
+                <div className="flex items-center justify-center h-64 gap-2">
+                  <Loader2 size={18} className="animate-spin text-indigo-400" />
+                  <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>Loading chat history…</p>
+                </div>
+              ) : messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-64 gap-3">
                   <Sparkles size={24} className="text-indigo-400" />
                   <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>Ask me anything about your notes</p>
                 </div>
+              ) : (
+                messages.map((m, i) => <Bubble key={i} msg={m} />)
               )}
-              {messages.map((m, i) => <Bubble key={i} msg={m} />)}
               <div ref={bottomRef} />
             </div>
 
@@ -636,32 +635,21 @@ export default function CramPage() {
 
         ) : (
 
-          /* New session setup */
           <div className="flex flex-col gap-5">
 
-            {/* Session cap reached */}
-            {sessionCapReached && (
+            {sessionCapReached ? (
               <div className="flex flex-col items-center gap-3 rounded-2xl border p-6 text-center" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
                 <Lock size={24} className="text-indigo-400" />
                 <div>
                   <p className="text-sm font-bold" style={{ color: "var(--sp-text)" }}>Session limit reached</p>
-                  <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>
-                    Pro plan includes 3 Cram sessions. Upgrade to Premium for unlimited.
-                  </p>
+                  <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>Pro plan includes 3 Cram sessions. Upgrade to Premium for unlimited.</p>
                 </div>
-                <Link
-                  href="/dashboard/subscribe"
-                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-black text-white hover:bg-indigo-500 transition"
-                >
-                  <Crown size={13} className="text-yellow-300" fill="currentColor" />
-                  Upgrade to Premium
+                <Link href="/dashboard/subscribe" className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-black text-white hover:bg-indigo-500 transition">
+                  <Crown size={13} className="text-yellow-300" fill="currentColor" /> Upgrade to Premium
                 </Link>
               </div>
-            )}
-
-            {!sessionCapReached && (
+            ) : (
               <>
-                {/* Title */}
                 <div>
                   <label className="text-xs font-semibold mb-1.5 block" style={{ color: "var(--sp-text-3)" }}>Session name</label>
                   <input
@@ -673,15 +661,12 @@ export default function CramPage() {
                   />
                 </div>
 
-                {/* Input mode */}
                 <div className="flex items-center gap-2">
                   {(["file", "text"] as const).map(im => (
                     <button
                       key={im}
                       onClick={() => setInputMode(im)}
-                      className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                        inputMode === im ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-400" : ""
-                      }`}
+                      className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${inputMode === im ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-400" : ""}`}
                       style={inputMode !== im ? { borderColor: "var(--sp-border)", color: "var(--sp-text-3)", background: "var(--sp-bg-muted)" } : {}}
                     >
                       {im === "file" ? <><Upload size={12} /> Upload file</> : <><Type size={12} /> Paste text</>}
@@ -703,7 +688,6 @@ export default function CramPage() {
                   )
                 }
 
-                {/* Pro sessions counter */}
                 {isPro && limits.cram_max_sessions && (
                   <p className="text-xs text-center" style={{ color: "var(--sp-text-3)" }}>
                     {sessionsLeft} of {limits.cram_max_sessions} sessions remaining on Pro
@@ -715,10 +699,7 @@ export default function CramPage() {
                   disabled={starting || (!file && !textContent.trim()) || !sessionTitle.trim()}
                   className="flex items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white transition hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  {starting
-                    ? <><Loader2 size={15} className="animate-spin" /> Starting…</>
-                    : <><Sparkles size={15} /> Start cramming</>
-                  }
+                  {starting ? <><Loader2 size={15} className="animate-spin" /> Starting…</> : <><Sparkles size={15} /> Start cramming</>}
                 </button>
               </>
             )}
@@ -733,7 +714,7 @@ export default function CramPage() {
                       key={s.id}
                       className="flex items-center gap-3 rounded-xl border px-4 py-3 cursor-pointer transition hover:border-indigo-500/30"
                       style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-                      onClick={() => { setActiveSession(s); setMessages([]); }}
+                      onClick={() => openSession(s)}
                     >
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10">
                         {sourceIcon(s.source_type)}
