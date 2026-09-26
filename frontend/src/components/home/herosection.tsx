@@ -61,7 +61,7 @@ export default function HeroSection() {
           {/* CTA */}
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">
             <Link
-              href="/questions"
+              href="/dashboard/courses"
               className="group inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-3.5 text-sm font-bold text-white shadow-[0_10px_25px_-10px_rgba(37,99,235,0.55)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-[0_14px_30px_-10px_rgba(37,99,235,0.6)]"
             >
               Explore Past Questions
