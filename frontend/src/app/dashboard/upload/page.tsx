@@ -23,10 +23,69 @@ const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png"];
 const MIN_YEAR = 1990;
 const LOW_QUALITY_THRESHOLD = 0.5;
 
+// ── Image compression ─────────────────────────────────────────────────────────
+
+async function compressImage(file: File): Promise<File> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+
+      const MAX_DIMENSION = 1920;
+      let { width, height } = img;
+
+      if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+        if (width > height) {
+          height = Math.round((height * MAX_DIMENSION) / width);
+          width = MAX_DIMENSION;
+        } else {
+          width = Math.round((width * MAX_DIMENSION) / height);
+          height = MAX_DIMENSION;
+        }
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { resolve(file); return; }
+          // Only use compressed version if it's actually smaller
+          if (blob.size < file.size) {
+            resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
+          } else {
+            resolve(file);
+          }
+        },
+        "image/jpeg",
+        0.82 // quality — good balance between size and readability for scanned docs
+      );
+    };
+
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 function isValidYear(y: string, currentYear: number) {
   if (!y) return true;
   return /^\d{4}$/.test(y) && Number(y) >= MIN_YEAR && Number(y) <= currentYear + 1;
 }
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 function SelectField({ label, value, onChange, disabled, placeholder, options, required }: {
   label: string; value: string; onChange: (v: string) => void;
@@ -71,6 +130,8 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+// ── Main component ────────────────────────────────────────────────────────────
+
 export default function UploadPage() {
   const supabase = createClient();
   const router = useRouter();
@@ -83,14 +144,16 @@ export default function UploadPage() {
   const [semesters,    setSemesters]    = useState<Option[]>([]);
   const [myUploads,    setMyUploads]    = useState<MyUpload[]>([]);
 
-  const [title, setTitle]               = useState("");
-  const [year, setYear]                 = useState("");
+  const [title, setTitle]                 = useState("");
+  const [year, setYear]                   = useState("");
   const [institutionId, setInstitutionId] = useState("");
-  const [departmentId, setDepartmentId] = useState("");
-  const [levelId, setLevelId]           = useState("");
-  const [courseId, setCourseId]         = useState("");
-  const [semesterId, setSemesterId]     = useState("");
-  const [file, setFile]                 = useState<File | null>(null);
+  const [departmentId, setDepartmentId]   = useState("");
+  const [levelId, setLevelId]             = useState("");
+  const [courseId, setCourseId]           = useState("");
+  const [semesterId, setSemesterId]       = useState("");
+  const [file, setFile]                   = useState<File | null>(null);
+  const [compressedFile, setCompressedFile] = useState<File | null>(null);
+  const [compressing, setCompressing]     = useState(false);
 
   const [fetching,           setFetching]           = useState(true);
   const [loadingDepartments, setLoadingDepartments] = useState(false);
@@ -150,54 +213,101 @@ export default function UploadPage() {
 
   function validateFile(selected: File): boolean {
     setFileError("");
-    if (!ALLOWED_TYPES.includes(selected.type)) { setFileError("Only PDF, JPG, and PNG files are allowed."); return false; }
-    if (selected.size > MAX_FILE_SIZE) { setFileError("File too large — max size is 20MB."); return false; }
+    if (!ALLOWED_TYPES.includes(selected.type)) {
+      setFileError("Only PDF, JPG, and PNG files are allowed.");
+      return false;
+    }
+    if (selected.size > MAX_FILE_SIZE) {
+      setFileError("File too large — max size is 20MB.");
+      return false;
+    }
     return true;
+  }
+
+  async function processFile(selected: File) {
+    setFile(selected);
+    setCompressedFile(null);
+
+    // Only compress images — PDFs are passed through as-is
+    if (selected.type === "application/pdf") {
+      setCompressedFile(selected);
+      return;
+    }
+
+    setCompressing(true);
+    try {
+      const compressed = await compressImage(selected);
+      setCompressedFile(compressed);
+    } catch {
+      setCompressedFile(selected); // fallback to original
+    } finally {
+      setCompressing(false);
+    }
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0] ?? null;
-    if (!selected) { setFile(null); return; }
-    if (validateFile(selected)) setFile(selected); else setFile(null);
+    if (!selected) { setFile(null); setCompressedFile(null); return; }
+    if (validateFile(selected)) processFile(selected);
+    else { setFile(null); setCompressedFile(null); }
   }
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault(); setDragOver(false);
     const dropped = e.dataTransfer.files?.[0];
     if (!dropped) return;
-    if (validateFile(dropped)) setFile(dropped); else setFile(null);
+    if (validateFile(dropped)) processFile(dropped);
+    else { setFile(null); setCompressedFile(null); }
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setError(""); setSuccess(false);
-    if (!file) { setError("Please choose a file."); return; }
-    if (year && !isValidYear(year, currentYear)) { setError(`Year must be between ${MIN_YEAR} and ${currentYear + 1}.`); return; }
+    if (!compressedFile) { setError("Please choose a file."); return; }
+    if (year && !isValidYear(year, currentYear)) {
+      setError(`Year must be between ${MIN_YEAR} and ${currentYear + 1}.`);
+      return;
+    }
     setSubmitting(true);
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { setSubmitting(false); router.push("/auth/login"); return; }
+
     const formData = new FormData();
     formData.append("title", title);
     if (year) formData.append("year", year);
     formData.append("course_id", courseId);
     if (semesterId) formData.append("semester_id", semesterId);
-    formData.append("file", file);
+    formData.append("file", compressedFile);
+
     try {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/upload`, {
-        method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, body: formData,
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body: formData,
       });
       if (res.status === 401) { setSubmitting(false); router.push("/auth/login"); return; }
-      if (!res.ok) { const body = await res.json().catch(() => null); throw new Error(body?.detail ?? "Upload failed."); }
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? "Upload failed.");
+      }
       setSuccess(true);
       setTitle(""); setYear(""); setInstitutionId(""); setDepartmentId("");
-      setLevelId(""); setCourseId(""); setSemesterId(""); setFile(null);
+      setLevelId(""); setCourseId(""); setSemesterId("");
+      setFile(null); setCompressedFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       await loadMyUploads(session.access_token);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally { setSubmitting(false); }
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  const formValid = title.trim() && courseId && file && !fileError && isValidYear(year, currentYear);
+  const formValid = title.trim() && courseId && compressedFile && !fileError &&
+    !compressing && isValidYear(year, currentYear);
+
+  const savedBytes = file && compressedFile && compressedFile.size < file.size
+    ? file.size - compressedFile.size
+    : 0;
 
   if (fetching) {
     return (
@@ -228,15 +338,19 @@ export default function UploadPage() {
         )}
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="rounded-2xl border p-6 space-y-5 transition-colors"
-          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-
+        <form
+          onSubmit={handleSubmit}
+          className="rounded-2xl border p-6 space-y-5 transition-colors"
+          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+        >
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
               Title <span className="text-blue-400">*</span>
             </label>
             <input
-              value={title} onChange={(e) => setTitle(e.target.value)} maxLength={150}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              maxLength={150}
               placeholder="e.g. CSC 301 — First Semester 2023"
               className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }}
@@ -265,8 +379,11 @@ export default function UploadPage() {
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>Year</label>
               <input
-                value={year} onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder="e.g. 2023" inputMode="numeric" maxLength={4}
+                value={year}
+                onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                placeholder="e.g. 2023"
+                inputMode="numeric"
+                maxLength={4}
                 className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                 style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }}
               />
@@ -292,15 +409,31 @@ export default function UploadPage() {
               }`}
               style={!dragOver && !file ? { borderColor: "var(--sp-border)" } : {}}
             >
-              {file ? (
+              {compressing ? (
+                <>
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
+                    <Loader2 className="h-5 w-5 animate-spin text-blue-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Compressing image…</p>
+                    <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>Optimising for faster upload</p>
+                  </div>
+                </>
+              ) : file ? (
                 <>
                   <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10">
                     <CheckCircle2 className="h-5 w-5 text-emerald-400" />
                   </div>
                   <div>
-                    <p className="text-sm font-semibold text-emerald-400">{file.name}</p>
+                    <p className="text-sm font-semibold text-emerald-400">{compressedFile?.name ?? file.name}</p>
                     <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
-                      {(file.size / 1024 / 1024).toFixed(2)} MB — tap to change
+                      {formatBytes(compressedFile?.size ?? file.size)}
+                      {savedBytes > 0 && (
+                        <span className="ml-1.5 text-emerald-400 font-medium">
+                          (saved {formatBytes(savedBytes)})
+                        </span>
+                      )}
+                      {" · tap to change"}
                     </p>
                   </div>
                 </>
@@ -313,12 +446,19 @@ export default function UploadPage() {
                     <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>
                       Drop your file here, or tap to browse
                     </p>
-                    <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>PDF, JPG, PNG — max 20MB</p>
+                    <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>
+                      PDF, JPG, PNG — max 20MB · images auto-compressed
+                    </p>
                   </div>
                 </>
               )}
-              <input ref={fileInputRef} type="file" accept=".pdf,.jpg,.jpeg,.png"
-                onChange={handleFileChange} className="hidden" />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png"
+                onChange={handleFileChange}
+                className="hidden"
+              />
             </label>
             {fileError && (
               <p className="flex items-center gap-1.5 text-xs text-red-400">
@@ -337,20 +477,25 @@ export default function UploadPage() {
           {success && (
             <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
               <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-              <p className="text-sm text-emerald-400">Uploaded — pending admin review. You'll be notified when it's approved.</p>
+              <p className="text-sm text-emerald-400">
+                Uploaded — pending admin review. You'll be notified when it's approved.
+              </p>
             </div>
           )}
 
-          <button type="submit" disabled={!formValid || submitting}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#2563EB] py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40">
+          <button
+            type="submit"
+            disabled={!formValid || submitting}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#2563EB] py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+          >
             {submitting
-              ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading — extracting text…</>
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</>
               : <><UploadIcon className="h-4 w-4" /> Submit for review</>
             }
           </button>
 
           <p className="text-center text-xs" style={{ color: "var(--sp-text-3)" }}>
-            We extract text from your file to make it searchable. Blurry or unreadable files will be flagged before submission.
+            We extract text from your file to make it searchable. Images are compressed automatically before upload.
           </p>
         </form>
 
@@ -376,8 +521,10 @@ export default function UploadPage() {
             <div className="rounded-2xl border overflow-hidden transition-colors"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               {myUploads.map((u, i) => (
-                <div key={u.id} className={`p-4 ${i !== myUploads.length - 1 ? "border-b" : ""}`}
-                  style={i !== myUploads.length - 1 ? { borderColor: "var(--sp-border)" } : {}}>
+                <div key={u.id}
+                  className={`p-4 ${i !== myUploads.length - 1 ? "border-b" : ""}`}
+                  style={i !== myUploads.length - 1 ? { borderColor: "var(--sp-border)" } : {}}
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500/10">
@@ -390,7 +537,9 @@ export default function UploadPage() {
                           {u.semester?.name ? ` · ${u.semester.name}` : ""}
                           {u.year ? ` · ${u.year}` : ""}
                           {" · "}
-                          {new Date(u.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                          {new Date(u.created_at).toLocaleDateString("en-GB", {
+                            day: "numeric", month: "short", year: "numeric",
+                          })}
                         </p>
                       </div>
                     </div>
@@ -400,14 +549,18 @@ export default function UploadPage() {
                   {u.status === "rejected" && u.rejection_reason && (
                     <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5">
                       <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
-                      <p className="text-xs text-red-400"><span className="font-semibold">Rejected:</span> {u.rejection_reason}</p>
+                      <p className="text-xs text-red-400">
+                        <span className="font-semibold">Rejected:</span> {u.rejection_reason}
+                      </p>
                     </div>
                   )}
 
                   {u.extraction_quality !== null && u.extraction_quality < LOW_QUALITY_THRESHOLD && u.status !== "rejected" && (
                     <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
                       <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-                      <p className="text-xs text-amber-400">Text extraction was unclear. An admin may request a clearer scan.</p>
+                      <p className="text-xs text-amber-400">
+                        Text extraction was unclear. An admin may request a clearer scan.
+                      </p>
                     </div>
                   )}
                 </div>
