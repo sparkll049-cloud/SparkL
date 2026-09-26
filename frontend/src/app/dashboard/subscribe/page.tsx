@@ -6,7 +6,6 @@ import {
   Check, Sparkles, Zap, ArrowLeft, Loader2, CheckCircle2, Crown,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
-import { Checkout } from "payvessel-checkout";
 
 const PLANS = [
   {
@@ -98,7 +97,6 @@ function SubscribePageInner() {
           phone: profileRes.data?.phone ?? "",
         });
 
-        // Use API status (checks expiry) rather than raw profile column
         if (subRes.ok) {
           const subData = await subRes.json();
           setCurrentPlan(
@@ -126,6 +124,7 @@ function SubscribePageInner() {
       const { data: { session } } = await supabase.auth.refreshSession();
       if (!session) { router.push("/auth/login"); return; }
 
+      // Step 1 — create transaction reference on our backend
       const initiateRes = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`,
         {
@@ -145,65 +144,48 @@ function SubscribePageInner() {
 
       const { reference: ourReference } = await initiateRes.json();
 
-      const init = Checkout({
-        api_key: process.env.NEXT_PUBLIC_PAYVESSEL_API_KEY!,
+      // Step 2 — initialize checkout via our proxy (avoids CORS)
+      const checkoutRes = await fetch("/api/payments/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customer_email: user.email,
+          customer_name: user.name,
+          customer_phone_number: user.phone || "08000000000",
+          amount: String(amount),
+          currency: "NGN",
+          reference: ourReference,
+          channels: ["BANK_TRANSFER", "CARD"],
+          metadata: { plan: planSlug, user_email: user.email },
+        }),
       });
 
-      await init.initializeCheckout({
-        customer_email: user.email,
-        customer_name: user.name,
-        customer_phone_number: user.phone || "08000000000",
-        amount: String(amount),
-        currency: "NGN",
-        reference: ourReference,
-        channels: ["BANK_TRANSFER", "CARD"],
-        metadata: { plan: planSlug, user_email: user.email },
-        onSuccess: () => {},
-        onSuccessfulOrder: async (data: unknown) => {
-          console.log("[PayVessel onSuccessfulOrder]", JSON.stringify(data));
-          try {
-            const { data: { session: s } } = await supabase.auth.refreshSession();
-            if (!s) { setError("Session expired. Please log in again."); return; }
+      if (!checkoutRes.ok) {
+        const err = await checkoutRes.json();
+        throw new Error(err.detail ?? err.message ?? "Checkout initialization failed");
+      }
 
-            const pvData = data as Record<string, unknown> | null;
-            const pvReference =
-              (pvData?.reference as string) ||
-              (pvData?.transaction_ref as string) ||
-              (pvData?.txn_ref as string) ||
-              ((pvData?.data as Record<string, unknown>)?.reference as string) ||
-              ourReference;
+      const checkoutData = await checkoutRes.json();
+      console.log("[Checkout init]", checkoutData);
 
-            const res = await fetch("/api/payments/verify", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                reference: pvReference,
-                our_reference: ourReference,
-                access_token: s.access_token,
-              }),
-            });
+      // Step 3 — redirect to PayVessel checkout URL
+      const checkoutUrl =
+        checkoutData?.data?.checkout_url ||
+        checkoutData?.checkout_url ||
+        checkoutData?.url;
 
-            if (res.ok) {
-              setCurrentPlan(planSlug);
-              router.push("/dashboard/subscribe?subscribed=true");
-              return;
-            } else {
-              const err = await res.json();
-              setError(err.detail ?? "Verification failed. Please contact support.");
-            }
-          } catch {
-            setError("Network error during verification. Please contact support.");
-          } finally {
-            setProcessingPlan(null);
-          }
-        },
-        onError: (err: unknown) => {
-          console.error("[PayVessel onError]", err);
-          setError("Payment failed. Please try again.");
-          setProcessingPlan(null);
-        },
-        onClose: () => { setProcessingPlan(null); },
-      });
+      if (!checkoutUrl) {
+        throw new Error("No checkout URL returned from PayVessel");
+      }
+
+      // Store reference in sessionStorage so we can verify after redirect
+      sessionStorage.setItem("pv_reference", ourReference);
+      sessionStorage.setItem("pv_plan", planSlug);
+      sessionStorage.setItem("pv_access_token", session.access_token);
+
+      // Redirect to PayVessel hosted checkout page
+      window.location.href = checkoutUrl;
+
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
       setProcessingPlan(null);
@@ -224,7 +206,6 @@ function SubscribePageInner() {
     <div className="min-h-screen bg-[#07091A] px-5 pb-16 pt-8">
       <div className="mx-auto max-w-4xl">
 
-        {/* Back */}
         <button
           onClick={() => router.back()}
           className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-300 transition-colors mb-8"
@@ -233,7 +214,6 @@ function SubscribePageInner() {
           Back
         </button>
 
-        {/* Success banner */}
         {justSubscribed && (
           <div className="mb-8 flex items-center gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] px-5 py-4">
             <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />
@@ -246,7 +226,6 @@ function SubscribePageInner() {
           </div>
         )}
 
-        {/* Header */}
         <div className="text-center mb-10">
           <div className="flex justify-center mb-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/15">
@@ -263,7 +242,6 @@ function SubscribePageInner() {
           </p>
         </div>
 
-        {/* Active plan banner — shown for paid users instead of free summary */}
         {isPaid ? (
           <div className="mb-8 flex items-center gap-3 rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] px-5 py-4">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15">
@@ -279,7 +257,6 @@ function SubscribePageInner() {
             </div>
           </div>
         ) : (
-          /* Free tier summary — only shown for free users */
           <div className="mb-8 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">
               Free plan (current)
@@ -302,14 +279,12 @@ function SubscribePageInner() {
           </div>
         )}
 
-        {/* Error */}
         {error && (
           <div className="mb-6 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
             <p className="text-sm text-red-400">{error}</p>
           </div>
         )}
 
-        {/* Plan cards */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {PLANS.map((plan) => {
             const isCurrentPlan = currentPlan === plan.slug;
