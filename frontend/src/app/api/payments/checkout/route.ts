@@ -8,7 +8,10 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    const res = await fetch(`${PAYVESSEL_BASE_URL}/pms/checkout/initialize/`, {
+    console.log("[Checkout proxy] sending to PayVessel:", JSON.stringify(body));
+    console.log("[Checkout proxy] base URL:", PAYVESSEL_BASE_URL);
+
+    const res = await fetch(`${PAYVESSEL_BASE_URL}/pms/transactions/initiate/`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -17,10 +20,18 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify(body),
     });
 
-    const data = await res.json();
-    console.log("[Checkout proxy] status:", res.status, JSON.stringify(data));
+    const text = await res.text();
+    console.log("[Checkout proxy] raw response:", text);
 
-    return NextResponse.json(data, { status: res.status });
+    try {
+      const data = JSON.parse(text);
+      return NextResponse.json(data, { status: res.status });
+    } catch {
+      return NextResponse.json(
+        { detail: `PayVessel returned unexpected response: ${text.slice(0, 200)}` },
+        { status: 502 }
+      );
+    }
   } catch (err) {
     console.error("[Checkout proxy error]", err);
     return NextResponse.json(
