@@ -20,16 +20,19 @@ class AskQuestion(BaseModel):
 class PostAnswer(BaseModel):
     content: str
 
+class ReportPayload(BaseModel):
+    reason: Optional[str] = "inappropriate"
+
 
 # ── Questions ─────────────────────────────────────────────────────────────────
 
 @router.get("/questions")
 async def list_questions(
-    status: Optional[str] = Query(None),   # "answered" | "unanswered"
+    status: Optional[str] = Query(None),
     institution_id: Optional[str] = Query(None),
     course_id: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
-    sort: Optional[str] = Query("recent"),  # "recent" | "popular"
+    sort: Optional[str] = Query("recent"),
     user_id: str = Depends(get_current_user),
 ):
     query = (
@@ -64,7 +67,6 @@ async def list_questions(
     if sort == "popular":
         questions = sorted(questions, key=lambda q: q.get("views", 0), reverse=True)
 
-    # Fetch saved question IDs for current user
     saved_res = (
         supabase.table("community_saved_questions")
         .select("question_id")
@@ -75,7 +77,6 @@ async def list_questions(
 
     for q in questions:
         q["is_saved"] = q["id"] in saved_ids
-        # Flatten answer count
         q["answer_count"] = q.get("answers", [{}])[0].get("count", 0) if q.get("answers") else 0
         q.pop("answers", None)
 
@@ -127,7 +128,6 @@ async def get_question(
     if not res.data:
         raise HTTPException(status_code=404, detail="Question not found.")
 
-    # Increment view count
     supabase.table("community_questions").update(
         {"views": (res.data["views"] or 0) + 1}
     ).eq("id", question_id).execute()
@@ -157,7 +157,6 @@ async def list_answers(
 
     answers = res.data or []
 
-    # Check which answers this user has voted helpful
     vote_res = (
         supabase.table("community_answer_votes")
         .select("answer_id")
@@ -181,7 +180,6 @@ async def post_answer(
     if not payload.content.strip():
         raise HTTPException(status_code=400, detail="Answer content is required.")
 
-    # Check question exists
     q = (
         supabase.table("community_questions")
         .select("id")
@@ -202,7 +200,6 @@ async def post_answer(
         .execute()
     )
 
-    # Mark question as answered
     supabase.table("community_questions").update(
         {"is_answered": True}
     ).eq("id", question_id).execute()
@@ -217,7 +214,6 @@ async def toggle_vote(
     answer_id: str,
     user_id: str = Depends(get_current_user),
 ):
-    # Check if vote exists
     existing = (
         supabase.table("community_answer_votes")
         .select("id")
@@ -228,12 +224,10 @@ async def toggle_vote(
     )
 
     if existing.data:
-        # Remove vote
         supabase.table("community_answer_votes").delete().eq(
             "answer_id", answer_id
         ).eq("user_id", user_id).execute()
 
-        # Decrement count
         answer = supabase.table("community_answers").select("helpful_count").eq("id", answer_id).maybe_single().execute()
         current = answer.data["helpful_count"] if answer.data else 0
         supabase.table("community_answers").update(
@@ -242,7 +236,6 @@ async def toggle_vote(
 
         return {"voted": False}
     else:
-        # Add vote
         supabase.table("community_answer_votes").insert({
             "answer_id": answer_id,
             "user_id": user_id,
@@ -256,6 +249,7 @@ async def toggle_vote(
 
         return {"voted": True}
 
+
 # ── Public avatar ─────────────────────────────────────────────────────────────
 
 @router.get("/users/{target_user_id}/avatar")
@@ -263,25 +257,28 @@ async def get_user_avatar(
     target_user_id: str,
     user_id: str = Depends(get_current_user),
 ):
+    from app.storage import get_signed_url
+
     res = (
         supabase.table("profiles")
-        .select("avatar_url, full_name")
+        .select("avatar_key, full_name")
         .eq("id", target_user_id)
         .maybe_single()
         .execute()
     )
     if not res.data:
         raise HTTPException(status_code=404, detail="User not found.")
+
+    key = res.data.get("avatar_key")
+    signed_url = get_signed_url(key) if key else None
+
     return {
-        "avatar_url": res.data.get("avatar_url"),
+        "avatar_url": signed_url,
         "full_name": res.data.get("full_name"),
     }
 
 
 # ── Report ────────────────────────────────────────────────────────────────────
-
-class ReportPayload(BaseModel):
-    reason: Optional[str] = "inappropriate"
 
 @router.post("/questions/{question_id}/report")
 async def report_question(
@@ -295,6 +292,7 @@ async def report_question(
         "reason": payload.reason,
     }).execute()
     return {"reported": True}
+
 
 @router.post("/answers/{answer_id}/report")
 async def report_answer(
@@ -317,7 +315,6 @@ async def accept_answer(
     answer_id: str,
     user_id: str = Depends(get_current_user),
 ):
-    # Verify the current user owns the question
     answer_res = (
         supabase.table("community_answers")
         .select("id, question_id")
@@ -338,17 +335,17 @@ async def accept_answer(
     if not question_res.data or question_res.data["asked_by"] != user_id:
         raise HTTPException(status_code=403, detail="Only the question author can accept answers.")
 
-    # Unaccept all other answers for this question
     supabase.table("community_answers").update(
         {"is_accepted": False}
     ).eq("question_id", answer_res.data["question_id"]).execute()
 
-    # Accept this one
     supabase.table("community_answers").update(
         {"is_accepted": True}
     ).eq("id", answer_id).execute()
 
     return {"accepted": True}
+
+
 # ── Save / unsave ─────────────────────────────────────────────────────────────
 
 @router.post("/questions/{question_id}/save")
