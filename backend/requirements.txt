@@ -12,3 +12,4 @@ pdf2image
 boto3==1.34.69
 httpx==0.27.0
 groq
+redis>=5.0.0
