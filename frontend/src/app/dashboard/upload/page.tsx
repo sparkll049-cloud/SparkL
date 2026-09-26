@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Upload as UploadIcon, FileText, Loader2, CheckCircle2,
   XCircle, Clock, AlertCircle, CloudUpload,
@@ -32,39 +33,25 @@ async function compressImage(file: File): Promise<File> {
 
     img.onload = () => {
       URL.revokeObjectURL(url);
-
       const MAX_DIMENSION = 1920;
       let { width, height } = img;
-
       if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
-        if (width > height) {
-          height = Math.round((height * MAX_DIMENSION) / width);
-          width = MAX_DIMENSION;
-        } else {
-          width = Math.round((width * MAX_DIMENSION) / height);
-          height = MAX_DIMENSION;
-        }
+        if (width > height) { height = Math.round((height * MAX_DIMENSION) / width); width = MAX_DIMENSION; }
+        else { width = Math.round((width * MAX_DIMENSION) / height); height = MAX_DIMENSION; }
       }
-
       const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-
+      canvas.width = width; canvas.height = height;
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(img, 0, 0, width, height);
-
       canvas.toBlob(
         (blob) => {
           if (!blob) { resolve(file); return; }
-          // Only use compressed version if it's actually smaller
           if (blob.size < file.size) {
             resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
-          } else {
-            resolve(file);
-          }
+          } else { resolve(file); }
         },
         "image/jpeg",
-        0.82 // quality — good balance between size and readability for scanned docs
+        0.82,
       );
     };
 
@@ -101,11 +88,7 @@ function SelectField({ label, value, onChange, disabled, placeholder, options, r
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
         className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-40 appearance-none"
-        style={{
-          background: "var(--sp-input-bg)",
-          borderColor: "var(--sp-border)",
-          color: "var(--sp-text)",
-        }}
+        style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }}
       >
         <option value="" disabled style={{ background: "var(--sp-search-popup)" }}>{placeholder}</option>
         {options.map((o) => (
@@ -144,16 +127,19 @@ export default function UploadPage() {
   const [semesters,    setSemesters]    = useState<Option[]>([]);
   const [myUploads,    setMyUploads]    = useState<MyUpload[]>([]);
 
-  const [title, setTitle]                 = useState("");
-  const [year, setYear]                   = useState("");
+  const [title,         setTitle]         = useState("");
+  const [year,          setYear]          = useState("");
   const [institutionId, setInstitutionId] = useState("");
-  const [departmentId, setDepartmentId]   = useState("");
-  const [levelId, setLevelId]             = useState("");
-  const [courseId, setCourseId]           = useState("");
-  const [semesterId, setSemesterId]       = useState("");
-  const [file, setFile]                   = useState<File | null>(null);
-  const [compressedFile, setCompressedFile] = useState<File | null>(null);
-  const [compressing, setCompressing]     = useState(false);
+  const [departmentId,  setDepartmentId]  = useState("");
+  const [levelId,       setLevelId]       = useState("");
+  const [courseId,      setCourseId]      = useState("");
+  const [semesterId,    setSemesterId]    = useState("");
+  const [file,          setFile]          = useState<File | null>(null);
+  const [compressedFile,setCompressedFile]= useState<File | null>(null);
+  const [compressing,   setCompressing]   = useState(false);
+
+  // Upload declaration checkbox
+  const [declarationChecked, setDeclarationChecked] = useState(false);
 
   const [fetching,           setFetching]           = useState(true);
   const [loadingDepartments, setLoadingDepartments] = useState(false);
@@ -227,22 +213,13 @@ export default function UploadPage() {
   async function processFile(selected: File) {
     setFile(selected);
     setCompressedFile(null);
-
-    // Only compress images — PDFs are passed through as-is
-    if (selected.type === "application/pdf") {
-      setCompressedFile(selected);
-      return;
-    }
-
+    if (selected.type === "application/pdf") { setCompressedFile(selected); return; }
     setCompressing(true);
     try {
       const compressed = await compressImage(selected);
       setCompressedFile(compressed);
-    } catch {
-      setCompressedFile(selected); // fallback to original
-    } finally {
-      setCompressing(false);
-    }
+    } catch { setCompressedFile(selected); }
+    finally { setCompressing(false); }
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -263,6 +240,7 @@ export default function UploadPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setError(""); setSuccess(false);
     if (!compressedFile) { setError("Please choose a file."); return; }
+    if (!declarationChecked) { setError("Please confirm the upload declaration before submitting."); return; }
     if (year && !isValidYear(year, currentYear)) {
       setError(`Year must be between ${MIN_YEAR} and ${currentYear + 1}.`);
       return;
@@ -293,6 +271,7 @@ export default function UploadPage() {
       setTitle(""); setYear(""); setInstitutionId(""); setDepartmentId("");
       setLevelId(""); setCourseId(""); setSemesterId("");
       setFile(null); setCompressedFile(null);
+      setDeclarationChecked(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
       await loadMyUploads(session.access_token);
     } catch (err) {
@@ -302,8 +281,14 @@ export default function UploadPage() {
     }
   }
 
-  const formValid = title.trim() && courseId && compressedFile && !fileError &&
-    !compressing && isValidYear(year, currentYear);
+  const formValid =
+    title.trim() &&
+    courseId &&
+    compressedFile &&
+    !fileError &&
+    !compressing &&
+    declarationChecked &&
+    isValidYear(year, currentYear);
 
   const savedBytes = file && compressedFile && compressedFile.size < file.size
     ? file.size - compressedFile.size
@@ -326,7 +311,7 @@ export default function UploadPage() {
           <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">Contribute</p>
           <h1 className="text-3xl font-extrabold" style={{ color: "var(--sp-text)" }}>Upload a past question</h1>
           <p className="mt-2 text-sm" style={{ color: "var(--sp-text-3)" }}>
-            Reviewed by our team before students can access it. You earn points when it's approved.
+            Reviewed by our team before students can access it. You earn points when it&apos;s approved.
           </p>
         </div>
 
@@ -343,6 +328,7 @@ export default function UploadPage() {
           className="rounded-2xl border p-6 space-y-5 transition-colors"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
         >
+          {/* Title */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
               Title <span className="text-blue-400">*</span>
@@ -405,7 +391,7 @@ export default function UploadPage() {
               className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-all ${
                 dragOver ? "border-blue-500 bg-blue-500/10"
                 : file    ? "border-emerald-500/40 bg-emerald-500/5"
-                :           "border-white/10 hover:border-blue-500/40 hover:bg-blue-500/5"
+                :           "hover:border-blue-500/40 hover:bg-blue-500/5"
               }`}
               style={!dragOver && !file ? { borderColor: "var(--sp-border)" } : {}}
             >
@@ -467,6 +453,45 @@ export default function UploadPage() {
             )}
           </div>
 
+          {/* ── Upload declaration ── */}
+          <div
+            className="rounded-xl border p-4 space-y-3"
+            style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}
+          >
+            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
+              Upload declaration
+            </p>
+            <label className="flex items-start gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={declarationChecked}
+                onChange={(e) => setDeclarationChecked(e.target.checked)}
+                className="mt-0.5 shrink-0 rounded accent-blue-500"
+              />
+              <span className="text-sm leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
+                I confirm that I have the right or permission to upload and share this material. I have not included
+                confidential personal information or unlawfully obtained examination content. I understand that SparkL
+                may review, watermark, remove, or restrict this upload in line with the{" "}
+                <Link
+                  href="/content-guidelines"
+                  target="_blank"
+                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium"
+                >
+                  Content &amp; Upload Guidelines
+                </Link>
+                {" "}and{" "}
+                <Link
+                  href="/terms"
+                  target="_blank"
+                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium"
+                >
+                  Terms of Service
+                </Link>
+                .
+              </span>
+            </label>
+          </div>
+
           {error && (
             <div className="flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
               <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
@@ -478,7 +503,7 @@ export default function UploadPage() {
             <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
               <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
               <p className="text-sm text-emerald-400">
-                Uploaded — pending admin review. You'll be notified when it's approved.
+                Uploaded — pending admin review. You&apos;ll be notified when it&apos;s approved.
               </p>
             </div>
           )}
@@ -507,8 +532,10 @@ export default function UploadPage() {
           </div>
 
           {myUploads.length === 0 ? (
-            <div className="flex flex-col items-center rounded-2xl border border-dashed px-6 py-12 text-center"
-              style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
+            <div
+              className="flex flex-col items-center rounded-2xl border border-dashed px-6 py-12 text-center"
+              style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
+            >
               <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500/10">
                 <FileText className="h-5 w-5 text-blue-400" />
               </div>
@@ -518,10 +545,13 @@ export default function UploadPage() {
               </p>
             </div>
           ) : (
-            <div className="rounded-2xl border overflow-hidden transition-colors"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+            <div
+              className="rounded-2xl border overflow-hidden transition-colors"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+            >
               {myUploads.map((u, i) => (
-                <div key={u.id}
+                <div
+                  key={u.id}
                   className={`p-4 ${i !== myUploads.length - 1 ? "border-b" : ""}`}
                   style={i !== myUploads.length - 1 ? { borderColor: "var(--sp-border)" } : {}}
                 >
@@ -568,6 +598,7 @@ export default function UploadPage() {
             </div>
           )}
         </div>
+
       </div>
     </div>
   );
