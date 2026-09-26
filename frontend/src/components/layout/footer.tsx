@@ -1,10 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
-import {
-  ArrowUpRight,
-  Instagram,
-  Linkedin as LinkedinIcon,
-} from "lucide-react";
+import { ArrowUpRight, Instagram } from "lucide-react";
 
 const footerLinks = [
   {
@@ -36,6 +32,19 @@ const footerLinks = [
   },
 ];
 
+const LinkedInIcon = () => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    className="h-4 w-4"
+    aria-hidden="true"
+  >
+    <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z" />
+    <rect x="2" y="9" width="4" height="12" />
+    <circle cx="4" cy="4" r="2" />
+  </svg>
+);
+
 const socialLinks = [
   {
     label: "Twitter/X",
@@ -59,7 +68,7 @@ const socialLinks = [
   {
     label: "LinkedIn",
     href: "#",
-    icon: <LinkedinIcon className="h-4 w-4" />,
+    icon: <LinkedInIcon />,
   },
 ];
 
@@ -82,7 +91,6 @@ export default function Footer() {
                 height={42}
                 className="h-10 w-10 rounded-xl object-cover transition-transform duration-300 group-hover:scale-[1.03]"
               />
-
               <span className="text-lg font-extrabold tracking-[-0.02em] text-white">
                 SparkL
               </span>
@@ -114,7 +122,6 @@ export default function Footer() {
               <h3 className="mb-5 text-xs font-bold uppercase tracking-[0.14em] text-slate-500">
                 {column.heading}
               </h3>
-
               <ul className="space-y-3.5">
                 {column.links.map((link) => (
                   <li key={link.label}>
@@ -123,7 +130,6 @@ export default function Footer() {
                       className="group inline-flex items-center gap-1 text-sm text-slate-400 transition-colors duration-200 hover:text-white"
                     >
                       {link.label}
-
                       {link.label === "Pricing" && (
                         <ArrowUpRight className="h-3 w-3 opacity-0 transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:opacity-100" />
                       )}
@@ -140,7 +146,6 @@ export default function Footer() {
           <p className="text-xs text-slate-600">
             © {new Date().getFullYear()} SparkL. All rights reserved.
           </p>
-
           <p className="text-xs text-slate-600">
             Built for students, by students.
           </p>
