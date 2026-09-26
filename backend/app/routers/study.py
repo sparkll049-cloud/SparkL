@@ -46,8 +46,8 @@ MAX_FILE_BYTES    = MAX_FILE_MB * 1024 * 1024
 MAX_HISTORY_MSGS  = 8
 MESSAGE_TTL_DAYS  = 7
 
-GROQ_MODEL   = "llama3-8b-8192"
-GEMINI_MODEL = "gemini-1.5-flash"
+GROQ_MODEL   = "openai/gpt-oss-120b"
+GEMINI_MODEL = "gemini-3.5-flash"
 
 VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text"}
 
