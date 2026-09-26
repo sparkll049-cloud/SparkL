@@ -51,7 +51,7 @@ MAX_CONTEXT_CHARS = 12_000
 MAX_FILE_MB       = 10
 MAX_FILE_BYTES    = MAX_FILE_MB * 1024 * 1024
 
-GROQ_MODEL   = "llama-3.1-8b-instant"
+GROQ_MODEL   = "openai/gpt-oss-120b"
 GEMINI_MODEL = "gemini-1.5-flash"
 
 VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text"}
