@@ -1,6 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowUpRight, Instagram } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 
 const footerLinks = [
   {
@@ -32,13 +32,22 @@ const footerLinks = [
   },
 ];
 
+const TwitterIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4" aria-hidden="true">
+    <path d="M18.9 2H22l-7.2 8.3L23.3 22H16.9l-5-6.5L6 22H2.9l7.7-8.8L1 2h6.6l4.5 5.9L18.9 2zm-1.1 18h1.7L7.3 4H5.5l12.3 16z" />
+  </svg>
+);
+
+const InstagramIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+    <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+    <circle cx="12" cy="12" r="4" />
+    <circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 const LinkedInIcon = () => (
-  <svg
-    viewBox="0 0 24 24"
-    fill="currentColor"
-    className="h-4 w-4"
-    aria-hidden="true"
-  >
+  <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4" aria-hidden="true">
     <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z" />
     <rect x="2" y="9" width="4" height="12" />
     <circle cx="4" cy="4" r="2" />
@@ -46,30 +55,9 @@ const LinkedInIcon = () => (
 );
 
 const socialLinks = [
-  {
-    label: "Twitter/X",
-    href: "#",
-    icon: (
-      <svg
-        viewBox="0 0 24 24"
-        fill="currentColor"
-        className="h-4 w-4"
-        aria-hidden="true"
-      >
-        <path d="M18.9 2H22l-7.2 8.3L23.3 22H16.9l-5-6.5L6 22H2.9l7.7-8.8L1 2h6.6l4.5 5.9L18.9 2zm-1.1 18h1.7L7.3 4H5.5l12.3 16z" />
-      </svg>
-    ),
-  },
-  {
-    label: "Instagram",
-    href: "#",
-    icon: <Instagram className="h-4 w-4" />,
-  },
-  {
-    label: "LinkedIn",
-    href: "#",
-    icon: <LinkedInIcon />,
-  },
+  { label: "Twitter/X",  href: "#", icon: <TwitterIcon /> },
+  { label: "Instagram",  href: "#", icon: <InstagramIcon /> },
+  { label: "LinkedIn",   href: "#", icon: <LinkedInIcon /> },
 ];
 
 export default function Footer() {
