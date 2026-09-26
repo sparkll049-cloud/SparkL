@@ -1,79 +1,152 @@
 """
 app/viewer_cache.py
 -------------------
-Two-layer cache for the viewer pipeline.
+Redis-first cache for the SparkL viewer pipeline.
 
-Layer 1 — In-process LRU dict (instant, no network, lost on restart)
-Layer 2 — Redis (optional; survives restarts; shared across instances)
+Redis is the PRIMARY store — not optional, not a fallback.
+A small in-process dict acts only as a LOCAL HOT CACHE for the
+current request burst (same process, zero network), backed by Redis
+for persistence and cross-instance sharing on Render.
 
-What is cached (and what is NOT):
-  ✓  Base page image bytes  — same for all users, expensive to produce
-  ✓  Question metadata      — Supabase row (file_url, mime, course_id, uploader)
-  ✓  Uploader display name  — profiles lookup
-  ✓  Page count             — pypdf result
+Setup on Render
+---------------
+1. Create a Redis instance in your Render dashboard
+   (free tier: 25 MB — more than enough for metadata)
+2. Copy the "Internal Redis URL" and set it as an env var:
+     REDIS_URL=redis://red-xxxxx:6379
+3. Add to requirements.txt:
+     redis>=5.0.0
 
-  ✗  Watermarked image      — NEVER cached; each user gets their own footer
-  ✗  Auth / subscription    — NEVER cached; must be live for every request
+What is cached
+--------------
+  ✓  Base page JPEG   — rendered page before watermark; 24 h TTL
+                        same bytes for ALL users → huge win
+  ✓  Question meta    — Supabase row; 10 min TTL (status can flip)
+  ✓  Uploader name    — profiles row; 1 h TTL
+  ✓  Page count       — pypdf result; 24 h TTL
+
+  ✗  Watermarked image — NEVER cached; per-user footer differs
+  ✗  Auth token        — NEVER cached; must be live every request
+  ✗  Subscription      — NEVER cached; cancellation must take effect now
+  ✗  Course access     — NEVER cached; enrolment can change
+
+Cache invalidation
+------------------
+Call from your admin router when a question is updated/re-uploaded/deleted:
+
+    from app.viewer_cache import invalidate_question
+
+    invalidate_question(question_id)   # clears pages + meta + page-count
 
 TTLs
-  Base page image  : 24 h  (PDFs don't change after upload)
-  Question record  : 10 min (status can change: approved → rejected)
-  Uploader name    : 60 min
-  Page count       : 24 h
+----
+  Base page image : 86400 s  (24 h)
+  Question record :   600 s  (10 min)
+  Uploader name   :  3600 s  (1 h)
+  Page count      : 86400 s  (24 h)
 """
 
 from __future__ import annotations
 
 import os
+import pickle
 import time
 import threading
 from typing import Any, Optional
 
+import redis as _redis_lib
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-REDIS_URL = os.getenv("REDIS_URL")          # set on Render; None = memory-only mode
-
-# Maximum items kept in the in-process LRU dict per cache namespace.
-# Each base-page JPEG is ~60-120 KB at dpi=150, so 200 pages ≈ up to ~24 MB RAM.
-_MEM_MAX_PAGES    = 200
-_MEM_MAX_METADATA = 500
+REDIS_URL = os.getenv("REDIS_URL")
 
 TTL_PAGE      = 86_400   # 24 h
 TTL_QUESTION  =    600   # 10 min
 TTL_UPLOADER  =  3_600   # 1 h
 TTL_PAGECOUNT = 86_400   # 24 h
 
-# ── In-process LRU cache ───────────────────────────────────────────────────────
+# Local hot cache: keeps the last N items in this process so requests
+# that hit the same page in rapid succession skip the Redis round-trip.
+_HOT_MAX   = 64
+_HOT_TTL   = 30          # seconds — just long enough to absorb a burst
 
-class _LRUCache:
-    """Thread-safe LRU dict with per-entry TTL."""
+# ── Redis client ────────────────────────────────────────────────────────────────
 
+_r: Optional[_redis_lib.Redis] = None
+_r_lock = threading.Lock()
+
+
+def _redis() -> _redis_lib.Redis:
+    """
+    Return the shared Redis client, connecting on first call.
+    Raises RuntimeError if REDIS_URL is not set — fail loud so you
+    notice in development rather than silently missing cache.
+    """
+    global _r
+    if _r is not None:
+        return _r
+    with _r_lock:
+        if _r is not None:
+            return _r
+        if not REDIS_URL:
+            raise RuntimeError(
+                "[viewer_cache] REDIS_URL is not set. "
+                "Add it in your Render environment variables."
+            )
+        client = _redis_lib.from_url(
+            REDIS_URL,
+            decode_responses=False,   # we store raw bytes (JPEG, pickle)
+            socket_timeout=2,
+            socket_connect_timeout=2,
+            retry_on_timeout=True,
+            health_check_interval=30,
+        )
+        client.ping()   # fail fast if misconfigured
+        _r = client
+        print("[viewer_cache] Redis connected ✓")
+        return _r
+
+
+def redis_ok() -> bool:
+    try:
+        _redis().ping()
+        return True
+    except Exception:
+        return False
+
+
+# ── In-process hot cache (LRU, per-process only) ───────────────────────────────
+
+class _HotCache:
+    """
+    Tiny thread-safe LRU dict.
+    Purpose: absorb same-page bursts within one Render instance so we
+    don't make a Redis round-trip for every concurrent request.
+    NOT a substitute for Redis — Redis is the source of truth.
+    """
     def __init__(self, max_size: int) -> None:
         self._max  = max_size
-        self._data: dict[str, tuple[Any, float]] = {}   # key → (value, expires_at)
+        self._data: dict[str, tuple[Any, float]] = {}
         self._lock = threading.Lock()
 
     def get(self, key: str) -> Optional[Any]:
         with self._lock:
             entry = self._data.get(key)
-            if entry is None:
+            if not entry:
                 return None
-            value, expires_at = entry
-            if time.monotonic() > expires_at:
+            val, exp = entry
+            if time.monotonic() > exp:
                 del self._data[key]
                 return None
-            # Move to end (most-recently used)
             self._data.pop(key)
-            self._data[key] = (value, expires_at)
-            return value
+            self._data[key] = (val, exp)
+            return val
 
-    def set(self, key: str, value: Any, ttl: int) -> None:
+    def set(self, key: str, val: Any, ttl: int = _HOT_TTL) -> None:
         with self._lock:
-            # Evict oldest entry if at capacity
             if key not in self._data and len(self._data) >= self._max:
-                oldest = next(iter(self._data))
-                del self._data[oldest]
-            self._data[key] = (value, time.monotonic() + ttl)
+                del self._data[next(iter(self._data))]
+            self._data[key] = (val, time.monotonic() + ttl)
 
     def delete(self, key: str) -> None:
         with self._lock:
@@ -88,194 +161,142 @@ class _LRUCache:
         return len(self._data)
 
 
-# Module-level caches
-_page_cache     = _LRUCache(_MEM_MAX_PAGES)
-_metadata_cache = _LRUCache(_MEM_MAX_METADATA)
-
-# ── Redis client (optional) ────────────────────────────────────────────────────
-
-_redis: Any = None
-_redis_ok   = False
-
-def _get_redis():
-    global _redis, _redis_ok
-    if _redis is not None:
-        return _redis if _redis_ok else None
-    if not REDIS_URL:
-        return None
-    try:
-        import redis
-        _redis   = redis.from_url(REDIS_URL, decode_responses=False, socket_timeout=1)
-        _redis.ping()
-        _redis_ok = True
-        print("[viewer_cache] Redis connected ✓")
-    except Exception as e:
-        print(f"[viewer_cache] Redis unavailable — memory-only mode ({e})")
-        _redis_ok = False
-    return _redis if _redis_ok else None
+_hot = _HotCache(_HOT_MAX)
 
 
-# ── Generic get/set that tries Redis first, falls back to memory ───────────────
+# ── Low-level get/set/delete ───────────────────────────────────────────────────
 
-def _cache_get(key: str, mem: _LRUCache) -> Optional[bytes | Any]:
-    # 1. Memory first (fastest)
-    val = mem.get(key)
+def _get(key: str) -> Optional[bytes]:
+    # 1. Hot cache (zero latency)
+    val = _hot.get(key)
     if val is not None:
         return val
-    # 2. Redis
-    r = _get_redis()
-    if r:
-        try:
-            val = r.get(key)
-            if val is not None:
-                # Warm the memory cache so the next hit is local
-                mem.set(key, val, TTL_PAGE)
-                return val
-        except Exception:
-            pass
-    return None
+    # 2. Redis (primary store)
+    val = _redis().get(key)
+    if val is not None:
+        _hot.set(key, val)
+    return val
 
 
-def _cache_set(key: str, value: Any, ttl: int, mem: _LRUCache) -> None:
-    mem.set(key, value, ttl)
-    r = _get_redis()
-    if r:
-        try:
-            r.set(key, value, ex=ttl)
-        except Exception:
-            pass   # Redis write failure is non-fatal; memory cache still works
+def _set(key: str, value: bytes, ttl: int) -> None:
+    _redis().set(key, value, ex=ttl)
+    _hot.set(key, value, min(ttl, _HOT_TTL))
 
 
-def _cache_delete(key: str, mem: _LRUCache) -> None:
-    mem.delete(key)
-    r = _get_redis()
-    if r:
-        try:
-            r.delete(key)
-        except Exception:
-            pass
+def _delete(*keys: str) -> None:
+    if keys:
+        _redis().delete(*keys)
+    for k in keys:
+        _hot.delete(k)
 
 
-# ── Public API ─────────────────────────────────────────────────────────────────
+# ── Key builders ───────────────────────────────────────────────────────────────
 
-# ── Base page images ───────────────────────────────────────────────────────────
+def _page_key(question_id: str, page_num: int) -> str:
+    return f"sparkl:v1:page:{question_id}:{page_num}"
 
-def page_key(question_id: str, page_num: int) -> str:
-    return f"sparkl:page:{question_id}:{page_num}"
+def _meta_key(question_id: str) -> str:
+    return f"sparkl:v1:qmeta:{question_id}"
 
+def _uploader_key(user_id: str) -> str:
+    return f"sparkl:v1:uploader:{user_id}"
+
+def _pagecount_key(question_id: str) -> str:
+    return f"sparkl:v1:pagecount:{question_id}"
+
+
+# ── Public API: Base page images ───────────────────────────────────────────────
 
 def get_base_page(question_id: str, page_num: int) -> Optional[bytes]:
-    """
-    Return cached raw JPEG bytes for this page (before watermark),
-    or None if not cached yet.
-    """
-    return _cache_get(page_key(question_id, page_num), _page_cache)
+    """Return cached raw JPEG bytes (no watermark), or None on miss."""
+    return _get(_page_key(question_id, page_num))
 
 
 def set_base_page(question_id: str, page_num: int, jpeg_bytes: bytes) -> None:
-    """Store rendered JPEG bytes (no watermark) for this page."""
-    _cache_set(page_key(question_id, page_num), jpeg_bytes, TTL_PAGE, _page_cache)
+    """Cache rendered JPEG bytes (no watermark) for this page."""
+    _set(_page_key(question_id, page_num), jpeg_bytes, TTL_PAGE)
 
 
-def invalidate_question_pages(question_id: str) -> None:
-    """
-    Call this when a question is updated/deleted in the admin panel
-    so stale page images are not served.
-    Clears all known pages 1-500 from both caches.
-    """
-    for p in range(1, 501):
-        _cache_delete(page_key(question_id, p), _page_cache)
-
-
-# ── Question metadata ──────────────────────────────────────────────────────────
-
-def question_meta_key(question_id: str) -> str:
-    return f"sparkl:qmeta:{question_id}"
-
+# ── Public API: Question metadata ──────────────────────────────────────────────
 
 def get_question_meta(question_id: str) -> Optional[dict]:
-    import pickle
-    raw = _cache_get(question_meta_key(question_id), _metadata_cache)
+    raw = _get(_meta_key(question_id))
     if raw is None:
         return None
-    # Redis stores bytes; memory cache stores the dict directly
-    if isinstance(raw, bytes):
-        try:
-            return pickle.loads(raw)
-        except Exception:
-            return None
-    return raw
+    try:
+        return pickle.loads(raw)
+    except Exception:
+        return None
 
 
 def set_question_meta(question_id: str, meta: dict) -> None:
-    import pickle
-    # Store as-is in memory, as pickle bytes in Redis
-    _metadata_cache.set(question_meta_key(question_id), meta, TTL_QUESTION)
-    r = _get_redis()
-    if r:
-        try:
-            r.set(question_meta_key(question_id), pickle.dumps(meta), ex=TTL_QUESTION)
-        except Exception:
-            pass
+    _set(_meta_key(question_id), pickle.dumps(meta), TTL_QUESTION)
 
 
-def invalidate_question_meta(question_id: str) -> None:
-    _cache_delete(question_meta_key(question_id), _metadata_cache)
-
-
-# ── Uploader name ──────────────────────────────────────────────────────────────
-
-def uploader_key(user_id: str) -> str:
-    return f"sparkl:uploader:{user_id}"
-
+# ── Public API: Uploader name ──────────────────────────────────────────────────
 
 def get_uploader_name(user_id: str) -> Optional[str]:
-    raw = _cache_get(uploader_key(user_id), _metadata_cache)
-    if raw is None:
-        return None
-    return raw.decode() if isinstance(raw, bytes) else raw
+    raw = _get(_uploader_key(user_id))
+    return raw.decode() if raw else None
 
 
 def set_uploader_name(user_id: str, name: str) -> None:
-    _metadata_cache.set(uploader_key(user_id), name, TTL_UPLOADER)
-    r = _get_redis()
-    if r:
-        try:
-            r.set(uploader_key(user_id), name.encode(), ex=TTL_UPLOADER)
-        except Exception:
-            pass
+    _set(_uploader_key(user_id), name.encode(), TTL_UPLOADER)
 
 
-# ── Page count ─────────────────────────────────────────────────────────────────
-
-def page_count_key(question_id: str) -> str:
-    return f"sparkl:pagecount:{question_id}"
-
+# ── Public API: Page count ─────────────────────────────────────────────────────
 
 def get_page_count(question_id: str) -> Optional[int]:
-    raw = _cache_get(page_count_key(question_id), _metadata_cache)
-    if raw is None:
-        return None
-    return int(raw) if isinstance(raw, (bytes, str)) else raw
+    raw = _get(_pagecount_key(question_id))
+    return int(raw) if raw else None
 
 
 def set_page_count(question_id: str, count: int) -> None:
-    _metadata_cache.set(page_count_key(question_id), count, TTL_PAGECOUNT)
-    r = _get_redis()
-    if r:
-        try:
-            r.set(page_count_key(question_id), str(count).encode(), ex=TTL_PAGECOUNT)
-        except Exception:
-            pass
+    _set(_pagecount_key(question_id), str(count).encode(), TTL_PAGECOUNT)
+
+
+# ── Public API: Invalidation ───────────────────────────────────────────────────
+
+def invalidate_question(question_id: str, max_pages: int = 200) -> None:
+    """
+    Hard-delete ALL cached data for a question.
+    Call from your admin router on update / re-upload / delete.
+    Uses a Redis pipeline so it's one round-trip regardless of page count.
+    """
+    keys = (
+        [_meta_key(question_id), _pagecount_key(question_id)]
+        + [_page_key(question_id, p) for p in range(1, max_pages + 1)]
+    )
+    pipe = _redis().pipeline(transaction=False)
+    for k in keys:
+        pipe.delete(k)
+        _hot.delete(k)
+    pipe.execute()
 
 
 # ── Debug / health ─────────────────────────────────────────────────────────────
 
 def cache_stats() -> dict:
+    try:
+        info = _redis().info("memory")
+        mem  = {
+            "used_memory_human":     info.get("used_memory_human"),
+            "maxmemory_human":       info.get("maxmemory_human"),
+            "maxmemory_policy":      info.get("maxmemory_policy"),
+        }
+    except Exception as e:
+        mem = {"error": str(e)}
+
     return {
-        "mode":           "redis+memory" if _redis_ok else "memory-only",
-        "pages_in_mem":   _page_cache.size,
-        "meta_in_mem":    _metadata_cache.size,
+        "redis_ok":       redis_ok(),
         "redis_url_set":  bool(REDIS_URL),
-        "redis_ok":       _redis_ok,
+        "hot_cache_size": _hot.size,
+        "hot_cache_max":  _HOT_MAX,
+        "redis_memory":   mem,
+        "ttls": {
+            "page_image_s":  TTL_PAGE,
+            "question_meta_s": TTL_QUESTION,
+            "uploader_name_s": TTL_UPLOADER,
+            "page_count_s":  TTL_PAGECOUNT,
+        },
     }
