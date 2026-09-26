@@ -8,7 +8,7 @@ import {
   BookOpen,
   Upload,
   User,
-  BrainCircuit,
+  Zap,
   ShieldCheck,
   LogOut,
   Menu,
@@ -27,7 +27,7 @@ const navItems = [
   { href: "/dashboard/upload",  label: "Upload",     icon: Upload          },
   { href: "/dashboard/profile", label: "Profile",    icon: User            },
     { href: "/community", label: "Community",    icon: MessageCircle            },
-  { href: "/study", label: "Sparkl Cram",    icon: BrainCircuit          },
+  { href: "/study", label: "Sparkl Cram",    icon: Zap          },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
