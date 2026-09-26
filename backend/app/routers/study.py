@@ -1,30 +1,14 @@
 """
 routers/study.py
 ----------------
-AI study assistant — processes notes in memory, nothing saved to storage.
+SparkL Cram — AI study assistant.
+Processes notes in memory, nothing saved to storage.
 
 Supported inputs:
   - PDF      → pypdf text extraction (in memory)
   - Image    → Gemini Vision (in memory, base64)
   - DOCX     → python-docx text extraction (in memory)
   - Plain text → pass through
-
-Flow:
-  1. Receive file/text via multipart form
-  2. Extract text in memory — zero storage writes
-  3. Truncate to MAX_CONTEXT_CHARS to control token cost
-  4. Route to Groq (text) or Gemini (images)
-  5. Stream response back to frontend
-
-DB writes:
-  - One tiny row in study_sessions on session start (title + source_type only)
-  - Chat history lives in the browser — never sent to DB
-
-Cost controls:
-  - MAX_CONTEXT_CHARS = 12000  (~3000 tokens)
-  - Groq llama3 for text (very cheap)
-  - Gemini flash for images (cheap vision model)
-  - No embeddings, no vector DB, no chunking
 
 Add to requirements.txt:
   pypdf>=4.0.0
@@ -38,7 +22,6 @@ from __future__ import annotations
 import base64
 import io
 import os
-import re
 import uuid
 from typing import AsyncGenerator, Literal
 
@@ -49,20 +32,33 @@ from pydantic import BaseModel
 from app.auth import get_current_user
 from app.supabase_client import supabase
 
+# ── Try importing optional heavy deps at module level ──────────────────────────
+try:
+    from groq import AsyncGroq
+except ImportError:
+    AsyncGroq = None  # type: ignore
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None  # type: ignore
+
 router = APIRouter(prefix="/api/study", tags=["study"])
 
 # ── Cost controls ──────────────────────────────────────────────────────────────
 
-MAX_CONTEXT_CHARS = 12_000          # ~3k tokens — fits every model cheaply
-MAX_FILE_MB       = 10              # reject files over 10 MB upfront
+MAX_CONTEXT_CHARS = 12_000
+MAX_FILE_MB       = 10
 MAX_FILE_BYTES    = MAX_FILE_MB * 1024 * 1024
 
-GROQ_MODEL        = "llama-3.1-8b-instant"   # fastest + cheapest Groq model
-GEMINI_MODEL      = "gemini-1.5-flash"        # cheapest Gemini with vision
+GROQ_MODEL   = "llama-3.1-8b-instant"
+GEMINI_MODEL = "gemini-1.5-flash"
+
+VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text"}
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are SparkL Study AI — a smart, friendly tutor helping Nigerian polytechnic and university students understand their course material.
+SYSTEM_PROMPT = """You are SparkL Cram — a smart, friendly AI tutor helping Nigerian polytechnic and university students understand their course material.
 
 The student has shared their notes or study material with you. Your job is to help them study effectively.
 
@@ -97,7 +93,6 @@ def _extract_docx(data: bytes) -> str:
 
 
 def _truncate(text: str) -> tuple[str, bool]:
-    """Truncate to MAX_CONTEXT_CHARS. Returns (text, was_truncated)."""
     if len(text) <= MAX_CONTEXT_CHARS:
         return text, False
     half = MAX_CONTEXT_CHARS // 2
@@ -113,12 +108,10 @@ def _build_context_block(text: str, source_label: str) -> str:
     return f"=== Student Notes: {source_label}{note} ===\n\n{truncated}\n\n=== End of Notes ==="
 
 
-# ── Groq streaming (text inputs) ──────────────────────────────────────────────
+# ── Groq streaming ─────────────────────────────────────────────────────────────
 
 async def _stream_groq(messages: list[dict]) -> AsyncGenerator[str, None]:
-    try:
-        from groq import AsyncGroq
-    except ImportError:
+    if AsyncGroq is None:
         raise HTTPException(status_code=500, detail="groq package not installed.")
 
     api_key = os.getenv("GROQ_API_KEY")
@@ -147,9 +140,7 @@ async def _stream_gemini_image(
     user_message: str,
     history_text: str,
 ) -> AsyncGenerator[str, None]:
-    try:
-        import google.generativeai as genai
-    except ImportError:
+    if genai is None:
         raise HTTPException(status_code=500, detail="google-generativeai not installed.")
 
     api_key = os.getenv("GEMINI_API_KEY")
@@ -178,78 +169,65 @@ async def _stream_gemini_image(
     )
 
     async for chunk in response:
-        if chunk.text:
-            yield chunk.text
+        try:
+            if chunk.text:
+                yield chunk.text
+        except Exception:
+            pass  # safety stop or blocked content — skip chunk
 
 
-# ── Request / Response models ──────────────────────────────────────────────────
+# ── Models ─────────────────────────────────────────────────────────────────────
 
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
 
 
-class StudySessionRow(BaseModel):
-    id: str
-    title: str
+class CramSessionRow(BaseModel):
+    id:          str
+    title:       str
     source_type: str
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
-@router.post("/session", response_model=StudySessionRow)
+@router.post("/session", response_model=CramSessionRow)
 async def create_session(
-    title:       str  = Form(...),
-    source_type: str  = Form(...),   # pdf | image | docx | text
-    user_id:     str  = Depends(get_current_user),
+    title:       str = Form(...),
+    source_type: str = Form(...),
+    user_id:     str = Depends(get_current_user),
 ):
-    """
-    Create a study session row (tiny — just title + source_type).
-    Returns session ID used by the frontend to group chat history.
-    No file content is stored.
-    """
+    if source_type not in VALID_SOURCE_TYPES:
+        raise HTTPException(status_code=422, detail=f"Invalid source_type. Use one of: {VALID_SOURCE_TYPES}")
+
     session_id = str(uuid.uuid4())
     try:
-        supabase.table("study_sessions").insert({
+        supabase.table("cram_sessions").insert({
             "id":          session_id,
             "user_id":     user_id,
-            "title":       title[:120],   # cap title length
+            "title":       title[:120],
             "source_type": source_type,
         }).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not create session: {e}")
 
-    return StudySessionRow(id=session_id, title=title, source_type=source_type)
+    return CramSessionRow(id=session_id, title=title, source_type=source_type)
 
 
 @router.post("/chat")
 async def study_chat(
-    # File inputs (all optional — only one expected per request)
     file:         UploadFile | None = File(None),
-
-    # Text fallback (if no file, or for plain text notes)
     text_content: str | None        = Form(None),
-
-    # Chat
     message:      str               = Form(...),
-    history:      str               = Form("[]"),   # JSON array of {role, content}
-    mode:         str               = Form("chat"),  # chat | quiz | summary | explain
-
-    user_id: str = Depends(get_current_user),
+    history:      str               = Form("[]"),
+    mode:         str               = Form("chat"),
+    user_id:      str               = Depends(get_current_user),
 ):
-    """
-    Main study chat endpoint.
-
-    - File is processed in memory — never written to disk or storage
-    - history is sent by the frontend each request (browser owns it)
-    - mode changes the system instruction appended to the message
-    """
     import json
 
-    # ── 1. Parse history ───────────────────────────────────────────────
+    # ── 1. Parse history (cap at last 12 messages = 6 exchanges) ──────
     try:
         raw_history: list[dict] = json.loads(history)
-        # Cap history at last 6 exchanges to control token cost
         raw_history = raw_history[-12:]
     except Exception:
         raw_history = []
@@ -265,23 +243,19 @@ async def study_chat(
     full_message = f"{mode_prefix}\n\n{message}".strip() if mode_prefix else message
 
     # ── 3. Process file (in memory) ────────────────────────────────────
-    context_block  = ""
-    is_image       = False
-    image_b64      = ""
-    image_mime     = ""
-    source_label   = "Uploaded notes"
+    context_block = ""
+    is_image      = False
+    image_b64     = ""
+    image_mime    = ""
+    source_label  = "Uploaded notes"
 
     if file and file.filename:
-        # Size check
         file_bytes = await file.read()
         if len(file_bytes) > MAX_FILE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File too large — max {MAX_FILE_MB} MB.",
-            )
+            raise HTTPException(status_code=413, detail=f"File too large — max {MAX_FILE_MB} MB.")
 
-        fname     = file.filename.lower()
-        mime      = file.content_type or ""
+        fname        = file.filename.lower()
+        mime         = file.content_type or ""
         source_label = file.filename
 
         if fname.endswith(".pdf") or "pdf" in mime:
@@ -293,7 +267,6 @@ async def study_chat(
             context_block = _build_context_block(raw_text, source_label)
 
         elif mime.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp")):
-            # Image — will go to Gemini Vision, not Groq
             is_image   = True
             image_b64  = base64.b64encode(file_bytes).decode()
             image_mime = mime or "image/jpeg"
@@ -303,20 +276,15 @@ async def study_chat(
             context_block = _build_context_block(raw_text, source_label)
 
         else:
-            raise HTTPException(
-                status_code=415,
-                detail="Unsupported file type. Use PDF, DOCX, image, or plain text.",
-            )
+            raise HTTPException(status_code=415, detail="Unsupported file type. Use PDF, DOCX, image, or plain text.")
 
     elif text_content:
         context_block = _build_context_block(text_content, "Pasted text")
 
-    # ── 4. Build messages ──────────────────────────────────────────────
-
+    # ── 4. Image path → Gemini ─────────────────────────────────────────
     if is_image:
-        # Gemini handles images — build history as plain text string
         history_text = "\n".join(
-            f"{'Student' if m['role'] == 'user' else 'SparkL AI'}: {m['content']}"
+            f"{'Student' if m['role'] == 'user' else 'SparkL Cram'}: {m['content']}"
             for m in raw_history
         )
         return StreamingResponse(
@@ -324,41 +292,27 @@ async def study_chat(
             media_type="text/plain",
         )
 
-    # Text path → Groq
-    # Build messages array
+    # ── 5. Text path → Groq ────────────────────────────────────────────
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    # If we have a context block, inject it as the first user turn
     if context_block:
-        messages.append({
-            "role":    "user",
-            "content": f"Here are my study notes:\n\n{context_block}",
-        })
-        messages.append({
-            "role":    "assistant",
-            "content": "Got it! I've read through your notes. What would you like to do — ask questions, get a summary, practice quiz, or have me explain something?",
-        })
+        messages.append({"role": "user",      "content": f"Here are my study notes:\n\n{context_block}"})
+        messages.append({"role": "assistant", "content": "Got it! I've read through your notes. What would you like to do — ask questions, get a summary, practice quiz, or have me explain something?"})
 
-    # Append chat history
     for m in raw_history:
         if m.get("role") in ("user", "assistant") and m.get("content"):
             messages.append({"role": m["role"], "content": m["content"]})
 
-    # Current message
     messages.append({"role": "user", "content": full_message})
 
-    return StreamingResponse(
-        _stream_groq(messages),
-        media_type="text/plain",
-    )
+    return StreamingResponse(_stream_groq(messages), media_type="text/plain")
 
 
 @router.get("/sessions")
 async def list_sessions(user_id: str = Depends(get_current_user)):
-    """List the user's study sessions (title + type only — no content)."""
     try:
         res = (
-            supabase.table("study_sessions")
+            supabase.table("cram_sessions")
             .select("id, title, source_type, created_at")
             .eq("user_id", user_id)
             .order("created_at", desc=True)
@@ -375,9 +329,8 @@ async def delete_session(
     session_id: str,
     user_id:    str = Depends(get_current_user),
 ):
-    """Delete a session row. No files to clean up — nothing was stored."""
     try:
-        supabase.table("study_sessions").delete().eq("id", session_id).eq("user_id", user_id).execute()
+        supabase.table("cram_sessions").delete().eq("id", session_id).eq("user_id", user_id).execute()
         return {"deleted": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
