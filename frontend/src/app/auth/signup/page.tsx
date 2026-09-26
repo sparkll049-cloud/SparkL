@@ -102,15 +102,21 @@ export default function SignupPage() {
         />
         <div className="absolute top-1/3 -left-20 w-[400px] h-[400px] bg-blue-600/20 rounded-full blur-[120px] pointer-events-none" />
 
-        <div className="relative">
-          <Link href="/" className="inline-flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-[#2563EB] flex items-center justify-center">
-              <span className="text-white font-black text-sm">S</span>
-            </div>
-            <span className="text-white font-bold text-xl tracking-tight">SparkL</span>
-          </Link>
-        </div>
-
+                <Link
+          href="/"
+          onClick={closeMenu}
+          className="group flex items-center"
+          aria-label="SparkL home"
+        >
+          <Image
+            src="/images/logo.jpg"
+            alt="SparkL"
+            width={58}
+            height={58}
+            priority
+            className="h-12 w-auto object-contain transition-transform duration-300 group-hover:scale-[1.03]"
+          />
+        </Link>
         <div className="relative">
           <p className="text-3xl font-extrabold text-white leading-snug mb-6">
             The smarter way to prepare for Nigerian tertiary exams.
