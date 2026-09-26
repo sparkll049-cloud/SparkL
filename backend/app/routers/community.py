@@ -7,6 +7,8 @@ from app.supabase_client import supabase
 
 router = APIRouter(prefix="/api/community", tags=["community"])
 
+REPORT_HIDE_THRESHOLD = 3
+
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
@@ -22,6 +24,35 @@ class PostAnswer(BaseModel):
 
 class ReportPayload(BaseModel):
     reason: Optional[str] = "inappropriate"
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _auto_hide_if_threshold(*, question_id: str = None, answer_id: str = None):
+    """Hide content automatically once report count hits the threshold."""
+    if question_id:
+        count_res = (
+            supabase.table("community_reports")
+            .select("id", count="exact")
+            .eq("question_id", question_id)
+            .execute()
+        )
+        if (count_res.count or 0) >= REPORT_HIDE_THRESHOLD:
+            supabase.table("community_questions").update(
+                {"is_hidden": True}
+            ).eq("id", question_id).execute()
+
+    if answer_id:
+        count_res = (
+            supabase.table("community_reports")
+            .select("id", count="exact")
+            .eq("answer_id", answer_id)
+            .execute()
+        )
+        if (count_res.count or 0) >= REPORT_HIDE_THRESHOLD:
+            supabase.table("community_answers").update(
+                {"is_hidden": True}
+            ).eq("id", answer_id).execute()
 
 
 # ── Questions ─────────────────────────────────────────────────────────────────
@@ -44,6 +75,7 @@ async def list_questions(
             "asker:profiles!asked_by(id, full_name), "
             "answers:community_answers(count)"
         )
+        .eq("is_hidden", False)
         .order("created_at", desc=(sort == "recent"))
     )
 
@@ -115,7 +147,7 @@ async def get_question(
     res = (
         supabase.table("community_questions")
         .select(
-            "id, title, description, course_code, views, is_answered, created_at, "
+            "id, title, description, course_code, views, is_answered, is_hidden, created_at, "
             "institution:institutions(id, name), "
             "course:courses(id, name), "
             "asker:profiles!asked_by(id, full_name)"
@@ -126,6 +158,9 @@ async def get_question(
     )
 
     if not res.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    if res.data.get("is_hidden"):
         raise HTTPException(status_code=404, detail="Question not found.")
 
     supabase.table("community_questions").update(
@@ -149,6 +184,7 @@ async def list_answers(
             "answerer:profiles!answered_by(id, full_name)"
         )
         .eq("question_id", question_id)
+        .eq("is_hidden", False)
         .order("is_accepted", desc=True)
         .order("helpful_count", desc=True)
         .order("created_at", desc=False)
@@ -184,6 +220,7 @@ async def post_answer(
         supabase.table("community_questions")
         .select("id")
         .eq("id", question_id)
+        .eq("is_hidden", False)
         .maybe_single()
         .execute()
     )
@@ -286,12 +323,27 @@ async def report_question(
     payload: ReportPayload,
     user_id: str = Depends(get_current_user),
 ):
+    # Prevent duplicate reports from the same user
+    existing = (
+        supabase.table("community_reports")
+        .select("id")
+        .eq("question_id", question_id)
+        .eq("reporter_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if existing.data:
+        return {"reported": True, "already_reported": True}
+
     supabase.table("community_reports").insert({
         "reporter_id": user_id,
         "question_id": question_id,
         "reason": payload.reason,
     }).execute()
-    return {"reported": True}
+
+    _auto_hide_if_threshold(question_id=question_id)
+
+    return {"reported": True, "already_reported": False}
 
 
 @router.post("/answers/{answer_id}/report")
@@ -300,12 +352,26 @@ async def report_answer(
     payload: ReportPayload,
     user_id: str = Depends(get_current_user),
 ):
+    existing = (
+        supabase.table("community_reports")
+        .select("id")
+        .eq("answer_id", answer_id)
+        .eq("reporter_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if existing.data:
+        return {"reported": True, "already_reported": True}
+
     supabase.table("community_reports").insert({
         "reporter_id": user_id,
         "answer_id": answer_id,
         "reason": payload.reason,
     }).execute()
-    return {"reported": True}
+
+    _auto_hide_if_threshold(answer_id=answer_id)
+
+    return {"reported": True, "already_reported": False}
 
 
 # ── Accept answer ─────────────────────────────────────────────────────────────
