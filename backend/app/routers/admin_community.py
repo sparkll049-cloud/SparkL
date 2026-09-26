@@ -25,16 +25,51 @@ def require_admin(user_id: str = Depends(get_current_user)) -> str:
 async def list_reports(user_id: str = Depends(require_admin)):
     res = (
         supabase.table("community_reports")
-        .select(
-            "id, reason, created_at, is_reviewed, "
-            "reporter:profiles!reporter_id(id, full_name), "
-            "question:community_questions(id, title, is_hidden), "
-            "answer:community_answers(id, content, is_hidden)"
-        )
+        .select("id, reason, created_at, is_reviewed, reporter_id, question_id, answer_id")
         .order("created_at", desc=True)
         .execute()
     )
-    return res.data or []
+
+    reports = res.data or []
+
+    for r in reports:
+        if r.get("question_id"):
+            q = (
+                supabase.table("community_questions")
+                .select("id, title, is_hidden")
+                .eq("id", r["question_id"])
+                .maybe_single()
+                .execute()
+            )
+            r["question"] = q.data
+            r["answer"] = None
+        elif r.get("answer_id"):
+            a = (
+                supabase.table("community_answers")
+                .select("id, content, is_hidden")
+                .eq("id", r["answer_id"])
+                .maybe_single()
+                .execute()
+            )
+            r["answer"] = a.data
+            r["question"] = None
+        else:
+            r["question"] = None
+            r["answer"] = None
+
+        if r.get("reporter_id"):
+            p = (
+                supabase.table("profiles")
+                .select("id, full_name")
+                .eq("id", r["reporter_id"])
+                .maybe_single()
+                .execute()
+            )
+            r["reporter"] = p.data
+        else:
+            r["reporter"] = None
+
+    return reports
 
 
 # ── Dismiss a report ──────────────────────────────────────────────────────────
