@@ -19,8 +19,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
-const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-const [firstName, setFirstName] = useState("");
+
 type Question = {
   id: string;
   institution: { id: string; name: string } | null;
@@ -36,7 +35,6 @@ type Question = {
   is_saved: boolean;
 };
 
-// ── Seed questions shown while DB is empty ────────────────────────────────────
 const SEED_QUESTIONS: Question[] = [
   {
     id: "seed-1",
@@ -44,8 +42,7 @@ const SEED_QUESTIONS: Question[] = [
     course: { id: "", name: "Mathematics" },
     course_code: "MTH 201",
     title: "How do I solve this differential equation?",
-    description:
-      "I'm having trouble understanding the second step of this question. Can someone explain the solution?",
+    description: "I'm having trouble understanding the second step of this question. Can someone explain the solution?",
     asker: { id: "", full_name: "Daniel A." },
     created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
     answer_count: 4,
@@ -59,8 +56,7 @@ const SEED_QUESTIONS: Question[] = [
     course: { id: "", name: "Computer Science" },
     course_code: "CSC 301",
     title: "Can someone explain this recursion problem?",
-    description:
-      "I understand the basic concept but I'm confused about how the recursive function works in this example.",
+    description: "I understand the basic concept but I'm confused about how the recursive function works in this example.",
     asker: { id: "", full_name: "Michael O." },
     created_at: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
     answer_count: 7,
@@ -74,8 +70,7 @@ const SEED_QUESTIONS: Question[] = [
     course: { id: "", name: "Physics" },
     course_code: "PHY 204",
     title: "Help with this mechanics question",
-    description:
-      "I've tried solving this using the equations of motion but I'm not getting the expected answer.",
+    description: "I've tried solving this using the equations of motion but I'm not getting the expected answer.",
     asker: { id: "", full_name: "Sarah K." },
     created_at: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
     answer_count: 2,
@@ -89,8 +84,7 @@ const SEED_QUESTIONS: Question[] = [
     course: { id: "", name: "Chemistry" },
     course_code: "CHM 102",
     title: "Please explain this organic chemistry question",
-    description:
-      "I need help understanding why this reaction produces this particular product.",
+    description: "I need help understanding why this reaction produces this particular product.",
     asker: { id: "", full_name: "Chisom N." },
     created_at: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(),
     answer_count: 5,
@@ -124,8 +118,9 @@ export default function CommunityPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState("Recent");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [firstName, setFirstName] = useState("");
 
-  // Sidebar data
   const [institutions, setInstitutions] = useState<{ id: string; name: string }[]>([]);
   const [popularCourses, setPopularCourses] = useState<{ id: string; name: string; count: number }[]>([]);
   const [userInstitution, setUserInstitution] = useState<{ id: string; name: string } | null>(null);
@@ -137,68 +132,62 @@ export default function CommunityPage() {
     return session?.access_token ?? null;
   }
 
-  // Load sidebar data (institutions + user profile)
   useEffect(() => {
     async function loadSidebar() {
-  const token = await getToken();
-  if (!token) return;
+      const token = await getToken();
+      if (!token) return;
 
-  // User's institution from profile
-  const { data: { user } } = await supabase.auth.getUser();
-  if (user) {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("institution_id, institution:institutions(id, name)")
-      .eq("id", user.id)
-      .single();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("institution_id, institution:institutions(id, name)")
+          .eq("id", user.id)
+          .single();
 
-    if (profile?.institution) {
-      const inst = Array.isArray(profile.institution)
-        ? profile.institution[0]
-        : profile.institution;
-      if (inst) setUserInstitution(inst as { id: string; name: string });
-    }
+        if (profile?.institution) {
+          const inst = Array.isArray(profile.institution)
+            ? profile.institution[0]
+            : profile.institution;
+          if (inst) setUserInstitution(inst as { id: string; name: string });
+        }
 
-    // ── ADD THIS ──
-    const { data: profile2 } = await supabase
-      .from("profiles")
-      .select("full_name")
-      .eq("id", user.id)
-      .single();
-    if (profile2?.full_name) setFirstName(profile2.full_name.split(" ")[0]);
+        const { data: profile2 } = await supabase
+          .from("profiles")
+          .select("full_name")
+          .eq("id", user.id)
+          .single();
+        if (profile2?.full_name) setFirstName(profile2.full_name.split(" ")[0]);
 
-    try {
-      const r = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (r.ok) {
-        const j = await r.json();
-        if (j.avatar_url) setAvatarUrl(j.avatar_url);
+        try {
+          const r = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (r.ok) {
+            const j = await r.json();
+            if (j.avatar_url) setAvatarUrl(j.avatar_url);
+          }
+        } catch {}
       }
-    } catch {}
-    // ── END ADD ──
-  }
 
-  // All institutions for filter dropdown
-  const { data: instData } = await supabase
-    .from("institutions")
-    .select("id, name")
-    .order("name");
-  setInstitutions(instData ?? []);
-}
+      const { data: instData } = await supabase
+        .from("institutions")
+        .select("id, name")
+        .order("name");
+      setInstitutions(instData ?? []);
+    }
+    loadSidebar();
+  }, []);
+
   async function loadQuestions() {
     setLoading(true);
     setError("");
     const token = await getToken();
-    if (!token) {
-      setLoading(false);
-      return;
-    }
+    if (!token) { setLoading(false); return; }
 
     try {
       const params = new URLSearchParams();
-
       if (activeFilter === "Unanswered") params.set("status", "unanswered");
       if (activeFilter === "Answered") params.set("status", "answered");
       if (activeFilter === "Popular" || sortBy === "Popular") params.set("sort", "popular");
@@ -216,11 +205,8 @@ export default function CommunityPage() {
 
       const data: Question[] = await res.json();
 
-      // If DB has real questions, use them; otherwise keep seeds
       if (data.length > 0) {
         setQuestions(data);
-
-        // Build popular courses from loaded data
         const courseCounts: Record<string, { id: string; name: string; count: number }> = {};
         data.forEach((q) => {
           if (q.course) {
@@ -231,9 +217,7 @@ export default function CommunityPage() {
           }
         });
         setPopularCourses(
-          Object.values(courseCounts)
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 5)
+          Object.values(courseCounts).sort((a, b) => b.count - a.count).slice(0, 5)
         );
       }
     } catch (err) {
@@ -243,32 +227,23 @@ export default function CommunityPage() {
     }
   }
 
-  // Reload when filter/sort/institution/course changes
   useEffect(() => {
     loadQuestions();
   }, [activeFilter, sortBy, selectedCourseId, selectedInstitutionId]);
 
-  // Debounced search
   useEffect(() => {
     if (searchDebounce.current) clearTimeout(searchDebounce.current);
-    searchDebounce.current = setTimeout(() => {
-      loadQuestions();
-    }, 400);
-    return () => {
-      if (searchDebounce.current) clearTimeout(searchDebounce.current);
-    };
+    searchDebounce.current = setTimeout(() => { loadQuestions(); }, 400);
+    return () => { if (searchDebounce.current) clearTimeout(searchDebounce.current); };
   }, [searchQuery]);
 
   async function toggleSaved(questionId: string) {
-    if (questionId.startsWith("seed-")) return; // can't save seed questions
+    if (questionId.startsWith("seed-")) return;
     const token = await getToken();
     if (!token) return;
 
-    // Optimistic update
     setQuestions((prev) =>
-      prev.map((q) =>
-        q.id === questionId ? { ...q, is_saved: !q.is_saved } : q
-      )
+      prev.map((q) => q.id === questionId ? { ...q, is_saved: !q.is_saved } : q)
     );
 
     try {
@@ -277,11 +252,8 @@ export default function CommunityPage() {
         { method: "POST", headers: { Authorization: `Bearer ${token}` } }
       );
     } catch {
-      // Revert on failure
       setQuestions((prev) =>
-        prev.map((q) =>
-          q.id === questionId ? { ...q, is_saved: !q.is_saved } : q
-        )
+        prev.map((q) => q.id === questionId ? { ...q, is_saved: !q.is_saved } : q)
       );
     }
   }
@@ -292,7 +264,6 @@ export default function CommunityPage() {
     setActiveFilter("All");
   }
 
-  // Fallback popular courses for seed state
   const displayPopularCourses =
     popularCourses.length > 0
       ? popularCourses
@@ -302,72 +273,49 @@ export default function CommunityPage() {
           { id: "s3", name: "CSC 301", count: 86 },
           { id: "s4", name: "PHY 204", count: 72 },
         ];
-return (
-  <main className="min-h-screen bg-slate-50">
 
-    {/* ── Header ── */}
-    <section className="border-b border-slate-200 bg-white">
-      <div className="mx-auto max-w-7xl px-6 py-8">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="mb-2 flex items-center gap-2 text-sm text-slate-500">
-              <Link href="/" className="transition hover:text-slate-900">Home</Link>
-              <span>/</span>
-              <span className="text-blue-600">Community</span>
+  return (
+    <main className="min-h-screen bg-slate-50">
+
+      {/* ── Header ── */}
+      <section className="border-b border-slate-200 bg-white">
+        <div className="mx-auto max-w-7xl px-6 py-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="mb-2 flex items-center gap-2 text-sm text-slate-500">
+                <Link href="/" className="transition hover:text-slate-900">Home</Link>
+                <span>/</span>
+                <span className="text-blue-600">Community</span>
+              </div>
+              <h1 className="text-3xl font-bold tracking-tight text-slate-950">Community</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+                Ask questions, share solutions, and learn with students across Nigerian institutions.
+              </p>
             </div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-950">Community</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-              Ask questions, share solutions, and learn with students across Nigerian institutions.
-            </p>
+            <div className="flex items-center gap-3">
+              <Link
+                href="/community/ask"
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
+              >
+                <Plus size={18} />
+                Ask a Question
+              </Link>
+              <Link href="/dashboard/profile">
+                {avatarUrl ? (
+                  <img
+                    src={avatarUrl}
+                    alt="Profile"
+                    className="h-10 w-10 rounded-xl object-cover ring-2 ring-blue-500/30 transition hover:ring-blue-500/60"
+                  />
+                ) : (
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-[11px] font-black text-white shadow-md">
+                    {firstName ? firstName.slice(0, 2).toUpperCase() : "?"}
+                  </div>
+                )}
+              </Link>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/community/ask"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
-            >
-              <Plus size={18} />
-              Ask a Question
-            </Link>
-            <Link href="/dashboard/profile">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt="Profile"
-                  className="h-10 w-10 rounded-xl object-cover ring-2 ring-blue-500/30 transition hover:ring-blue-500/60"
-                />
-              ) : (
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-[11px] font-black text-white shadow-md">
-                  {firstName ? firstName.slice(0, 2).toUpperCase() : "?"}
-                </div>
-              )}
-            </Link>
-          </div>
-        </div>
 
-        {/* Search */}
-        <div className="mt-7 flex max-w-3xl items-center rounded-xl border border-slate-200 bg-slate-50 px-4 transition focus-within:border-blue-400 focus-within:bg-white">
-          <Search size={19} className="shrink-0 text-slate-400" />
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search questions, courses, topics..."
-            className="w-full bg-transparent px-3 py-3.5 text-sm text-slate-900 outline-none placeholder:text-slate-400"
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => setSearchQuery("")}
-              className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
-            >
-              <X size={16} />
-            </button>
-          )}
-        </div>
-      </div>
-    </section>
-
-    {/* ── Main ── */}
           {/* Search */}
           <div className="mt-7 flex max-w-3xl items-center rounded-xl border border-slate-200 bg-slate-50 px-4 transition focus-within:border-blue-400 focus-within:bg-white">
             <Search size={19} className="shrink-0 text-slate-400" />
@@ -413,7 +361,6 @@ return (
                 {filter}
               </button>
             ))}
-
             <button
               type="button"
               onClick={() => setShowFilters((v) => !v)}
@@ -446,7 +393,6 @@ return (
                   </button>
                 )}
               </div>
-
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <label className="block">
                   <span className="mb-2 block text-xs font-semibold text-slate-500">Institution</span>
@@ -461,7 +407,6 @@ return (
                     ))}
                   </select>
                 </label>
-
                 <label className="block">
                   <span className="mb-2 block text-xs font-semibold text-slate-500">Course</span>
                   <select
@@ -489,7 +434,6 @@ return (
                 {loading ? "Loading..." : `${questions.length} ${questions.length === 1 ? "question" : "questions"} matching your view.`}
               </p>
             </div>
-
             <label className="hidden items-center gap-1 text-sm font-medium text-slate-500 sm:flex">
               <select
                 value={sortBy}
@@ -503,14 +447,12 @@ return (
             </label>
           </div>
 
-          {/* Error */}
           {error && (
             <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
               {error}
             </div>
           )}
 
-          {/* Loading */}
           {loading ? (
             <div className="flex items-center justify-center py-16">
               <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
@@ -520,13 +462,11 @@ return (
               {questions.map((question) => {
                 const isSeed = question.id.startsWith("seed-");
                 const menuOpen = showMoreMenu === question.id;
-
                 return (
                   <article
                     key={question.id}
                     className="group rounded-2xl border border-slate-200 bg-white p-5 transition hover:border-slate-300 hover:shadow-sm sm:p-6"
                   >
-                    {/* Top row */}
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex flex-wrap items-center gap-2">
                         {question.course_code && (
@@ -539,8 +479,6 @@ return (
                           {question.institution?.name ?? "Unknown institution"}
                         </span>
                       </div>
-
-                      {/* More menu */}
                       <div className="relative">
                         <button
                           type="button"
@@ -572,7 +510,6 @@ return (
                       </div>
                     </div>
 
-                    {/* Answered badge */}
                     {question.is_answered && (
                       <div className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
                         <CheckCircle2 size={13} />
@@ -588,7 +525,6 @@ return (
                       {question.description}
                     </p>
 
-                    {/* Meta */}
                     <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3 text-xs text-slate-400">
                       <span className="flex items-center gap-1.5">
                         <Users size={14} />
@@ -608,7 +544,6 @@ return (
                       </span>
                     </div>
 
-                    {/* Actions */}
                     <div className="mt-5 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
                       <button
                         type="button"
@@ -622,7 +557,6 @@ return (
                       >
                         {question.is_saved ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}
                       </button>
-
                       <div className="flex items-center gap-2">
                         <Link
                           href={isSeed ? "#" : `/community/${question.id}`}
@@ -672,8 +606,6 @@ return (
 
         {/* ── Sidebar ── */}
         <aside className="space-y-5">
-
-          {/* Your institution */}
           {userInstitution && (
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <h3 className="font-semibold text-slate-950">Your Institution</h3>
@@ -697,7 +629,6 @@ return (
             </div>
           )}
 
-          {/* Popular courses */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-slate-950">Popular Courses</h3>
@@ -734,7 +665,6 @@ return (
             </div>
           </div>
 
-          {/* CTA card */}
           <div className="rounded-2xl bg-blue-600 p-5">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15">
               <MessageCircle size={20} className="text-white" />
@@ -745,7 +675,6 @@ return (
             </p>
           </div>
 
-          {/* Guidelines */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5">
             <h3 className="font-semibold text-slate-950">Community Guidelines</h3>
             <ul className="mt-3 space-y-2 text-sm leading-5 text-slate-500">
