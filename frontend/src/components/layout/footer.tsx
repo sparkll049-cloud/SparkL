@@ -55,8 +55,8 @@ const LinkedInIcon = () => (
 );
 
 const socialLinks = [
-  { label: "Twitter/X",  href: "#", icon: <TwitterIcon /> },
-  { label: "Instagram",  href: "#", icon: <InstagramIcon /> },
+  { label: "Twitter/X",  href: "https://x.com/SPARKL_EDU", icon: <TwitterIcon /> },
+  { label: "Instagram",  href: "https://www.instagram.com/sparkl_edu/", icon: <InstagramIcon /> },
   { label: "LinkedIn",   href: "#", icon: <LinkedInIcon /> },
 ];
 
