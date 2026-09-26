@@ -11,7 +11,7 @@ const footerLinks = [
     heading: "Quick Links",
     links: [
       { label: "Dashboard", href: "/dashboard" },
-      { label: "Pricing", href: "/subscription" },
+      { label: "Pricing", href: "/dashboard/subscribe" },
       { label: "Community", href: "/community" },
       { label: "Courses", href: "/dashboard/courses" },
     ],
