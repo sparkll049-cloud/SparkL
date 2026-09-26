@@ -36,10 +36,10 @@ export default function LegalLayout({
         <div className="mt-16 border-t border-slate-200 pt-6 text-sm text-slate-500">
           Questions about this policy? Contact us at{" "}
           <a
-            href="mailto:support@sparkl.ng"
+            href="mailto:support@sparkl.com.ng"
             className="font-medium text-blue-600 hover:underline"
           >
-            support@sparkl.ng
+            support@sparkl.com.ng
           </a>
         </div>
       </div>
