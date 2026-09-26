@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { User, Mail, Phone, Lock, Eye, EyeOff, ArrowRight, Check } from "lucide-react";
@@ -102,9 +103,8 @@ export default function SignupPage() {
         />
         <div className="absolute top-1/3 -left-20 w-[400px] h-[400px] bg-blue-600/20 rounded-full blur-[120px] pointer-events-none" />
 
-                <Link
+        <Link
           href="/"
-          onClick={closeMenu}
           className="group flex items-center"
           aria-label="SparkL home"
         >
@@ -117,6 +117,7 @@ export default function SignupPage() {
             className="h-12 w-auto object-contain transition-transform duration-300 group-hover:scale-[1.03]"
           />
         </Link>
+
         <div className="relative">
           <p className="text-3xl font-extrabold text-white leading-snug mb-6">
             The smarter way to prepare for Nigerian tertiary exams.
@@ -156,7 +157,6 @@ export default function SignupPage() {
           </Link>
 
           <h1 className="text-3xl font-extrabold text-white">Create your account</h1>
-          
 
           <form onSubmit={handleSubmit} className="mt-10 space-y-5">
 
