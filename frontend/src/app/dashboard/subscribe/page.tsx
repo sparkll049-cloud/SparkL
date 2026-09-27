@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Check, Sparkles, Zap, ArrowLeft, Loader2, CheckCircle2, Crown,
@@ -70,6 +70,7 @@ function SubscribePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const justSubscribed = searchParams.get("subscribed") === "true";
+  const paystackReady = useRef(false);
 
   const [user, setUser] = useState<{
     name: string;
@@ -81,13 +82,17 @@ function SubscribePageInner() {
   const [processingPlan, setProcessingPlan] = useState<string | null>(null);
   const [error, setError] = useState("");
 
-  // Load Paystack inline script
+  // Load Paystack inline script once and track when ready
   useEffect(() => {
+    if (document.querySelector('script[src="https://js.paystack.co/v1/inline.js"]')) {
+      paystackReady.current = true;
+      return;
+    }
     const script = document.createElement("script");
     script.src = "https://js.paystack.co/v1/inline.js";
     script.async = true;
+    script.onload = () => { paystackReady.current = true; };
     document.body.appendChild(script);
-    return () => { document.body.removeChild(script); };
   }, []);
 
   useEffect(() => {
@@ -132,6 +137,27 @@ function SubscribePageInner() {
     loadUser();
   }, []);
 
+  function waitForPaystack(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (paystackReady.current && window.PaystackPop) {
+        resolve();
+        return;
+      }
+      let attempts = 0;
+      const interval = setInterval(() => {
+        attempts++;
+        if (window.PaystackPop) {
+          paystackReady.current = true;
+          clearInterval(interval);
+          resolve();
+        } else if (attempts > 20) {
+          clearInterval(interval);
+          reject(new Error("Paystack failed to load. Please refresh and try again."));
+        }
+      }, 200);
+    });
+  }
+
   async function handleSubscribe(planSlug: string, amount: number) {
     if (!user) return;
     setError("");
@@ -162,11 +188,14 @@ function SubscribePageInner() {
       const { reference: ourReference } = await initiateRes.json();
       const accessToken = session.access_token;
 
-      // Step 2 — open Paystack inline popup
+      // Step 2 — wait for Paystack to be ready
+      await waitForPaystack();
+
+      // Step 3 — open Paystack popup
       const handler = window.PaystackPop.setup({
         key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY!,
         email: user.email,
-        amount: amount * 100, // Paystack uses kobo
+        amount: amount * 100, // kobo
         currency: "NGN",
         ref: ourReference,
         metadata: {
@@ -179,9 +208,8 @@ function SubscribePageInner() {
           setProcessingPlan(null);
         },
         callback: async (response: { reference: string }) => {
-          console.log("[Paystack callback]", response);
           try {
-            // Step 3 — verify payment via our Next.js proxy
+            // Step 4 — verify server-side
             const res = await fetch("/api/payments/verify", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
