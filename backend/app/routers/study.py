@@ -2,10 +2,10 @@
 routers/study.py
 ----------------
 SparkL Cram — AI study assistant.
-- Extracted text saved to cram_sessions (no file storage)
-- Chat messages persisted in cram_messages (last 8 loaded on reopen)
-- Messages older than 7 days auto-cleaned on every chat request (background)
-- Gated by subscription tier
+- Groq first for text/PDF/DOCX, Gemini fallback if Groq fails
+- Gemini always for images and URLs (native support)
+- Quiz mode returns structured JSON for interactive UI
+- Messages persisted, cleaned after 7 days
 """
 
 from __future__ import annotations
@@ -13,10 +13,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import AsyncGenerator, Literal
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -29,12 +30,12 @@ from app.services.subscription import get_user_limits
 try:
     from groq import AsyncGroq
 except ImportError:
-    AsyncGroq = None  # type: ignore
+    AsyncGroq = None
 
 try:
     import google.generativeai as genai
 except ImportError:
-    genai = None  # type: ignore
+    genai = None
 
 router = APIRouter(prefix="/api/study", tags=["study"])
 
@@ -49,22 +50,44 @@ MESSAGE_TTL_DAYS  = 7
 GROQ_MODEL   = "openai/gpt-oss-120b"
 GEMINI_MODEL = "gemini-3.5-flash"
 
-VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text"}
+VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text", "url"}
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are SparkL Cram — a smart, friendly AI tutor helping Nigerian polytechnic and university students understand their course material.
 
-The student has shared their notes or study material with you. Your job is to help them study effectively.
-
 Rules:
 - Be concise and clear — students are on mobile, keep answers focused
 - Use simple language; avoid unnecessary jargon
-- When generating quiz questions, mix MCQ and theory
 - Always relate explanations to Nigerian tertiary education context where relevant
 - Never make up facts not in the provided material
-- If asked something not covered in the notes, say so honestly
+- If asked something not in the notes, say so honestly
 - Always respond in clean markdown (use **bold**, bullet points, tables where helpful)"""
+
+QUIZ_SYSTEM_PROMPT = """You are SparkL Cram — a quiz generator for Nigerian university and polytechnic students.
+
+Generate exactly 5 quiz questions from the provided study material.
+Mix MCQ (4 options) and theory (short answer) questions.
+Return ONLY valid JSON, no markdown fences, no preamble, no explanation.
+
+Format:
+{
+  "questions": [
+    {
+      "type": "mcq",
+      "question": "Question text here",
+      "options": ["A. option", "B. option", "C. option", "D. option"],
+      "answer": "A. option",
+      "explanation": "Brief reason why this is correct"
+    },
+    {
+      "type": "theory",
+      "question": "Question text here",
+      "answer": "Model answer here",
+      "explanation": "Key points to include"
+    }
+  ]
+}"""
 
 # ── Extractors ─────────────────────────────────────────────────────────────────
 
@@ -72,8 +95,7 @@ def _extract_pdf(data: bytes) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
-        pages  = [p.extract_text() or "" for p in reader.pages]
-        return "\n\n".join(pages).strip()
+        return "\n\n".join(p.extract_text() or "" for p in reader.pages).strip()
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Could not read PDF: {e}")
 
@@ -81,9 +103,8 @@ def _extract_pdf(data: bytes) -> str:
 def _extract_docx(data: bytes) -> str:
     try:
         from docx import Document
-        doc  = Document(io.BytesIO(data))
-        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        return text.strip()
+        doc = Document(io.BytesIO(data))
+        return "\n".join(p.text for p in doc.paragraphs if p.text.strip()).strip()
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Could not read DOCX: {e}")
 
@@ -93,30 +114,23 @@ def _truncate(text: str) -> tuple[str, bool]:
         return text, False
     half = MAX_CONTEXT_CHARS // 2
     return (
-        text[:half] + "\n\n...[middle section omitted to save tokens]...\n\n" + text[-half:],
+        text[:half] + "\n\n...[middle omitted]...\n\n" + text[-half:],
         True,
     )
 
 
-def _build_context_block(text: str, source_label: str) -> str:
+def _build_context_block(text: str, label: str) -> str:
     truncated, was_cut = _truncate(text)
     note = " (truncated)" if was_cut else ""
-    return f"=== Student Notes: {source_label}{note} ===\n\n{truncated}\n\n=== End of Notes ==="
+    return f"=== Study Notes: {label}{note} ===\n\n{truncated}\n\n=== End ==="
 
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
 def _save_messages(session_id: str, user_id: str, messages: list[dict]) -> None:
-    """Persist a batch of messages to cram_messages."""
-    if not messages:
-        return
     rows = [
-        {
-            "session_id": session_id,
-            "user_id":    user_id,
-            "role":       m["role"],
-            "content":    m["content"],
-        }
+        {"session_id": session_id, "user_id": user_id,
+         "role": m["role"], "content": m["content"]}
         for m in messages
         if m.get("role") in ("user", "assistant") and m.get("content")
     ]
@@ -125,7 +139,6 @@ def _save_messages(session_id: str, user_id: str, messages: list[dict]) -> None:
 
 
 def _load_messages(session_id: str, limit: int = MAX_HISTORY_MSGS) -> list[dict]:
-    """Load the last N messages for a session, oldest first."""
     try:
         res = (
             supabase.table("cram_messages")
@@ -135,30 +148,24 @@ def _load_messages(session_id: str, limit: int = MAX_HISTORY_MSGS) -> list[dict]
             .limit(limit)
             .execute()
         )
-        messages = res.data or []
-        # Reverse so oldest is first (desc query → reverse for chronological)
-        return list(reversed(messages))
+        return list(reversed(res.data or []))
     except Exception:
         return []
 
 
 def _cleanup_old_messages() -> None:
-    """Delete messages older than MESSAGE_TTL_DAYS. Fire-and-forget."""
     try:
-        cutoff = (
-            datetime.now(timezone.utc) - timedelta(days=MESSAGE_TTL_DAYS)
-        ).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=MESSAGE_TTL_DAYS)).isoformat()
         supabase.table("cram_messages").delete().lt("created_at", cutoff).execute()
     except Exception:
         pass
 
 
 def _get_session(session_id: str, user_id: str) -> dict:
-    """Fetch a session row, verify ownership."""
     try:
         res = (
             supabase.table("cram_sessions")
-            .select("id, title, source_type, extracted_text")
+            .select("id, title, source_type, extracted_text, source_url")
             .eq("id", session_id)
             .eq("user_id", user_id)
             .maybe_single()
@@ -173,16 +180,26 @@ def _get_session(session_id: str, user_id: str) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Gemini client ──────────────────────────────────────────────────────────────
+
+def _get_gemini_model(system: str = SYSTEM_PROMPT):
+    if genai is None:
+        raise HTTPException(status_code=500, detail="google-generativeai not installed.")
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not set.")
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=system)
+
+
 # ── Groq streaming ─────────────────────────────────────────────────────────────
 
 async def _stream_groq(messages: list[dict]) -> AsyncGenerator[str, None]:
     if AsyncGroq is None:
-        raise HTTPException(status_code=500, detail="groq package not installed.")
-
+        raise RuntimeError("groq not installed")
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY not set.")
-
+        raise RuntimeError("GROQ_API_KEY not set")
     client = AsyncGroq(api_key=api_key)
     stream = await client.chat.completions.create(
         model=GROQ_MODEL,
@@ -197,43 +214,183 @@ async def _stream_groq(messages: list[dict]) -> AsyncGenerator[str, None]:
             yield delta
 
 
-# ── Gemini (image inputs) ──────────────────────────────────────────────────────
+# ── Gemini streaming (text/context) ───────────────────────────────────────────
 
-async def _stream_gemini_image(
-    image_b64: str,
-    mime_type: str,
-    user_message: str,
-    history_text: str,
+async def _stream_gemini_text(
+    prompt: str,
+    history_text: str = "",
+    system: str = SYSTEM_PROMPT,
 ) -> AsyncGenerator[str, None]:
-    if genai is None:
-        raise HTTPException(status_code=500, detail="google-generativeai not installed.")
-
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not set.")
-
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name=GEMINI_MODEL,
-        system_instruction=SYSTEM_PROMPT,
-    )
-
-    image_data = base64.b64decode(image_b64)
-    image_part = {"mime_type": mime_type, "data": image_data}
-    prompt     = f"{history_text}\n\nStudent: {user_message}" if history_text else user_message
-
+    model    = _get_gemini_model(system)
+    full     = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
     response = await model.generate_content_async(
-        [image_part, prompt],
+        full,
         stream=True,
         generation_config={"max_output_tokens": 1024, "temperature": 0.4},
     )
-
     async for chunk in response:
         try:
             if chunk.text:
                 yield chunk.text
         except Exception:
             pass
+
+
+# ── Gemini streaming (image) ───────────────────────────────────────────────────
+
+async def _stream_gemini_image(
+    image_b64: str,
+    mime_type: str,
+    prompt: str,
+    history_text: str = "",
+) -> AsyncGenerator[str, None]:
+    model      = _get_gemini_model()
+    image_data = base64.b64decode(image_b64)
+    image_part = {"mime_type": mime_type, "data": image_data}
+    full       = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
+    response   = await model.generate_content_async(
+        [image_part, full],
+        stream=True,
+        generation_config={"max_output_tokens": 1024, "temperature": 0.4},
+    )
+    async for chunk in response:
+        try:
+            if chunk.text:
+                yield chunk.text
+        except Exception:
+            pass
+
+
+# ── Gemini streaming (URL / YouTube) ──────────────────────────────────────────
+
+async def _stream_gemini_url(
+    url: str,
+    prompt: str,
+    history_text: str = "",
+) -> AsyncGenerator[str, None]:
+    model    = _get_gemini_model()
+    url_part = {"url": url}
+    full     = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
+    response = await model.generate_content_async(
+        [url_part, full],
+        stream=True,
+        generation_config={"max_output_tokens": 1024, "temperature": 0.4},
+    )
+    async for chunk in response:
+        try:
+            if chunk.text:
+                yield chunk.text
+        except Exception:
+            pass
+
+
+# ── Groq → Gemini fallback for text ───────────────────────────────────────────
+
+async def _stream_text_with_fallback(
+    groq_messages: list[dict],
+    gemini_prompt: str,
+    history_text:  str,
+) -> AsyncGenerator[str, None]:
+    """Try Groq first; if it errors, fall back to Gemini silently."""
+    try:
+        got_any = False
+        async for chunk in _stream_groq(groq_messages):
+            got_any = True
+            yield chunk
+        if got_any:
+            return
+    except Exception as e:
+        print(f"[Groq failed, falling back to Gemini] {e}")
+
+    # Gemini fallback
+    async for chunk in _stream_gemini_text(gemini_prompt, history_text):
+        yield chunk
+
+
+# ── Quiz generation (non-streaming, returns JSON) ─────────────────────────────
+
+async def _generate_quiz_groq(messages: list[dict]) -> dict:
+    if AsyncGroq is None:
+        raise RuntimeError("groq not installed")
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY not set")
+    client   = AsyncGroq(api_key=api_key)
+    response = await client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=messages,
+        max_tokens=2048,
+        stream=False,
+        temperature=0.5,
+        response_format={"type": "json_object"},
+    )
+    raw = response.choices[0].message.content or "{}"
+    return json.loads(raw)
+
+
+async def _generate_quiz_gemini(context: str) -> dict:
+    model    = _get_gemini_model(QUIZ_SYSTEM_PROMPT)
+    response = await model.generate_content_async(
+        f"Generate a quiz from these study notes:\n\n{context}",
+        generation_config={"max_output_tokens": 2048, "temperature": 0.5},
+    )
+    raw = response.text.strip()
+    # Strip markdown fences if Gemini added them anyway
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw.strip())
+
+
+async def _generate_quiz_gemini_url(url: str) -> dict:
+    model    = _get_gemini_model(QUIZ_SYSTEM_PROMPT)
+    response = await model.generate_content_async(
+        [{"url": url}, "Generate a quiz from this content."],
+        generation_config={"max_output_tokens": 2048, "temperature": 0.5},
+    )
+    raw = response.text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw.strip())
+
+
+async def _generate_quiz_gemini_image(image_b64: str, mime_type: str) -> dict:
+    model      = _get_gemini_model(QUIZ_SYSTEM_PROMPT)
+    image_data = base64.b64decode(image_b64)
+    response   = await model.generate_content_async(
+        [{"mime_type": mime_type, "data": image_data}, "Generate a quiz from this image."],
+        generation_config={"max_output_tokens": 2048, "temperature": 0.5},
+    )
+    raw = response.text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw.strip())
+
+
+async def _generate_quiz_with_fallback(
+    context:    str,
+    groq_msgs:  list[dict],
+    source_type: str,
+    image_b64:  str = "",
+    mime_type:  str = "",
+    url:        str = "",
+) -> dict:
+    """Try Groq first for text; Gemini for images/URLs; fallback Gemini for text."""
+    if source_type == "url":
+        return await _generate_quiz_gemini_url(url)
+    if source_type == "image":
+        return await _generate_quiz_gemini_image(image_b64, mime_type)
+    # Text/PDF/DOCX — try Groq first
+    try:
+        return await _generate_quiz_groq(groq_msgs)
+    except Exception as e:
+        print(f"[Quiz Groq failed, falling back to Gemini] {e}")
+        return await _generate_quiz_gemini(context)
 
 
 # ── Subscription helpers ───────────────────────────────────────────────────────
@@ -273,37 +430,40 @@ class CramSessionRow(BaseModel):
 
 @router.post("/session", response_model=CramSessionRow)
 async def create_session(
-    title:       str               = Form(...),
-    source_type: str               = Form(...),
-    file:        UploadFile | None = File(None),
-    text_content: str | None       = Form(None),
-    user_id:     str               = Depends(get_current_user),
+    title:        str               = Form(...),
+    source_type:  str               = Form(...),
+    file:         UploadFile | None = File(None),
+    text_content: str | None        = Form(None),
+    source_url:   str | None        = Form(None),
+    user_id:      str               = Depends(get_current_user),
 ):
     limits = _get_cram_limits(user_id)
 
     if source_type not in VALID_SOURCE_TYPES:
-        raise HTTPException(status_code=422, detail=f"Invalid source_type. Use: {VALID_SOURCE_TYPES}")
+        raise HTTPException(status_code=422, detail=f"Invalid source_type.")
 
     max_sessions = limits.get("cram_max_sessions")
     if max_sessions is not None:
-        count = _count_user_sessions(user_id)
-        if count >= max_sessions:
+        if _count_user_sessions(user_id) >= max_sessions:
             raise HTTPException(
                 status_code=403,
                 detail=f"Pro plan allows {max_sessions} Cram sessions. Upgrade to Premium for unlimited."
             )
 
-    # ── Extract text from file ─────────────────────────────────────────
     extracted_text: str | None = None
+    stored_url:     str | None = None
 
-    if file and file.filename:
+    if source_type == "url":
+        if not source_url:
+            raise HTTPException(status_code=422, detail="source_url is required for URL sessions.")
+        stored_url = source_url.strip()
+
+    elif file and file.filename:
         file_bytes = await file.read()
         if len(file_bytes) > MAX_FILE_BYTES:
             raise HTTPException(status_code=413, detail=f"File too large — max {MAX_FILE_MB} MB.")
-
         fname = file.filename.lower()
         mime  = file.content_type or ""
-
         if fname.endswith(".pdf") or "pdf" in mime:
             extracted_text = _extract_pdf(file_bytes)
         elif fname.endswith(".docx") or "wordprocessingml" in mime:
@@ -311,15 +471,13 @@ async def create_session(
         elif fname.endswith(".txt"):
             extracted_text = file_bytes.decode("utf-8", errors="replace")
         elif mime.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp")):
-            # Images can't be stored as text — handled at chat time
-            extracted_text = None
+            extracted_text = None  # handled at chat time via Gemini
         else:
             raise HTTPException(status_code=415, detail="Unsupported file type.")
 
     elif text_content:
         extracted_text = text_content
 
-    # ── Create session row ─────────────────────────────────────────────
     session_id = str(uuid.uuid4())
     try:
         supabase.table("cram_sessions").insert({
@@ -328,6 +486,7 @@ async def create_session(
             "title":          title[:120],
             "source_type":    source_type,
             "extracted_text": extracted_text,
+            "source_url":     stored_url,
         }).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not create session: {e}")
@@ -340,42 +499,34 @@ async def get_session_messages(
     session_id: str,
     user_id:    str = Depends(get_current_user),
 ):
-    """Load last 8 messages for a session."""
     _get_cram_limits(user_id)
-    _get_session(session_id, user_id)  # verify ownership
-    messages = _load_messages(session_id)
-    return messages
+    _get_session(session_id, user_id)
+    return _load_messages(session_id)
 
 
 @router.post("/chat")
 async def study_chat(
-    session_id:   str               = Form(...),
-    message:      str               = Form(...),
-    mode:         str               = Form("chat"),
-    file:         UploadFile | None = File(None),
-    user_id:      str               = Depends(get_current_user),
+    session_id: str               = Form(...),
+    message:    str               = Form(...),
+    mode:       str               = Form("chat"),
+    file:       UploadFile | None = File(None),
+    user_id:    str               = Depends(get_current_user),
 ):
-    # ── Auth + limits ──────────────────────────────────────────────────
     limits        = _get_cram_limits(user_id)
-    allowed_modes: list = limits.get("cram_modes", [])
+    allowed_modes = limits.get("cram_modes", [])
 
     if mode not in allowed_modes:
-        raise HTTPException(
-            status_code=403,
-            detail=f"'{mode}' mode is not available on your plan."
-        )
+        raise HTTPException(status_code=403, detail=f"'{mode}' mode is not available on your plan.")
 
-    # ── Load session ───────────────────────────────────────────────────
-    session       = _get_session(session_id, user_id)
+    session        = _get_session(session_id, user_id)
     extracted_text = session.get("extracted_text")
+    source_type    = session.get("source_type", "text")
+    source_url     = session.get("source_url")
+    raw_history    = _load_messages(session_id, limit=MAX_HISTORY_MSGS)
 
-    # ── Load persisted history ─────────────────────────────────────────
-    raw_history   = _load_messages(session_id, limit=MAX_HISTORY_MSGS)
-
-    # ── Background cleanup (fire-and-forget) ───────────────────────────
     asyncio.get_event_loop().run_in_executor(None, _cleanup_old_messages)
 
-    # ── Handle image file (re-upload needed for images) ────────────────
+    # ── Image handling ─────────────────────────────────────────────────
     is_image   = False
     image_b64  = ""
     image_mime = ""
@@ -383,67 +534,102 @@ async def study_chat(
     if file and file.filename:
         file_bytes = await file.read()
         mime       = file.content_type or ""
-        fname      = file.filename.lower()
-        if mime.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        if mime.startswith("image/") or file.filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
             is_image   = True
             image_b64  = base64.b64encode(file_bytes).decode()
             image_mime = mime or "image/jpeg"
 
+    # ── History text (for Gemini context) ─────────────────────────────
+    history_text = "\n".join(
+        f"{'Student' if m['role'] == 'user' else 'SparkL Cram'}: {m['content']}"
+        for m in raw_history
+    )
+
     # ── Mode prefix ────────────────────────────────────────────────────
     mode_prefix = {
-        "quiz":    "Generate 5 practice questions (mix MCQ and theory) from the notes below. For MCQ include options A–D and the correct answer.",
-        "summary": "Summarise the key points from the notes below in clear bullet points. Group by topic.",
-        "explain": "Explain the main concepts from the notes below simply, as if teaching a student seeing this topic for the first time.",
+        "summary": "Summarise the key points from the notes below in clear bullet points grouped by topic.",
+        "explain": "Explain the main concepts from the notes below simply, as if teaching a student seeing this for the first time.",
         "chat":    "",
+        "quiz":    "",
     }.get(mode, "")
 
     full_message = f"{mode_prefix}\n\n{message}".strip() if mode_prefix else message
 
+    # ── Quiz mode — return JSON, not a stream ──────────────────────────
+    if mode == "quiz":
+        context = extracted_text or ""
+        groq_quiz_messages = [
+            {"role": "system", "content": QUIZ_SYSTEM_PROMPT},
+            {"role": "user",   "content": f"Generate a quiz from these notes:\n\n{_build_context_block(context, session['title'])}"},
+        ]
+        try:
+            quiz_data = await _generate_quiz_with_fallback(
+                context     = context,
+                groq_msgs   = groq_quiz_messages,
+                source_type = source_type,
+                image_b64   = image_b64,
+                mime_type   = image_mime,
+                url         = source_url or "",
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Quiz generation failed: {e}")
+
+        # Save quiz as a message pair
+        _save_messages(session_id, user_id, [
+            {"role": "user",      "content": "[Quiz requested]"},
+            {"role": "assistant", "content": f"__QUIZ__:{json.dumps(quiz_data)}"},
+        ])
+
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"type": "quiz", "data": quiz_data})
+
     # ── Save user message ──────────────────────────────────────────────
     _save_messages(session_id, user_id, [{"role": "user", "content": full_message}])
 
-    # ── Image path → Gemini ────────────────────────────────────────────
-    if is_image:
-        history_text = "\n".join(
-            f"{'Student' if m['role'] == 'user' else 'SparkL Cram'}: {m['content']}"
-            for m in raw_history
-        )
-
-        async def gemini_stream_and_save():
+    # ── Image → Gemini ─────────────────────────────────────────────────
+    if is_image or source_type == "image":
+        async def gemini_image_stream():
             ai_text = ""
             async for chunk in _stream_gemini_image(image_b64, image_mime, full_message, history_text):
                 ai_text += chunk
                 yield chunk
             _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
 
-        return StreamingResponse(gemini_stream_and_save(), media_type="text/plain")
+        return StreamingResponse(gemini_image_stream(), media_type="text/plain")
 
-    # ── Text path → Groq ───────────────────────────────────────────────
-    context_block = (
-        _build_context_block(extracted_text, session["title"])
-        if extracted_text else ""
-    )
+    # ── URL → Gemini ───────────────────────────────────────────────────
+    if source_type == "url" and source_url:
+        async def gemini_url_stream():
+            ai_text = ""
+            async for chunk in _stream_gemini_url(source_url, full_message, history_text):
+                ai_text += chunk
+                yield chunk
+            _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
 
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        return StreamingResponse(gemini_url_stream(), media_type="text/plain")
 
+    # ── Text/PDF/DOCX → Groq with Gemini fallback ─────────────────────
+    context_block = _build_context_block(extracted_text, session["title"]) if extracted_text else ""
+
+    groq_messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     if context_block:
-        messages.append({"role": "user",      "content": f"Here are my study notes:\n\n{context_block}"})
-        messages.append({"role": "assistant", "content": "Got it! I've read through your notes. What would you like to do — ask questions, get a summary, practice quiz, or have me explain something?"})
-
+        groq_messages.append({"role": "user",      "content": f"Here are my study notes:\n\n{context_block}"})
+        groq_messages.append({"role": "assistant", "content": "Got it! I've read through your notes. What would you like to do?"})
     for m in raw_history:
         if m.get("role") in ("user", "assistant") and m.get("content"):
-            messages.append({"role": m["role"], "content": m["content"]})
+            groq_messages.append({"role": m["role"], "content": m["content"]})
+    groq_messages.append({"role": "user", "content": full_message})
 
-    messages.append({"role": "user", "content": full_message})
+    gemini_prompt = f"{context_block}\n\n{full_message}" if context_block else full_message
 
-    async def groq_stream_and_save():
+    async def text_stream():
         ai_text = ""
-        async for chunk in _stream_groq(messages):
+        async for chunk in _stream_text_with_fallback(groq_messages, gemini_prompt, history_text):
             ai_text += chunk
             yield chunk
         _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
 
-    return StreamingResponse(groq_stream_and_save(), media_type="text/plain")
+    return StreamingResponse(text_stream(), media_type="text/plain")
 
 
 @router.get("/limits")
@@ -483,7 +669,6 @@ async def delete_session(
 ):
     _get_cram_limits(user_id)
     try:
-        # Messages cascade-delete via FK
         supabase.table("cram_sessions").delete().eq("id", session_id).eq("user_id", user_id).execute()
         return {"deleted": True}
     except Exception as e:
