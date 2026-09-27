@@ -271,33 +271,45 @@ async def _stream_gemini_image(
 async def _fetch_url_content(url: str) -> str:
     """
     Fetch a web page or YouTube transcript and return as plain text.
-    For YouTube URLs, extracts the video ID and gets transcript via a
-    simple scrape. For regular URLs, fetches and strips HTML.
+    For YouTube URLs, uses youtube-transcript-api to get the transcript.
+    For regular URLs, fetches and strips HTML.
     """
     import re
     import httpx
 
     is_youtube = bool(re.search(r"(youtube\.com/watch|youtu\.be/)", url))
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; SparkLCram/1.0)"
-    }
+    if is_youtube:
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            vid_match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
+            if not vid_match:
+                raise HTTPException(status_code=422, detail="Could not extract YouTube video ID.")
+            video_id  = vid_match.group(1)
+            transcript = YouTubeTranscriptApi.get_transcript(video_id)
+            text = " ".join(entry["text"] for entry in transcript)
+            if len(text) > 10_000:
+                text = text[:10_000] + "\n\n...[transcript truncated]..."
+            return text
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Could not get YouTube transcript: {e}")
 
+    # Regular web URL — fetch and strip HTML
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; SparkLCram/1.0)"}
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         resp = await client.get(url, headers=headers)
         resp.raise_for_status()
         html = resp.text
 
-    # Strip HTML tags simply
     clean = re.sub(r"<style[^>]*>.*?</style>", " ", html, flags=re.DOTALL)
     clean = re.sub(r"<script[^>]*>.*?</script>", " ", clean, flags=re.DOTALL)
     clean = re.sub(r"<[^>]+>", " ", clean)
     clean = re.sub(r"\s{2,}", " ", clean).strip()
 
-    # Limit to avoid token overflow
-    max_chars = 10_000
-    if len(clean) > max_chars:
-        clean = clean[:max_chars] + "\n\n...[content truncated]..."
+    if len(clean) > 10_000:
+        clean = clean[:10_000] + "\n\n...[content truncated]..."
 
     if not clean or len(clean) < 50:
         raise HTTPException(
