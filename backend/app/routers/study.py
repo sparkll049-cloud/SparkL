@@ -348,12 +348,26 @@ async def _fetch_url_content(url: str) -> str:
             vid_match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
             if not vid_match:
                 raise HTTPException(status_code=422, detail="Could not extract YouTube video ID.")
-            video_id  = vid_match.group(1)
-            loop      = asyncio.get_event_loop()
-            transcript = await loop.run_in_executor(
-                None, partial(YouTubeTranscriptApi.get_transcript, video_id)
-            )
-            text = " ".join(entry["text"] for entry in transcript)
+            video_id = vid_match.group(1)
+            loop     = asyncio.get_event_loop()
+
+            def _get_transcript():
+                """
+                Handle both youtube-transcript-api v0.x and v1.x.
+                v0.x: YouTubeTranscriptApi.get_transcript(video_id)  → list[dict]
+                v1.x: YouTubeTranscriptApi().fetch(video_id)         → FetchedTranscript
+                      Each snippet has .text (not ["text"]).
+                """
+                api = YouTubeTranscriptApi()
+                # v1.x instance API
+                if hasattr(api, "fetch"):
+                    snippets = api.fetch(video_id)
+                    return " ".join(s.text for s in snippets)
+                # v0.x class-method API
+                entries = YouTubeTranscriptApi.get_transcript(video_id)
+                return " ".join(e["text"] for e in entries)
+
+            text = await loop.run_in_executor(None, _get_transcript)
             if len(text) > 10_000:
                 text = text[:10_000] + "\n\n...[transcript truncated]..."
             return text
