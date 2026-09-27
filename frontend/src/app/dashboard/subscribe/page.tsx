@@ -57,6 +57,14 @@ const PLANS = [
 
 const PAID_PLANS = ["basic", "pro", "premium"];
 
+declare global {
+  interface Window {
+    PaystackPop: {
+      setup: (options: Record<string, unknown>) => { openIframe: () => void };
+    };
+  }
+}
+
 function SubscribePageInner() {
   const supabase = createClient();
   const router = useRouter();
@@ -72,6 +80,15 @@ function SubscribePageInner() {
   const [loadingUser, setLoadingUser] = useState(true);
   const [processingPlan, setProcessingPlan] = useState<string | null>(null);
   const [error, setError] = useState("");
+
+  // Load Paystack inline script
+  useEffect(() => {
+    const script = document.createElement("script");
+    script.src = "https://js.paystack.co/v1/inline.js";
+    script.async = true;
+    document.body.appendChild(script);
+    return () => { document.body.removeChild(script); };
+  }, []);
 
   useEffect(() => {
     async function loadUser() {
@@ -124,7 +141,7 @@ function SubscribePageInner() {
       const { data: { session } } = await supabase.auth.refreshSession();
       if (!session) { router.push("/auth/login"); return; }
 
-      // Step 1 — create transaction reference on our backend
+      // Step 1 — create transaction reference on backend
       const initiateRes = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`,
         {
@@ -143,48 +160,54 @@ function SubscribePageInner() {
       }
 
       const { reference: ourReference } = await initiateRes.json();
+      const accessToken = session.access_token;
 
-      // Step 2 — initialize checkout via our proxy (avoids CORS)
-      const checkoutRes = await fetch("/api/payments/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customer_email: user.email,
-          customer_name: user.name,
-          customer_phone_number: user.phone || "08000000000",
-          amount: String(amount),
-          currency: "NGN",
-          reference: ourReference,
-          channels: ["BANK_TRANSFER", "CARD"],
-          metadata: { plan: planSlug, user_email: user.email },
-        }),
+      // Step 2 — open Paystack inline popup
+      const handler = window.PaystackPop.setup({
+        key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY!,
+        email: user.email,
+        amount: amount * 100, // Paystack uses kobo
+        currency: "NGN",
+        ref: ourReference,
+        metadata: {
+          custom_fields: [
+            { display_name: "Plan", variable_name: "plan", value: planSlug },
+            { display_name: "Name", variable_name: "name", value: user.name },
+          ],
+        },
+        onClose: () => {
+          setProcessingPlan(null);
+        },
+        callback: async (response: { reference: string }) => {
+          console.log("[Paystack callback]", response);
+          try {
+            // Step 3 — verify payment via our Next.js proxy
+            const res = await fetch("/api/payments/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                reference: response.reference,
+                our_reference: ourReference,
+                access_token: accessToken,
+              }),
+            });
+
+            if (res.ok) {
+              setCurrentPlan(planSlug);
+              router.push("/dashboard/subscribe?subscribed=true");
+            } else {
+              const err = await res.json();
+              setError(err.detail ?? "Verification failed. Please contact support.");
+            }
+          } catch {
+            setError("Network error during verification. Please contact support.");
+          } finally {
+            setProcessingPlan(null);
+          }
+        },
       });
 
-      if (!checkoutRes.ok) {
-        const err = await checkoutRes.json();
-        throw new Error(err.detail ?? err.message ?? "Checkout initialization failed");
-      }
-
-      const checkoutData = await checkoutRes.json();
-      console.log("[Checkout init]", checkoutData);
-
-      // Step 3 — redirect to PayVessel checkout URL
-      const checkoutUrl =
-        checkoutData?.data?.checkout_url ||
-        checkoutData?.checkout_url ||
-        checkoutData?.url;
-
-      if (!checkoutUrl) {
-        throw new Error("No checkout URL returned from PayVessel");
-      }
-
-      // Store reference in sessionStorage so we can verify after redirect
-      sessionStorage.setItem("pv_reference", ourReference);
-      sessionStorage.setItem("pv_plan", planSlug);
-      sessionStorage.setItem("pv_access_token", session.access_token);
-
-      // Redirect to PayVessel hosted checkout page
-      window.location.href = checkoutUrl;
+      handler.openIframe();
 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -370,7 +393,7 @@ function SubscribePageInner() {
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-600">
-          Secure payments via PayVessel · Cancel anytime · NGN only
+          Secure payments via Paystack · Cancel anytime · NGN only
         </p>
 
       </div>
