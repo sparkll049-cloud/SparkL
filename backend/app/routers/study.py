@@ -6,6 +6,9 @@ SparkL Cram — AI study assistant.
 - Gemini always for images and URLs (native support)
 - Quiz mode returns structured JSON for interactive UI
 - Messages persisted, cleaned after 7 days
+
+FIX: All sync supabase calls are now wrapped in run_in_executor
+     to prevent blocking the async event loop on Render.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -54,7 +58,7 @@ GEMINI_MODEL = "gemini-2.0-flash"
 
 VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text", "url"}
 
-# ── System prompt ──────────────────────────────────────────────────────────────
+# ── System prompts ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are SparkL Cram — a smart, friendly AI tutor helping Nigerian polytechnic and university students understand their course material.
 
@@ -127,12 +131,17 @@ def _build_context_block(text: str, label: str) -> str:
     return f"=== Study Notes: {label}{note} ===\n\n{truncated}\n\n=== End ==="
 
 
-# ── DB helpers ─────────────────────────────────────────────────────────────────
+# ── DB helpers (sync internals, called via executor) ───────────────────────────
 
-def _save_messages(session_id: str, user_id: str, messages: list[dict]) -> None:
+def _sync_save_messages(session_id: str, user_id: str, messages: list[dict]) -> None:
+    """Sync supabase insert — must be called via run_in_executor."""
     rows = [
-        {"session_id": session_id, "user_id": user_id,
-         "role": m["role"], "content": m["content"]}
+        {
+            "session_id": session_id,
+            "user_id":    user_id,
+            "role":       m["role"],
+            "content":    m["content"],
+        }
         for m in messages
         if m.get("role") in ("user", "assistant") and m.get("content")
     ]
@@ -140,7 +149,8 @@ def _save_messages(session_id: str, user_id: str, messages: list[dict]) -> None:
         supabase.table("cram_messages").insert(rows).execute()
 
 
-def _load_messages(session_id: str, limit: int = MAX_HISTORY_MSGS) -> list[dict]:
+def _sync_load_messages(session_id: str, limit: int = MAX_HISTORY_MSGS) -> list[dict]:
+    """Sync supabase select — must be called via run_in_executor."""
     try:
         res = (
             supabase.table("cram_messages")
@@ -155,7 +165,8 @@ def _load_messages(session_id: str, limit: int = MAX_HISTORY_MSGS) -> list[dict]
         return []
 
 
-def _cleanup_old_messages() -> None:
+def _sync_cleanup_old_messages() -> None:
+    """Sync supabase delete — must be called via run_in_executor."""
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=MESSAGE_TTL_DAYS)).isoformat()
         supabase.table("cram_messages").delete().lt("created_at", cutoff).execute()
@@ -163,23 +174,80 @@ def _cleanup_old_messages() -> None:
         pass
 
 
-def _get_session(session_id: str, user_id: str) -> dict:
+def _sync_get_session(session_id: str, user_id: str) -> dict:
+    """Sync supabase select — must be called via run_in_executor."""
+    res = (
+        supabase.table("cram_sessions")
+        .select("id, title, source_type, extracted_text, source_url")
+        .eq("id", session_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    return res.data  # None if not found
+
+
+def _sync_insert_session(row: dict) -> None:
+    supabase.table("cram_sessions").insert(row).execute()
+
+
+def _sync_count_sessions(user_id: str) -> int:
     try:
         res = (
             supabase.table("cram_sessions")
-            .select("id, title, source_type, extracted_text, source_url")
-            .eq("id", session_id)
+            .select("id", count="exact")
             .eq("user_id", user_id)
-            .maybe_single()
             .execute()
         )
-        if not res.data:
-            raise HTTPException(status_code=404, detail="Session not found.")
-        return res.data
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return res.count or 0
+    except Exception:
+        return 0
+
+
+def _sync_list_sessions(user_id: str) -> list[dict]:
+    res = (
+        supabase.table("cram_sessions")
+        .select("id, title, source_type, created_at")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(20)
+        .execute()
+    )
+    return res.data or []
+
+
+def _sync_delete_session(session_id: str, user_id: str) -> None:
+    supabase.table("cram_sessions").delete().eq("id", session_id).eq("user_id", user_id).execute()
+
+
+# ── Async wrappers ─────────────────────────────────────────────────────────────
+
+async def _save_messages(session_id: str, user_id: str, messages: list[dict]) -> None:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, partial(_sync_save_messages, session_id, user_id, messages))
+
+
+async def _load_messages(session_id: str, limit: int = MAX_HISTORY_MSGS) -> list[dict]:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(_sync_load_messages, session_id, limit))
+
+
+async def _cleanup_old_messages() -> None:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _sync_cleanup_old_messages)
+
+
+async def _get_session(session_id: str, user_id: str) -> dict:
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(None, partial(_sync_get_session, session_id, user_id))
+    if not data:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return data
+
+
+async def _count_user_sessions(user_id: str) -> int:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(_sync_count_sessions, user_id))
 
 
 # ── Gemini client ──────────────────────────────────────────────────────────────
@@ -269,11 +337,6 @@ async def _stream_gemini_image(
 # ── URL content fetcher ────────────────────────────────────────────────────────
 
 async def _fetch_url_content(url: str) -> str:
-    """
-    Fetch a web page or YouTube transcript and return as plain text.
-    For YouTube URLs, uses youtube-transcript-api to get the transcript.
-    For regular URLs, fetches and strips HTML.
-    """
     import re
     import httpx
 
@@ -286,7 +349,10 @@ async def _fetch_url_content(url: str) -> str:
             if not vid_match:
                 raise HTTPException(status_code=422, detail="Could not extract YouTube video ID.")
             video_id  = vid_match.group(1)
-            transcript = YouTubeTranscriptApi.get_transcript(video_id)
+            loop      = asyncio.get_event_loop()
+            transcript = await loop.run_in_executor(
+                None, partial(YouTubeTranscriptApi.get_transcript, video_id)
+            )
             text = " ".join(entry["text"] for entry in transcript)
             if len(text) > 10_000:
                 text = text[:10_000] + "\n\n...[transcript truncated]..."
@@ -296,7 +362,6 @@ async def _fetch_url_content(url: str) -> str:
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Could not get YouTube transcript: {e}")
 
-    # Regular web URL — fetch and strip HTML
     headers = {"User-Agent": "Mozilla/5.0 (compatible; SparkLCram/1.0)"}
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         resp = await client.get(url, headers=headers)
@@ -316,7 +381,6 @@ async def _fetch_url_content(url: str) -> str:
             status_code=422,
             detail="Could not extract readable content from this URL. Try pasting the text directly instead."
         )
-
     return clean
 
 
@@ -327,7 +391,6 @@ async def _stream_gemini_url(
     prompt: str,
     history_text: str = "",
 ) -> AsyncGenerator[str, None]:
-    # Fetch URL content as plain text first
     try:
         page_content = await _fetch_url_content(url)
     except HTTPException:
@@ -335,8 +398,8 @@ async def _stream_gemini_url(
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Could not fetch URL: {e}")
 
-    client = _get_gemini_client()
-    full   = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
+    client  = _get_gemini_client()
+    full    = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
     context = f"=== Content from {url} ===\n\n{page_content}\n\n=== End ==="
 
     async for chunk in await client.aio.models.generate_content_stream(
@@ -490,19 +553,6 @@ def _get_cram_limits(user_id: str) -> dict:
     return limits
 
 
-def _count_user_sessions(user_id: str) -> int:
-    try:
-        res = (
-            supabase.table("cram_sessions")
-            .select("id", count="exact")
-            .eq("user_id", user_id)
-            .execute()
-        )
-        return res.count or 0
-    except Exception:
-        return 0
-
-
 # ── Models ─────────────────────────────────────────────────────────────────────
 
 class CramSessionRow(BaseModel):
@@ -529,7 +579,8 @@ async def create_session(
 
     max_sessions = limits.get("cram_max_sessions")
     if max_sessions is not None:
-        if _count_user_sessions(user_id) >= max_sessions:
+        session_count = await _count_user_sessions(user_id)
+        if session_count >= max_sessions:
             raise HTTPException(
                 status_code=403,
                 detail=f"Pro plan allows {max_sessions} Cram sessions. Upgrade to Premium for unlimited."
@@ -564,15 +615,19 @@ async def create_session(
         extracted_text = text_content
 
     session_id = str(uuid.uuid4())
+    loop = asyncio.get_event_loop()
     try:
-        supabase.table("cram_sessions").insert({
-            "id":             session_id,
-            "user_id":        user_id,
-            "title":          title[:120],
-            "source_type":    source_type,
-            "extracted_text": extracted_text,
-            "source_url":     stored_url,
-        }).execute()
+        await loop.run_in_executor(None, partial(
+            _sync_insert_session,
+            {
+                "id":             session_id,
+                "user_id":        user_id,
+                "title":          title[:120],
+                "source_type":    source_type,
+                "extracted_text": extracted_text,
+                "source_url":     stored_url,
+            }
+        ))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not create session: {e}")
 
@@ -585,8 +640,8 @@ async def get_session_messages(
     user_id:    str = Depends(get_current_user),
 ):
     _get_cram_limits(user_id)
-    _get_session(session_id, user_id)
-    return _load_messages(session_id)
+    await _get_session(session_id, user_id)
+    return await _load_messages(session_id)
 
 
 @router.post("/chat")
@@ -603,13 +658,14 @@ async def study_chat(
     if mode not in allowed_modes:
         raise HTTPException(status_code=403, detail=f"'{mode}' mode is not available on your plan.")
 
-    session        = _get_session(session_id, user_id)
+    session        = await _get_session(session_id, user_id)
     extracted_text = session.get("extracted_text")
     source_type    = session.get("source_type", "text")
     source_url     = session.get("source_url")
-    raw_history    = _load_messages(session_id, limit=MAX_HISTORY_MSGS)
+    raw_history    = await _load_messages(session_id, limit=MAX_HISTORY_MSGS)
 
-    asyncio.get_event_loop().run_in_executor(None, _cleanup_old_messages)
+    # Fire-and-forget cleanup (non-blocking)
+    asyncio.create_task(_cleanup_old_messages())
 
     # ── Image handling ─────────────────────────────────────────────────
     is_image   = False
@@ -659,7 +715,7 @@ async def study_chat(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Quiz generation failed: {e}")
 
-        _save_messages(session_id, user_id, [
+        await _save_messages(session_id, user_id, [
             {"role": "user",      "content": "[Quiz requested]"},
             {"role": "assistant", "content": f"__QUIZ__:{json.dumps(quiz_data)}"},
         ])
@@ -668,7 +724,7 @@ async def study_chat(
         return JSONResponse({"type": "quiz", "data": quiz_data})
 
     # ── Save user message ──────────────────────────────────────────────
-    _save_messages(session_id, user_id, [{"role": "user", "content": full_message}])
+    await _save_messages(session_id, user_id, [{"role": "user", "content": full_message}])
 
     # ── Image → Gemini ─────────────────────────────────────────────────
     if is_image or source_type == "image":
@@ -677,7 +733,7 @@ async def study_chat(
             async for chunk in _stream_gemini_image(image_b64, image_mime, full_message, history_text):
                 ai_text += chunk
                 yield chunk
-            _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
+            await _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
 
         return StreamingResponse(gemini_image_stream(), media_type="text/plain")
 
@@ -688,7 +744,7 @@ async def study_chat(
             async for chunk in _stream_gemini_url(source_url, full_message, history_text):
                 ai_text += chunk
                 yield chunk
-            _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
+            await _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
 
         return StreamingResponse(gemini_url_stream(), media_type="text/plain")
 
@@ -711,7 +767,7 @@ async def study_chat(
         async for chunk in _stream_text_with_fallback(groq_messages, gemini_prompt, history_text):
             ai_text += chunk
             yield chunk
-        _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
+        await _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
 
     return StreamingResponse(text_stream(), media_type="text/plain")
 
@@ -719,7 +775,7 @@ async def study_chat(
 @router.get("/limits")
 async def get_cram_limits(user_id: str = Depends(get_current_user)):
     limits        = get_user_limits(user_id)
-    session_count = _count_user_sessions(user_id) if limits.get("cram_access") else 0
+    session_count = await _count_user_sessions(user_id) if limits.get("cram_access") else 0
     return {
         "plan":              limits.get("plan", "free"),
         "cram_access":       limits.get("cram_access", False),
@@ -732,16 +788,10 @@ async def get_cram_limits(user_id: str = Depends(get_current_user)):
 @router.get("/sessions")
 async def list_sessions(user_id: str = Depends(get_current_user)):
     _get_cram_limits(user_id)
+    loop = asyncio.get_event_loop()
     try:
-        res = (
-            supabase.table("cram_sessions")
-            .select("id, title, source_type, created_at")
-            .eq("user_id", user_id)
-            .order("created_at", desc=True)
-            .limit(20)
-            .execute()
-        )
-        return res.data or []
+        data = await loop.run_in_executor(None, partial(_sync_list_sessions, user_id))
+        return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -752,8 +802,9 @@ async def delete_session(
     user_id:    str = Depends(get_current_user),
 ):
     _get_cram_limits(user_id)
+    loop = asyncio.get_event_loop()
     try:
-        supabase.table("cram_sessions").delete().eq("id", session_id).eq("user_id", user_id).execute()
+        await loop.run_in_executor(None, partial(_sync_delete_session, session_id, user_id))
         return {"deleted": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
