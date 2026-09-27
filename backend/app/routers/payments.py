@@ -12,10 +12,8 @@ from app.services.subscription import get_plan_limits
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
-PAYVESSEL_API_KEY = os.getenv("PAYVESSEL_API_KEY")
-PAYVESSEL_API_SECRET = os.getenv("PAYVESSEL_SECRET_KEY")
-PAYVESSEL_BASE_URL = os.getenv("PAYVESSEL_BASE_URL", "https://sandbox.payvessel.com")
-PAYVESSEL_VERIFY_URL = PAYVESSEL_BASE_URL + "/pms/transactions/{reference}/confirm/"
+PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
+PAYSTACK_VERIFY_URL = "https://api.paystack.co/transaction/verify/{reference}"
 
 
 # ─── POST /api/payments/initiate ────────────────────────────────────────────
@@ -50,7 +48,7 @@ async def initiate_payment(
     supabase.table("payment_transactions").insert({
         "user_id": user_id,
         "plan": plan_slug,
-        "gateway": "payvessel",
+        "gateway": "paystack",
         "gateway_ref": reference,
         "amount_kobo": plan["price_kobo"],
         "currency": plan["currency"],
@@ -76,8 +74,7 @@ async def verify_payment(
 ):
     reference = body.get("reference")
     our_reference = body.get("our_reference", reference)
-    # pv_data forwarded by the Next.js proxy — if present, skip re-calling PayVessel
-    pv_data_from_proxy: dict | None = body.get("pv_data")
+    ps_data: dict | None = body.get("ps_data")  # Paystack data forwarded by Next.js proxy
 
     if not reference:
         raise HTTPException(status_code=400, detail="Reference is required")
@@ -106,65 +103,49 @@ async def verify_payment(
     if txn["status"] == "success":
         return {"status": "already_verified", "message": "Subscription already active"}
 
-    # ── Get PayVessel data ───────────────────────────────────────────────────
-    if pv_data_from_proxy:
-        pv_data = pv_data_from_proxy
-        print(f"[Verify] Using pv_data from proxy for ref={reference}")
+    # ── Get Paystack data ────────────────────────────────────────────────────
+    if ps_data:
+        print(f"[Verify] Using ps_data from proxy for ref={reference}")
     else:
-        pv_res_raw = None
+        # Fallback: verify directly from backend
         try:
             async with httpx.AsyncClient() as client:
-                pv_res_raw = await client.get(
-                    PAYVESSEL_VERIFY_URL.format(reference=reference),
+                ps_res = await client.get(
+                    PAYSTACK_VERIFY_URL.format(reference=reference),
                     headers={
-                        "api-key": PAYVESSEL_API_KEY,
-                        "api-secret": PAYVESSEL_API_SECRET,
+                        "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
                         "Content-Type": "application/json",
                     },
                     timeout=15.0,
                 )
-            print(f"[PayVessel direct] status={pv_res_raw.status_code} body={pv_res_raw.text}")
-
-            if pv_res_raw.status_code == 503:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Payment gateway is temporarily unavailable. Your payment was received — please contact support.",
-                )
-
-            pv_data = pv_res_raw.json()
-        except HTTPException:
-            raise
+            print(f"[Paystack direct] status={ps_res.status_code} body={ps_res.text}")
+            ps_json = ps_res.json()
+            ps_data = ps_json.get("data", {})
         except Exception as e:
-            print(f"[PayVessel direct error] {str(e)}")
-            raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
+            print(f"[Paystack direct error] {str(e)}")
+            raise HTTPException(status_code=502, detail=f"Could not reach Paystack: {str(e)}")
 
     # ── Parse status ─────────────────────────────────────────────────────────
-    pv_status = (
-        pv_data.get("data", {}).get("status")
-        or pv_data.get("status")
-        or ""
-    )
-    pv_amount = (
-        pv_data.get("data", {}).get("amount")
-        or pv_data.get("amount")
-    )
+    ps_status = str(ps_data.get("status", "")).lower()
+    ps_amount = ps_data.get("amount")  # Paystack returns amount in kobo already
 
-    print(f"[Verify] pv_status={pv_status} normalized={str(pv_status).upper()}")
+    print(f"[Verify] ps_status={ps_status}")
 
-    if not pv_status or str(pv_status).upper() not in ("SUCCESS", "SUCCESSFUL"):
+    if ps_status != "success":
         supabase.table("payment_transactions").update({
             "status": "failed",
-            "failed_reason": f"PayVessel status: {pv_status}",
+            "failed_reason": f"Paystack status: {ps_status}",
         }).eq("gateway_ref", txn["gateway_ref"]).execute()
-        raise HTTPException(status_code=400, detail=f"Payment not successful: {pv_status}")
+        raise HTTPException(status_code=400, detail=f"Payment not successful: {ps_status}")
 
-    if pv_amount:
+    # ── Amount check ─────────────────────────────────────────────────────────
+    if ps_amount:
         try:
-            pv_amount_kobo = int(float(pv_amount) * 100)
-            if pv_amount_kobo != txn["amount_kobo"]:
+            ps_amount_kobo = int(ps_amount)
+            if ps_amount_kobo != txn["amount_kobo"]:
                 supabase.table("payment_transactions").update({
                     "status": "failed",
-                    "failed_reason": f"Amount mismatch: got {pv_amount_kobo} kobo, expected {txn['amount_kobo']} kobo",
+                    "failed_reason": f"Amount mismatch: got {ps_amount_kobo} kobo, expected {txn['amount_kobo']} kobo",
                 }).eq("gateway_ref", txn["gateway_ref"]).execute()
                 raise HTTPException(status_code=400, detail="Amount mismatch")
         except (ValueError, TypeError):
@@ -173,7 +154,7 @@ async def verify_payment(
     return await _activate_subscription(
         user_id=user_id,
         plan_slug=txn["plan"],
-        pv_data=pv_data,
+        ps_data=ps_data,
         reference=txn["gateway_ref"],
     )
 
@@ -210,7 +191,7 @@ async def admin_grant_subscription(
     supabase.table("payment_transactions").insert({
         "user_id": target_user_id,
         "plan": plan_slug,
-        "gateway": "payvessel",
+        "gateway": "paystack",
         "gateway_ref": reference,
         "amount_kobo": 0,
         "currency": "NGN",
@@ -220,7 +201,7 @@ async def admin_grant_subscription(
     result = await _activate_subscription(
         user_id=target_user_id,
         plan_slug=plan_slug,
-        pv_data={"manual_grant": True, "note": note, "granted_by": admin_id},
+        ps_data={"manual_grant": True, "note": note, "granted_by": admin_id},
         reference=reference,
     )
 
@@ -233,7 +214,7 @@ async def admin_grant_subscription(
 async def _activate_subscription(
     user_id: str,
     plan_slug: str,
-    pv_data: dict,
+    ps_data: dict,
     reference: str,
 ) -> dict:
     plan_res = (
@@ -299,7 +280,7 @@ async def _activate_subscription(
         "status": "success",
         "paid_at": now.isoformat(),
         "subscription_id": subscription_id,
-        "gateway_payload": pv_data,
+        "gateway_payload": ps_data,
     }).eq("gateway_ref", reference).execute()
 
     profile_update = supabase.table("profiles").update({
