@@ -121,13 +121,7 @@ export default function Navbar() {
               ))}
 
               <div className="mt-5 grid grid-cols-2 gap-3">
-                <Link
-                  href="/auth"
-                  onClick={closeMenu}
-                  className="flex items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-                >
-                  Sign In
-                </Link>
+                
 
                 <Link
                   href="/auth"
