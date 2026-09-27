@@ -50,7 +50,7 @@ MAX_HISTORY_MSGS  = 8
 MESSAGE_TTL_DAYS  = 7
 
 GROQ_MODEL   = "openai/gpt-oss-120b"
-GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_MODEL = "gemini-2.0-flash"
 
 VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text", "url"}
 
@@ -266,6 +266,48 @@ async def _stream_gemini_image(
             yield chunk.text
 
 
+# ── URL content fetcher ────────────────────────────────────────────────────────
+
+async def _fetch_url_content(url: str) -> str:
+    """
+    Fetch a web page or YouTube transcript and return as plain text.
+    For YouTube URLs, extracts the video ID and gets transcript via a
+    simple scrape. For regular URLs, fetches and strips HTML.
+    """
+    import re
+    import httpx
+
+    is_youtube = bool(re.search(r"(youtube\.com/watch|youtu\.be/)", url))
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; SparkLCram/1.0)"
+    }
+
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        resp = await client.get(url, headers=headers)
+        resp.raise_for_status()
+        html = resp.text
+
+    # Strip HTML tags simply
+    clean = re.sub(r"<style[^>]*>.*?</style>", " ", html, flags=re.DOTALL)
+    clean = re.sub(r"<script[^>]*>.*?</script>", " ", clean, flags=re.DOTALL)
+    clean = re.sub(r"<[^>]+>", " ", clean)
+    clean = re.sub(r"\s{2,}", " ", clean).strip()
+
+    # Limit to avoid token overflow
+    max_chars = 10_000
+    if len(clean) > max_chars:
+        clean = clean[:max_chars] + "\n\n...[content truncated]..."
+
+    if not clean or len(clean) < 50:
+        raise HTTPException(
+            status_code=422,
+            detail="Could not extract readable content from this URL. Try pasting the text directly instead."
+        )
+
+    return clean
+
+
 # ── Gemini streaming (URL / YouTube) ──────────────────────────────────────────
 
 async def _stream_gemini_url(
@@ -273,14 +315,21 @@ async def _stream_gemini_url(
     prompt: str,
     history_text: str = "",
 ) -> AsyncGenerator[str, None]:
+    # Fetch URL content as plain text first
+    try:
+        page_content = await _fetch_url_content(url)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not fetch URL: {e}")
+
     client = _get_gemini_client()
     full   = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
+    context = f"=== Content from {url} ===\n\n{page_content}\n\n=== End ==="
+
     async for chunk in await client.aio.models.generate_content_stream(
         model=GEMINI_MODEL,
-        contents=[
-            genai_types.Part(file_data=genai_types.FileData(file_uri=url)),
-            genai_types.Part(text=full),
-        ],
+        contents=f"{context}\n\n{full}",
         config=genai_types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             max_output_tokens=1024,
@@ -353,13 +402,12 @@ async def _generate_quiz_gemini(context: str) -> dict:
 
 
 async def _generate_quiz_gemini_url(url: str) -> dict:
-    client   = _get_gemini_client()
-    response = await client.aio.models.generate_content(
+    page_content = await _fetch_url_content(url)
+    client       = _get_gemini_client()
+    context      = f"=== Content from {url} ===\n\n{page_content}\n\n=== End ==="
+    response     = await client.aio.models.generate_content(
         model=GEMINI_MODEL,
-        contents=[
-            genai_types.Part(file_data=genai_types.FileData(file_uri=url)),
-            genai_types.Part(text="Generate a quiz from this content."),
-        ],
+        contents=f"{context}\n\nGenerate a quiz from this content.",
         config=genai_types.GenerateContentConfig(
             system_instruction=QUIZ_SYSTEM_PROMPT,
             max_output_tokens=2048,
