@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
     }
 
     const res = await fetch(
-      `${process.env.API_URL}/api/payments/webhook`,
+      `${process.env.NEXT_PUBLIC_API_URL}/api/payments/webhook`,
       {
         method: "POST",
         headers: {
