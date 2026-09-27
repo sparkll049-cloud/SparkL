@@ -33,9 +33,11 @@ except ImportError:
     AsyncGroq = None
 
 try:
-    import google.generativeai as genai
+    from google import genai as genai_sdk
+    from google.genai import types as genai_types
 except ImportError:
-    genai = None
+    genai_sdk = None
+    genai_types = None
 
 router = APIRouter(prefix="/api/study", tags=["study"])
 
@@ -48,7 +50,7 @@ MAX_HISTORY_MSGS  = 8
 MESSAGE_TTL_DAYS  = 7
 
 GROQ_MODEL   = "openai/gpt-oss-120b"
-GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_MODEL = "gemini-2.0-flash"
 
 VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text", "url"}
 
@@ -182,14 +184,13 @@ def _get_session(session_id: str, user_id: str) -> dict:
 
 # ── Gemini client ──────────────────────────────────────────────────────────────
 
-def _get_gemini_model(system: str = SYSTEM_PROMPT):
-    if genai is None:
-        raise HTTPException(status_code=500, detail="google-generativeai not installed.")
+def _get_gemini_client():
+    if genai_sdk is None:
+        raise HTTPException(status_code=500, detail="google-genai not installed.")
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not set.")
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=system)
+    return genai_sdk.Client(api_key=api_key)
 
 
 # ── Groq streaming ─────────────────────────────────────────────────────────────
@@ -221,19 +222,19 @@ async def _stream_gemini_text(
     history_text: str = "",
     system: str = SYSTEM_PROMPT,
 ) -> AsyncGenerator[str, None]:
-    model    = _get_gemini_model(system)
-    full     = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
-    response = await model.generate_content_async(
-        full,
-        stream=True,
-        generation_config={"max_output_tokens": 1024, "temperature": 0.4},
-    )
-    async for chunk in response:
-        try:
-            if chunk.text:
-                yield chunk.text
-        except Exception:
-            pass
+    client = _get_gemini_client()
+    full   = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
+    async for chunk in await client.aio.models.generate_content_stream(
+        model=GEMINI_MODEL,
+        contents=full,
+        config=genai_types.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=1024,
+            temperature=0.4,
+        ),
+    ):
+        if chunk.text:
+            yield chunk.text
 
 
 # ── Gemini streaming (image) ───────────────────────────────────────────────────
@@ -244,21 +245,25 @@ async def _stream_gemini_image(
     prompt: str,
     history_text: str = "",
 ) -> AsyncGenerator[str, None]:
-    model      = _get_gemini_model()
-    image_data = base64.b64decode(image_b64)
-    image_part = {"mime_type": mime_type, "data": image_data}
+    client     = _get_gemini_client()
     full       = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
-    response   = await model.generate_content_async(
-        [image_part, full],
-        stream=True,
-        generation_config={"max_output_tokens": 1024, "temperature": 0.4},
-    )
-    async for chunk in response:
-        try:
-            if chunk.text:
-                yield chunk.text
-        except Exception:
-            pass
+    image_data = base64.b64decode(image_b64)
+    async for chunk in await client.aio.models.generate_content_stream(
+        model=GEMINI_MODEL,
+        contents=[
+            genai_types.Part(
+                inline_data=genai_types.Blob(mime_type=mime_type, data=image_data)
+            ),
+            genai_types.Part(text=full),
+        ],
+        config=genai_types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            max_output_tokens=1024,
+            temperature=0.4,
+        ),
+    ):
+        if chunk.text:
+            yield chunk.text
 
 
 # ── Gemini streaming (URL / YouTube) ──────────────────────────────────────────
@@ -268,20 +273,22 @@ async def _stream_gemini_url(
     prompt: str,
     history_text: str = "",
 ) -> AsyncGenerator[str, None]:
-    model    = _get_gemini_model()
-    url_part = {"url": url}
-    full     = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
-    response = await model.generate_content_async(
-        [url_part, full],
-        stream=True,
-        generation_config={"max_output_tokens": 1024, "temperature": 0.4},
-    )
-    async for chunk in response:
-        try:
-            if chunk.text:
-                yield chunk.text
-        except Exception:
-            pass
+    client = _get_gemini_client()
+    full   = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
+    async for chunk in await client.aio.models.generate_content_stream(
+        model=GEMINI_MODEL,
+        contents=[
+            genai_types.Part(file_data=genai_types.FileData(file_uri=url)),
+            genai_types.Part(text=full),
+        ],
+        config=genai_types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            max_output_tokens=1024,
+            temperature=0.4,
+        ),
+    ):
+        if chunk.text:
+            yield chunk.text
 
 
 # ── Groq → Gemini fallback for text ───────────────────────────────────────────
@@ -291,7 +298,6 @@ async def _stream_text_with_fallback(
     gemini_prompt: str,
     history_text:  str,
 ) -> AsyncGenerator[str, None]:
-    """Try Groq first; if it errors, fall back to Gemini silently."""
     try:
         got_any = False
         async for chunk in _stream_groq(groq_messages):
@@ -302,7 +308,6 @@ async def _stream_text_with_fallback(
     except Exception as e:
         print(f"[Groq failed, falling back to Gemini] {e}")
 
-    # Gemini fallback
     async for chunk in _stream_gemini_text(gemini_prompt, history_text):
         yield chunk
 
@@ -329,13 +334,17 @@ async def _generate_quiz_groq(messages: list[dict]) -> dict:
 
 
 async def _generate_quiz_gemini(context: str) -> dict:
-    model    = _get_gemini_model(QUIZ_SYSTEM_PROMPT)
-    response = await model.generate_content_async(
-        f"Generate a quiz from these study notes:\n\n{context}",
-        generation_config={"max_output_tokens": 2048, "temperature": 0.5},
+    client   = _get_gemini_client()
+    response = await client.aio.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=f"Generate a quiz from these study notes:\n\n{context}",
+        config=genai_types.GenerateContentConfig(
+            system_instruction=QUIZ_SYSTEM_PROMPT,
+            max_output_tokens=2048,
+            temperature=0.5,
+        ),
     )
     raw = response.text.strip()
-    # Strip markdown fences if Gemini added them anyway
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -344,10 +353,18 @@ async def _generate_quiz_gemini(context: str) -> dict:
 
 
 async def _generate_quiz_gemini_url(url: str) -> dict:
-    model    = _get_gemini_model(QUIZ_SYSTEM_PROMPT)
-    response = await model.generate_content_async(
-        [{"url": url}, "Generate a quiz from this content."],
-        generation_config={"max_output_tokens": 2048, "temperature": 0.5},
+    client   = _get_gemini_client()
+    response = await client.aio.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            genai_types.Part(file_data=genai_types.FileData(file_uri=url)),
+            genai_types.Part(text="Generate a quiz from this content."),
+        ],
+        config=genai_types.GenerateContentConfig(
+            system_instruction=QUIZ_SYSTEM_PROMPT,
+            max_output_tokens=2048,
+            temperature=0.5,
+        ),
     )
     raw = response.text.strip()
     if raw.startswith("```"):
@@ -358,11 +375,21 @@ async def _generate_quiz_gemini_url(url: str) -> dict:
 
 
 async def _generate_quiz_gemini_image(image_b64: str, mime_type: str) -> dict:
-    model      = _get_gemini_model(QUIZ_SYSTEM_PROMPT)
+    client     = _get_gemini_client()
     image_data = base64.b64decode(image_b64)
-    response   = await model.generate_content_async(
-        [{"mime_type": mime_type, "data": image_data}, "Generate a quiz from this image."],
-        generation_config={"max_output_tokens": 2048, "temperature": 0.5},
+    response   = await client.aio.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            genai_types.Part(
+                inline_data=genai_types.Blob(mime_type=mime_type, data=image_data)
+            ),
+            genai_types.Part(text="Generate a quiz from this image."),
+        ],
+        config=genai_types.GenerateContentConfig(
+            system_instruction=QUIZ_SYSTEM_PROMPT,
+            max_output_tokens=2048,
+            temperature=0.5,
+        ),
     )
     raw = response.text.strip()
     if raw.startswith("```"):
@@ -373,19 +400,17 @@ async def _generate_quiz_gemini_image(image_b64: str, mime_type: str) -> dict:
 
 
 async def _generate_quiz_with_fallback(
-    context:    str,
-    groq_msgs:  list[dict],
+    context:     str,
+    groq_msgs:   list[dict],
     source_type: str,
-    image_b64:  str = "",
-    mime_type:  str = "",
-    url:        str = "",
+    image_b64:   str = "",
+    mime_type:   str = "",
+    url:         str = "",
 ) -> dict:
-    """Try Groq first for text; Gemini for images/URLs; fallback Gemini for text."""
     if source_type == "url":
         return await _generate_quiz_gemini_url(url)
     if source_type == "image":
         return await _generate_quiz_gemini_image(image_b64, mime_type)
-    # Text/PDF/DOCX — try Groq first
     try:
         return await _generate_quiz_groq(groq_msgs)
     except Exception as e:
@@ -440,7 +465,7 @@ async def create_session(
     limits = _get_cram_limits(user_id)
 
     if source_type not in VALID_SOURCE_TYPES:
-        raise HTTPException(status_code=422, detail=f"Invalid source_type.")
+        raise HTTPException(status_code=422, detail="Invalid source_type.")
 
     max_sessions = limits.get("cram_max_sessions")
     if max_sessions is not None:
@@ -574,7 +599,6 @@ async def study_chat(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Quiz generation failed: {e}")
 
-        # Save quiz as a message pair
         _save_messages(session_id, user_id, [
             {"role": "user",      "content": "[Quiz requested]"},
             {"role": "assistant", "content": f"__QUIZ__:{json.dumps(quiz_data)}"},
