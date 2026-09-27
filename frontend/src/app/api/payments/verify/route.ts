@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const PAYVESSEL_BASE_URL =
-  process.env.PAYVESSEL_BASE_URL || "https://sandbox.payvessel.com";
-const PAYVESSEL_API_KEY = process.env.PAYVESSEL_API_KEY!;
-const PAYVESSEL_SECRET_KEY = process.env.PAYVESSEL_SECRET_KEY!;
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY!;
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL!;
 
 export async function POST(req: NextRequest) {
@@ -17,36 +14,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Step 1 — verify with PayVessel from Vercel edge (no egress issues)
-    let pvData: unknown = null;
-    try {
-      const pvRes = await fetch(
-        `${PAYVESSEL_BASE_URL}/pms/transactions/${reference}/confirm/`,
-        {
-          method: "GET",
-          headers: {
-            "api-key": PAYVESSEL_API_KEY,
-            "api-secret": PAYVESSEL_SECRET_KEY,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      console.log("[Proxy] PayVessel status:", pvRes.status);
-      pvData = await pvRes.json();
-      console.log("[Proxy] PayVessel response:", JSON.stringify(pvData));
-    } catch (pvErr) {
-      console.error("[Proxy] PayVessel call failed:", pvErr);
-      return NextResponse.json(
-        {
-          detail:
-            "Payment gateway is temporarily unavailable. Your payment was received — please contact support to activate your subscription.",
+    // Step 1 — verify with Paystack from server (no CORS issues)
+    const psRes = await fetch(
+      `https://api.paystack.co/transaction/verify/${reference}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+          "Content-Type": "application/json",
         },
-        { status: 503 }
+      }
+    );
+
+    const psData = await psRes.json();
+    console.log("[Verify] Paystack response:", JSON.stringify(psData));
+
+    if (!psRes.ok || !psData.status) {
+      return NextResponse.json(
+        { detail: psData.message ?? "Paystack verification failed" },
+        { status: 400 }
       );
     }
 
-    // Step 2 — forward result to FastAPI backend to activate subscription
+    // Step 2 — forward to FastAPI backend to activate subscription
     const backendRes = await fetch(`${BACKEND_URL}/api/payments/verify`, {
       method: "POST",
       headers: {
@@ -56,18 +46,18 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         reference,
         our_reference: our_reference ?? reference,
-        pv_data: pvData,
+        ps_data: psData.data, // pass Paystack data to backend
       }),
     });
 
     const backendData = await backendRes.json();
-    console.log("[Proxy] Backend response:", backendRes.status, JSON.stringify(backendData));
+    console.log("[Verify] Backend response:", backendRes.status, JSON.stringify(backendData));
 
     return NextResponse.json(backendData, { status: backendRes.status });
   } catch (err) {
-    console.error("[Proxy] verify error:", err);
+    console.error("[Verify proxy error]", err);
     return NextResponse.json(
-      { detail: "Proxy verification failed" },
+      { detail: "Verification failed" },
       { status: 502 }
     );
   }
