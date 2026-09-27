@@ -1,9 +1,11 @@
+import hashlib
+import hmac
 import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth import get_current_user
 from app.admin_auth import get_current_admin
@@ -65,6 +67,94 @@ async def initiate_payment(
     }
 
 
+# ─── POST /api/payments/webhook ─────────────────────────────────────────────
+
+@router.post("/webhook")
+async def paystack_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("x-paystack-signature", "")
+
+    # Verify Paystack HMAC-SHA512 signature
+    expected = hmac.new(
+        PAYSTACK_SECRET_KEY.encode("utf-8"),
+        body,
+        hashlib.sha512,
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    import json
+    payload = json.loads(body)
+    event = payload.get("event")
+    data = payload.get("data", {})
+
+    print(f"[Webhook] event={event} ref={data.get('reference')}")
+
+    if event != "charge.success":
+        return {"status": "ignored"}
+
+    reference = data.get("reference", "")
+    ps_amount = data.get("amount")
+    ps_status = str(data.get("status", "")).lower()
+
+    if ps_status != "success":
+        return {"status": "ignored"}
+
+    if not reference.startswith("SPARKL-"):
+        return {"status": "ignored"}
+
+    # Find transaction — no user_id filter since webhook has no auth context
+    try:
+        txn_res = (
+            supabase.table("payment_transactions")
+            .select("*")
+            .eq("gateway_ref", reference)
+            .maybe_single()
+            .execute()
+        )
+    except Exception:
+        raise HTTPException(status_code=500, detail="DB error")
+
+    if not txn_res.data:
+        print(f"[Webhook] Transaction not found for ref={reference}")
+        return {"status": "not_found"}
+
+    txn = txn_res.data
+
+    if txn["status"] == "success":
+        print(f"[Webhook] Already verified ref={reference}")
+        return {"status": "already_verified"}
+
+    # Amount check
+    if ps_amount:
+        try:
+            if int(ps_amount) != txn["amount_kobo"]:
+                supabase.table("payment_transactions").update({
+                    "status": "failed",
+                    "failed_reason": f"Webhook amount mismatch: got {ps_amount}, expected {txn['amount_kobo']}",
+                }).eq("gateway_ref", reference).execute()
+                print(f"[Webhook] Amount mismatch ref={reference}")
+                return {"status": "amount_mismatch"}
+        except (ValueError, TypeError):
+            pass
+
+    # Activate subscription
+    try:
+        await _activate_subscription(
+            user_id=txn["user_id"],
+            plan_slug=txn["plan"],
+            ps_data=data,
+            reference=reference,
+        )
+        print(f"[Webhook] Activated user={txn['user_id']} plan={txn['plan']} ref={reference}")
+    except Exception as e:
+        print(f"[Webhook] Activation error ref={reference}: {e}")
+        raise HTTPException(status_code=500, detail="Activation failed")
+
+    return {"status": "success"}
+
+
 # ─── POST /api/payments/verify ──────────────────────────────────────────────
 
 @router.post("/verify")
@@ -74,12 +164,11 @@ async def verify_payment(
 ):
     reference = body.get("reference")
     our_reference = body.get("our_reference", reference)
-    ps_data: dict | None = body.get("ps_data")  # Paystack data forwarded by Next.js proxy
+    ps_data: dict | None = body.get("ps_data")
 
     if not reference:
         raise HTTPException(status_code=400, detail="Reference is required")
 
-    # ── Find our transaction ─────────────────────────────────────────────────
     txn = None
     for ref in list(dict.fromkeys([our_reference, reference])):
         try:
@@ -103,11 +192,9 @@ async def verify_payment(
     if txn["status"] == "success":
         return {"status": "already_verified", "message": "Subscription already active"}
 
-    # ── Get Paystack data ────────────────────────────────────────────────────
     if ps_data:
         print(f"[Verify] Using ps_data from proxy for ref={reference}")
     else:
-        # Fallback: verify directly from backend
         try:
             async with httpx.AsyncClient() as client:
                 ps_res = await client.get(
@@ -125,9 +212,8 @@ async def verify_payment(
             print(f"[Paystack direct error] {str(e)}")
             raise HTTPException(status_code=502, detail=f"Could not reach Paystack: {str(e)}")
 
-    # ── Parse status ─────────────────────────────────────────────────────────
     ps_status = str(ps_data.get("status", "")).lower()
-    ps_amount = ps_data.get("amount")  # Paystack returns amount in kobo already
+    ps_amount = ps_data.get("amount")
 
     print(f"[Verify] ps_status={ps_status}")
 
@@ -138,7 +224,6 @@ async def verify_payment(
         }).eq("gateway_ref", txn["gateway_ref"]).execute()
         raise HTTPException(status_code=400, detail=f"Payment not successful: {ps_status}")
 
-    # ── Amount check ─────────────────────────────────────────────────────────
     if ps_amount:
         try:
             ps_amount_kobo = int(ps_amount)
