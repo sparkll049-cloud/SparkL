@@ -1,10 +1,11 @@
+
 "use client";
 
-import { useState, useEffect, useRef, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Check, Sparkles, Zap, ArrowLeft, Loader2, CheckCircle2, Crown,
-  ShieldCheck, CreditCard, X,
+  ShieldCheck, CreditCard, X, Star, Clock,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { Checkout } from "payvessel-checkout";
@@ -18,6 +19,7 @@ const PLANS = [
     duration: "semester",
     durationLabel: "3 months",
     description: "Perfect for a single semester",
+    color: "blue",
     perks: [
       "All courses unlocked",
       "Unlimited read mode",
@@ -34,6 +36,7 @@ const PLANS = [
     duration: "semester",
     durationLabel: "3 months",
     description: "Best for serious students",
+    color: "indigo",
     popular: true,
     perks: [
       "Everything in Basic",
@@ -50,6 +53,7 @@ const PLANS = [
     duration: "semester",
     durationLabel: "3 months",
     description: "Full unlimited access",
+    color: "violet",
     popular: false,
     perks: [
       "Everything in Pro",
@@ -62,15 +66,40 @@ const PLANS = [
 
 const PAID_PLANS = ["basic", "pro", "premium"];
 
+const PLAN_RANK: Record<string, number> = { free: 0, basic: 1, pro: 2, premium: 3 };
+
+const planAccent: Record<string, { ring: string; badge: string; btn: string; glow: string }> = {
+  basic: {
+    ring: "ring-blue-500/30",
+    badge: "bg-blue-600",
+    btn: "bg-blue-600 hover:bg-blue-500",
+    glow: "shadow-blue-500/10",
+  },
+  pro: {
+    ring: "ring-indigo-500/30",
+    badge: "bg-indigo-600",
+    btn: "bg-indigo-600 hover:bg-indigo-500",
+    glow: "shadow-indigo-500/20",
+  },
+  premium: {
+    ring: "ring-violet-500/30",
+    badge: "bg-violet-600",
+    btn: "bg-violet-600 hover:bg-violet-500",
+    glow: "shadow-violet-500/10",
+  },
+};
+
 interface CheckoutSummaryProps {
   plan: typeof PLANS[0];
   user: { name: string; email: string; phone: string };
   onConfirm: () => void;
   onCancel: () => void;
   loading: boolean;
+  isUpgrade: boolean;
 }
 
-function CheckoutSummary({ plan, user, onConfirm, onCancel, loading }: CheckoutSummaryProps) {
+function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }: CheckoutSummaryProps) {
+  const accent = planAccent[plan.slug];
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4 sm:pb-0">
       <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0D1130] shadow-2xl overflow-hidden">
@@ -89,19 +118,27 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading }: CheckoutS
           </button>
         </div>
 
-        {/* Plan summary */}
         <div className="px-6 py-5">
+          {isUpgrade && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2">
+              <Star className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+              <p className="text-xs text-amber-300 font-medium">
+                Upgrading plan — your remaining days carry over
+              </p>
+            </div>
+          )}
+
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
             You&apos;re subscribing to
           </p>
-          <div className="flex items-center justify-between rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] px-4 py-3 mb-5">
+          <div className="flex items-center justify-between rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 mb-5">
             <div>
               <p className="text-sm font-bold text-white capitalize">{plan.name} Plan</p>
               <p className="text-xs text-slate-500 mt-0.5">{plan.description}</p>
             </div>
             <div className="text-right">
               <p className="text-lg font-extrabold text-white">₦{plan.price.toLocaleString()}</p>
-              <p className="text-xs text-slate-500">per semester (3 months)</p>
+              <p className="text-xs text-slate-500">per semester</p>
             </div>
           </div>
 
@@ -115,11 +152,15 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading }: CheckoutS
             ))}
           </ul>
 
+          {/* Duration callout */}
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/15 bg-emerald-500/[0.05] px-3 py-2 mb-5">
+            <Clock className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+            <p className="text-xs text-emerald-300 font-medium">Valid for 3 months (one full semester)</p>
+          </div>
+
           {/* User details */}
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 mb-5 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
-              Paying as
-            </p>
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Paying as</p>
             <div className="flex justify-between text-xs">
               <span className="text-slate-500">Name</span>
               <span className="text-slate-300 font-medium">{user.name}</span>
@@ -130,7 +171,7 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading }: CheckoutS
             </div>
           </div>
 
-          {/* Amount */}
+          {/* Total */}
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 mb-6 space-y-2">
             <div className="flex justify-between text-xs">
               <span className="text-slate-500">Plan fee</span>
@@ -142,22 +183,15 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading }: CheckoutS
             </div>
           </div>
 
-          {/* CTA */}
           <button
             onClick={onConfirm}
             disabled={loading}
-            className="w-full flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed py-3.5 text-sm font-bold text-white transition-colors"
+            className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${accent.btn}`}
           >
             {loading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Opening payment…
-              </>
+              <><Loader2 className="h-4 w-4 animate-spin" />Opening payment…</>
             ) : (
-              <>
-                <CreditCard className="h-4 w-4" />
-                Pay ₦{plan.price.toLocaleString()} with PayVessel
-              </>
+              <><CreditCard className="h-4 w-4" />Pay ₦{plan.price.toLocaleString()} with PayVessel</>
             )}
           </button>
 
@@ -176,12 +210,9 @@ function SubscribePageInner() {
   const searchParams = useSearchParams();
   const justSubscribed = searchParams.get("subscribed") === "true";
 
-  const [user, setUser] = useState<{
-    name: string;
-    email: string;
-    phone: string;
-  } | null>(null);
+  const [user, setUser] = useState<{ name: string; email: string; phone: string } | null>(null);
   const [currentPlan, setCurrentPlan] = useState<string>("free");
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
   const [processingPlan, setProcessingPlan] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -194,15 +225,10 @@ function SubscribePageInner() {
         if (!session) { router.push("/auth/login"); return; }
 
         const [profileRes, subRes] = await Promise.all([
-          supabase
-            .from("profiles")
-            .select("full_name, phone, subscription_plan")
-            .eq("id", session.user.id)
-            .single(),
-          fetch(
-            `${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`,
-            { headers: { Authorization: `Bearer ${session.access_token}` } }
-          ),
+          supabase.from("profiles").select("full_name, phone, subscription_plan").eq("id", session.user.id).single(),
+          fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          }),
         ]);
 
         setUser({
@@ -213,9 +239,8 @@ function SubscribePageInner() {
 
         if (subRes.ok) {
           const subData = await subRes.json();
-          setCurrentPlan(
-            subData.is_paid ? (subData.effective_plan ?? subData.plan ?? "free") : "free"
-          );
+          setCurrentPlan(subData.is_paid ? (subData.effective_plan ?? subData.plan ?? "free") : "free");
+          setExpiresAt(subData.expires_at ?? null);
         } else {
           setCurrentPlan(profileRes.data?.subscription_plan ?? "free");
         }
@@ -238,18 +263,11 @@ function SubscribePageInner() {
       const { data: { session } } = await supabase.auth.refreshSession();
       if (!session) { router.push("/auth/login"); return; }
 
-      // Step 1 — create reference on backend
-      const initiateRes = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ plan: checkoutPlan.slug }),
-        }
-      );
+      const initiateRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ plan: checkoutPlan.slug }),
+      });
 
       if (!initiateRes.ok) {
         const err = await initiateRes.json();
@@ -260,29 +278,23 @@ function SubscribePageInner() {
       const accessToken = session.access_token;
       const planSlug = checkoutPlan.slug;
 
-      setCheckoutPlan(null); // close modal
+      setCheckoutPlan(null);
 
-      // Step 2 — open PayVessel checkout
-      const init = Checkout({
-        api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
-      });
+      const init = Checkout({ api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY! });
 
       await init.initializeCheckout({
-        amount: String(checkoutPlan.price), // PayVessel expects string in Naira
+        amount: String(checkoutPlan.price),
         currency: "NGN",
         customer_email: user.email,
         reference: ourReference,
-        metadata: {
-          plan: planSlug,
-          name: user.name,
-        },
-        onSuccessfulOrder: (response: { reference: string }) => {
-          // Payment confirmed by PayVessel — verify on backend
+        metadata: { plan: planSlug, name: user.name },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        onSuccessfulOrder: (response: any) => {
           fetch("/api/payments/verify", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              reference: response.reference,
+              reference: response.reference ?? response.transactionReference ?? response.data?.reference ?? ourReference,
               our_reference: ourReference,
               access_token: accessToken,
             }),
@@ -296,23 +308,16 @@ function SubscribePageInner() {
                 setError(data.detail ?? "Verification failed. Please contact support.");
               }
             })
-            .catch(() => {
-              setError("Network error during verification. Please contact support.");
-            })
-            .finally(() => {
-              setProcessingPlan(null);
-            });
+            .catch(() => setError("Network error during verification. Please contact support."))
+            .finally(() => setProcessingPlan(null));
         },
         onError: (error: unknown) => {
           console.error("[PayVessel error]", error);
           setError("Payment failed. Please try again.");
           setProcessingPlan(null);
         },
-        onClose: () => {
-          setProcessingPlan(null);
-        },
+        onClose: () => setProcessingPlan(null),
       });
-
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
       setProcessingPlan(null);
@@ -328,11 +333,18 @@ function SubscribePageInner() {
   }
 
   const isPaid = PAID_PLANS.includes(currentPlan);
+  const currentRank = PLAN_RANK[currentPlan] ?? 0;
+
+  const formatExpiry = (iso: string | null) => {
+    if (!iso) return null;
+    try {
+      return new Date(iso).toLocaleDateString("en-NG", { day: "numeric", month: "long", year: "numeric" });
+    } catch { return null; }
+  };
 
   return (
-    <div className="min-h-screen bg-[#07091A] px-5 pb-16 pt-8">
+    <div className="min-h-screen bg-[#07091A] px-5 pb-20 pt-8">
 
-      {/* Checkout summary modal */}
       {checkoutPlan && user && (
         <CheckoutSummary
           plan={checkoutPlan}
@@ -340,6 +352,7 @@ function SubscribePageInner() {
           onConfirm={handleConfirmCheckout}
           onCancel={() => { setCheckoutPlan(null); setProcessingPlan(null); }}
           loading={!!processingPlan}
+          isUpgrade={isPaid && PLAN_RANK[checkoutPlan.slug] > currentRank}
         />
       )}
 
@@ -353,6 +366,7 @@ function SubscribePageInner() {
           Back
         </button>
 
+        {/* Success banner */}
         {justSubscribed && (
           <div className="mb-8 flex items-center gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] px-5 py-4">
             <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />
@@ -365,6 +379,7 @@ function SubscribePageInner() {
           </div>
         )}
 
+        {/* Page header */}
         <div className="text-center mb-10">
           <div className="flex justify-center mb-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/15">
@@ -377,25 +392,35 @@ function SubscribePageInner() {
           <p className="mt-2 text-sm text-slate-500 max-w-sm mx-auto">
             {isPaid
               ? `You're on the ${currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1)} plan. Upgrade anytime for more access.`
-              : "Get unlimited access to all past questions, practice mode, and more — valid for a full semester"}
+              : "Get unlimited access to all past questions, practice mode, and more — valid for a full semester."}
           </p>
         </div>
 
-        {isPaid ? (
-          <div className="mb-8 flex items-center gap-3 rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] px-5 py-4">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15">
-              <Crown className="h-4 w-4 text-indigo-400" />
+        {/* Active plan banner */}
+        {isPaid && (
+          <div className="mb-8 flex items-center gap-4 rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] px-5 py-4">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15">
+              <Crown className="h-5 w-5 text-indigo-400" />
             </div>
-            <div>
+            <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-indigo-300 capitalize">
                 {currentPlan} Plan — Active
               </p>
-              <p className="text-xs text-slate-500 mt-0.5">
-                You have full access. Upgrade to a higher tier anytime below.
-              </p>
+              {expiresAt && (
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Expires {formatExpiry(expiresAt)}
+                </p>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/[0.08] px-3 py-1">
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-xs font-semibold text-emerald-400">Active</span>
             </div>
           </div>
-        ) : (
+        )}
+
+        {/* Free plan limits */}
+        {!isPaid && (
           <div className="mb-8 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">
               Free plan (current)
@@ -406,10 +431,7 @@ function SubscribePageInner() {
                 { label: "10 questions", sub: "Read mode" },
                 { label: "5 questions max", sub: "Practice mode" },
               ].map((item) => (
-                <div
-                  key={item.label}
-                  className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-4 py-3"
-                >
+                <div key={item.label} className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-4 py-3">
                   <p className="text-sm font-semibold text-slate-400">{item.label}</p>
                   <p className="text-xs text-slate-600 mt-0.5">{item.sub}</p>
                 </div>
@@ -424,23 +446,28 @@ function SubscribePageInner() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {/* Plan cards */}
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
           {PLANS.map((plan) => {
             const isCurrentPlan = currentPlan === plan.slug;
             const isProcessing = processingPlan === plan.slug;
+            const isUpgrade = isPaid && PLAN_RANK[plan.slug] > currentRank;
+            const isDowngrade = isPaid && PLAN_RANK[plan.slug] < currentRank;
+            const accent = planAccent[plan.slug];
 
             return (
               <div
                 key={plan.slug}
-                className={`relative flex flex-col rounded-2xl border p-5 transition-all ${
+                className={`relative flex flex-col rounded-2xl border p-5 transition-all shadow-lg ${
                   plan.popular
-                    ? "border-indigo-500/40 bg-indigo-500/[0.06]"
+                    ? `border-indigo-500/40 bg-indigo-500/[0.06] ${accent.glow}`
                     : "border-white/[0.07] bg-white/[0.02]"
-                } ${isCurrentPlan ? "ring-2 ring-emerald-500/30" : ""}`}
+                } ${isCurrentPlan ? `ring-2 ${accent.ring}` : ""}`}
               >
+                {/* Badges */}
                 {plan.popular && !isCurrentPlan && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 px-3 py-1 text-[10px] font-bold text-white uppercase tracking-wide">
+                    <span className={`inline-flex items-center gap-1 rounded-full ${accent.badge} px-3 py-1 text-[10px] font-bold text-white uppercase tracking-wide`}>
                       <Zap className="h-2.5 w-2.5" fill="white" />
                       Most popular
                     </span>
@@ -455,18 +482,20 @@ function SubscribePageInner() {
                   </div>
                 )}
 
-                <div className="mb-4">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    {plan.name}
-                  </p>
+                {/* Price */}
+                <div className="mb-4 mt-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{plan.name}</p>
                   <p className="mt-1 text-3xl font-extrabold text-white">
                     {plan.priceLabel}
-                    <span className="text-sm font-normal text-slate-500">/semester</span>
+                    <span className="text-sm font-normal text-slate-500">/sem</span>
                   </p>
                   <p className="mt-1 text-xs text-slate-600">{plan.description}</p>
-                  <p className="mt-1 text-xs text-emerald-400 font-medium">✓ Valid for 3 months</p>
+                  <p className="mt-1 text-xs text-emerald-400 font-medium flex items-center gap-1">
+                    <Clock className="h-3 w-3" /> 3 months access
+                  </p>
                 </div>
 
+                {/* Perks */}
                 <ul className="flex-1 space-y-2 mb-5">
                   {plan.perks.map((perk) => (
                     <li key={perk} className="flex items-start gap-2 text-xs text-slate-400">
@@ -476,6 +505,7 @@ function SubscribePageInner() {
                   ))}
                 </ul>
 
+                {/* CTA */}
                 {isCurrentPlan ? (
                   <div className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 py-2.5 text-xs font-semibold text-emerald-400">
                     <CheckCircle2 className="h-3.5 w-3.5" />
@@ -483,27 +513,18 @@ function SubscribePageInner() {
                   </div>
                 ) : (
                   <button
-                    onClick={() => {
-                      setError("");
-                      setCheckoutPlan(plan);
-                    }}
+                    onClick={() => { setError(""); setCheckoutPlan(plan); }}
                     disabled={!!processingPlan}
-                    className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                      plan.popular
-                        ? "bg-indigo-600 hover:bg-indigo-500"
-                        : "bg-blue-600 hover:bg-blue-500"
-                    }`}
+                    className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${accent.btn}`}
                   >
                     {isProcessing ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Processing…
-                      </>
+                      <><Loader2 className="h-4 w-4 animate-spin" />Processing…</>
+                    ) : isUpgrade ? (
+                      <><Star className="h-3.5 w-3.5" />Upgrade to {plan.name}</>
+                    ) : isDowngrade ? (
+                      <><Sparkles className="h-3.5 w-3.5" />Switch to {plan.name}</>
                     ) : (
-                      <>
-                        <Sparkles className="h-3.5 w-3.5" />
-                        {isPaid ? `Switch to ${plan.name}` : `Get ${plan.name}`}
-                      </>
+                      <><Sparkles className="h-3.5 w-3.5" />Get {plan.name}</>
                     )}
                   </button>
                 )}
@@ -512,7 +533,7 @@ function SubscribePageInner() {
           })}
         </div>
 
-        <p className="mt-6 text-center text-xs text-slate-600">
+        <p className="mt-8 text-center text-xs text-slate-600">
           Secure payments via PayVessel · NGN only · 3-month access per subscription
         </p>
 
