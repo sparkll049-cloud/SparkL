@@ -1,4 +1,4 @@
-// ./src/app/dashboard/subscribe/page.tsx
+// src/app/dashboard/subscribe/page.tsx
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
@@ -110,7 +110,6 @@ function CheckoutSummary({
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4 sm:pb-0">
       <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0D1130] shadow-2xl overflow-hidden">
 
-        {/* Header */}
         <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-white/[0.06]">
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-emerald-400" />
@@ -149,7 +148,6 @@ function CheckoutSummary({
             </div>
           </div>
 
-          {/* Perks */}
           <ul className="space-y-1.5 mb-5">
             {plan.perks.map((perk) => (
               <li key={perk} className="flex items-center gap-2 text-xs text-slate-400">
@@ -159,7 +157,6 @@ function CheckoutSummary({
             ))}
           </ul>
 
-          {/* Duration */}
           <div className="flex items-center gap-2 rounded-xl border border-emerald-500/15 bg-emerald-500/[0.05] px-3 py-2 mb-5">
             <Clock className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
             <p className="text-xs text-emerald-300 font-medium">
@@ -167,7 +164,6 @@ function CheckoutSummary({
             </p>
           </div>
 
-          {/* User details */}
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 mb-5 space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
               Paying as
@@ -182,7 +178,6 @@ function CheckoutSummary({
             </div>
           </div>
 
-          {/* Total */}
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 mb-6 space-y-2">
             <div className="flex justify-between text-xs">
               <span className="text-slate-500">Plan fee</span>
@@ -273,7 +268,7 @@ function SubscribePageInner() {
     loadUser();
   }, []);
 
-  // ── NOT async, NOT awaiting initializeCheckout ──────────────────────────
+  // Plain function — NOT async, NO await on initializeCheckout
   function handleConfirmCheckout() {
     if (!user || !checkoutPlan) return;
     setError("");
@@ -283,10 +278,15 @@ function SubscribePageInner() {
     setCheckoutPlan(null);
 
     supabase.auth.refreshSession().then(({ data: { session } }) => {
-      if (!session) { router.push("/auth/login"); return; }
+      if (!session) {
+        router.push("/auth/login");
+        return;
+      }
 
       const accessToken = session.access_token;
       const planSlug = plan.slug;
+      const userName = user.name;
+      const userEmail = user.email;
 
       fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`, {
         method: "POST",
@@ -297,7 +297,11 @@ function SubscribePageInner() {
         body: JSON.stringify({ plan: planSlug }),
       })
         .then((res) => {
-          if (!res.ok) return res.json().then((e) => Promise.reject(new Error(e.detail ?? "Failed to initiate payment")));
+          if (!res.ok) {
+            return res.json().then((e) =>
+              Promise.reject(new Error(e.detail ?? "Failed to initiate payment"))
+            );
+          }
           return res.json();
         })
         .then(({ reference: ourReference }) => {
@@ -305,15 +309,15 @@ function SubscribePageInner() {
             api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
           });
 
-          // ── No await here — initializeCheckout is callback-based ──
+          // NOT awaited — initializeCheckout is callback-based, not a Promise
           init.initializeCheckout({
             amount: String(plan.price),
             currency: "NGN",
-            customer_name: user.name,
-            customer_email: user.email,
+            customer_name: userName,
+            customer_email: userEmail,
             reference: ourReference,
-            channels: ["bank_transfer", "ussd"],
-            metadata: { plan: planSlug, name: user.name },
+            channels: ["card", "bank_transfer", "ussd"],
+            metadata: { plan: planSlug, name: userName },
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             onSuccessfulOrder: (response: any) => {
@@ -334,15 +338,22 @@ function SubscribePageInner() {
               })
                 .then((r) => r.json())
                 .then((data) => {
-                  if (data.status === "success" || data.status === "already_verified") {
+                  if (
+                    data.status === "success" ||
+                    data.status === "already_verified"
+                  ) {
                     setCurrentPlan(planSlug);
                     router.push("/dashboard/subscribe?subscribed=true");
                   } else {
-                    setError(data.detail ?? "Verification failed. Please contact support.");
+                    setError(
+                      data.detail ?? "Verification failed. Please contact support."
+                    );
                   }
                 })
                 .catch(() =>
-                  setError("Network error during verification. Please contact support.")
+                  setError(
+                    "Network error during verification. Please contact support."
+                  )
                 )
                 .finally(() => setProcessingPlan(null));
             },
@@ -395,7 +406,10 @@ function SubscribePageInner() {
           plan={checkoutPlan}
           user={user}
           onConfirm={handleConfirmCheckout}
-          onCancel={() => { setCheckoutPlan(null); setProcessingPlan(null); }}
+          onCancel={() => {
+            setCheckoutPlan(null);
+            setProcessingPlan(null);
+          }}
           loading={!!processingPlan}
           isUpgrade={isPaid && PLAN_RANK[checkoutPlan.slug] > currentRank}
         />
@@ -411,12 +425,13 @@ function SubscribePageInner() {
           Back
         </button>
 
-        {/* Success banner */}
         {justSubscribed && (
           <div className="mb-8 flex items-center gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] px-5 py-4">
             <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />
             <div>
-              <p className="text-sm font-semibold text-emerald-300">You&apos;re now subscribed!</p>
+              <p className="text-sm font-semibold text-emerald-300">
+                You&apos;re now subscribed!
+              </p>
               <p className="text-xs text-slate-500 mt-0.5">
                 Your plan is active — enjoy full access to all courses this semester.
               </p>
@@ -424,7 +439,6 @@ function SubscribePageInner() {
           </div>
         )}
 
-        {/* Page header */}
         <div className="text-center mb-10">
           <div className="flex justify-center mb-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/15">
@@ -441,7 +455,6 @@ function SubscribePageInner() {
           </p>
         </div>
 
-        {/* Active plan banner */}
         {isPaid && (
           <div className="mb-8 flex items-center gap-4 rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] px-5 py-4">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15">
@@ -464,7 +477,6 @@ function SubscribePageInner() {
           </div>
         )}
 
-        {/* Free plan limits */}
         {!isPaid && (
           <div className="mb-8 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">
@@ -494,7 +506,6 @@ function SubscribePageInner() {
           </div>
         )}
 
-        {/* Plan cards */}
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
           {PLANS.map((plan) => {
             const isCurrentPlan = currentPlan === plan.slug;
@@ -512,7 +523,6 @@ function SubscribePageInner() {
                     : "border-white/[0.07] bg-white/[0.02]"
                 } ${isCurrentPlan ? `ring-2 ${accent.ring}` : ""}`}
               >
-                {/* Badges */}
                 {plan.popular && !isCurrentPlan && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2">
                     <span
@@ -532,7 +542,6 @@ function SubscribePageInner() {
                   </div>
                 )}
 
-                {/* Price */}
                 <div className="mb-4 mt-2">
                   <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {plan.name}
@@ -547,7 +556,6 @@ function SubscribePageInner() {
                   </p>
                 </div>
 
-                {/* Perks */}
                 <ul className="flex-1 space-y-2 mb-5">
                   {plan.perks.map((perk) => (
                     <li key={perk} className="flex items-start gap-2 text-xs text-slate-400">
@@ -557,7 +565,6 @@ function SubscribePageInner() {
                   ))}
                 </ul>
 
-                {/* CTA */}
                 {isCurrentPlan ? (
                   <div className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 py-2.5 text-xs font-semibold text-emerald-400">
                     <CheckCircle2 className="h-3.5 w-3.5" />
