@@ -13,7 +13,7 @@
     "next-themes": "^0.4.6",
       "framer-motion": "^11.0.0",
     "@supabase/ssr": "^0.12.0",
-    "payvessel-checkout": "^1.0.0",
+    "payvessel-checkout": "*",
     "@supabase/supabase-js": "^2.110.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
