@@ -1,5 +1,8 @@
+# app/routers/payments.py
+
 import hashlib
 import hmac
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -52,14 +55,14 @@ async def initiate_payment(
         "plan": plan_slug,
         "gateway": "payvessel",
         "gateway_ref": reference,
-        "amount_kobo": plan["price_kobo"],  # stored as kobo internally; PayVessel receives Naira
+        "amount_kobo": plan["price_kobo"],
         "currency": plan["currency"],
         "status": "pending",
     }).execute()
 
     return {
         "reference": reference,
-        "amount": plan["price_kobo"] / 100,          # Naira (for display)
+        "amount": plan["price_kobo"] / 100,
         "amount_kobo": plan["price_kobo"],
         "plan": plan["plan"],
         "display_name": plan["display_name"],
@@ -74,29 +77,33 @@ async def payvessel_webhook(request: Request):
     body = await request.body()
     signature = request.headers.get("x-payvessel-signature", "")
 
-    # Verify PayVessel HMAC-SHA512 signature
+    if not PAYVESSEL_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="Payment secret not configured")
+
     expected = hmac.new(
-        PAYVESSEL_SECRET_KEY.encode("utf-8"),
-        body,
-        hashlib.sha512,
+        key=PAYVESSEL_SECRET_KEY.encode("utf-8"),
+        msg=body,
+        digestmod=hashlib.sha512,
     ).hexdigest()
 
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    import json
-    payload = json.loads(body)
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
     event = payload.get("event")
     data = payload.get("data", {})
 
     print(f"[Webhook] event={event} ref={data.get('reference')}")
 
-    # PayVessel successful charge event
     if event not in ("charge.success", "transaction.success"):
         return {"status": "ignored"}
 
     reference = data.get("reference", "")
-    pv_amount = data.get("amount")  # PayVessel sends amount in Naira
+    pv_amount = data.get("amount")
     pv_status = str(data.get("status", "")).lower()
 
     if pv_status not in ("success", "successful"):
@@ -126,7 +133,6 @@ async def payvessel_webhook(request: Request):
         print(f"[Webhook] Already verified ref={reference}")
         return {"status": "already_verified"}
 
-    # Amount check — PayVessel sends Naira, we store kobo
     if pv_amount:
         try:
             pv_amount_kobo = int(float(pv_amount) * 100)
@@ -167,7 +173,7 @@ async def verify_payment(
 ):
     reference = body.get("reference")
     our_reference = body.get("our_reference", reference)
-    pv_data: dict | None = body.get("pv_data")  # pre-verified data from proxy
+    pv_data: dict | None = body.get("pv_data")
 
     if not reference:
         raise HTTPException(status_code=400, detail="Reference is required")
@@ -198,7 +204,9 @@ async def verify_payment(
     if pv_data:
         print(f"[Verify] Using pv_data from proxy for ref={reference}")
     else:
-        # Direct verify against PayVessel API
+        if not PAYVESSEL_SECRET_KEY:
+            raise HTTPException(status_code=500, detail="Payment secret not configured")
+
         try:
             async with httpx.AsyncClient() as client:
                 pv_res = await client.get(
@@ -219,6 +227,7 @@ async def verify_payment(
                 )
 
             pv_data = pv_json.get("data", {})
+
         except HTTPException:
             raise
         except Exception as e:
@@ -226,7 +235,7 @@ async def verify_payment(
             raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
 
     pv_status = str(pv_data.get("status", "")).lower()
-    pv_amount = pv_data.get("amount")  # Naira
+    pv_amount = pv_data.get("amount")
 
     print(f"[Verify] pv_status={pv_status}")
 
@@ -237,7 +246,6 @@ async def verify_payment(
         }).eq("gateway_ref", txn["gateway_ref"]).execute()
         raise HTTPException(status_code=400, detail=f"Payment not successful: {pv_status}")
 
-    # Amount check — PayVessel amount in Naira → convert to kobo for comparison
     if pv_amount:
         try:
             pv_amount_kobo = int(float(pv_amount) * 100)
@@ -290,10 +298,11 @@ async def admin_grant_subscription(
         raise HTTPException(status_code=404, detail="Plan not found")
 
     reference = f"MANUAL-{uuid4().hex[:12].upper()}"
+
     supabase.table("payment_transactions").insert({
         "user_id": target_user_id,
         "plan": plan_slug,
-        "gateway": "payvessel",
+        "gateway": "manual",
         "gateway_ref": reference,
         "amount_kobo": 0,
         "currency": "NGN",
@@ -331,9 +340,8 @@ async def _activate_subscription(
 
     plan = plan_res.data
     now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(days=plan["duration_days"])  # 90 days for semester
-    expires_iso = expires_at.isoformat()
 
+    # Carry over remaining days if user already has an active subscription
     existing_sub_res = (
         supabase.table("subscriptions")
         .select("id, expires_at")
@@ -367,6 +375,9 @@ async def _activate_subscription(
 
         subscription_id = existing_sub["id"]
     else:
+        expires_at = now + timedelta(days=plan["duration_days"])
+        expires_iso = expires_at.isoformat()
+
         sub_res = supabase.table("subscriptions").insert({
             "user_id": user_id,
             "plan": plan_slug,
@@ -385,9 +396,10 @@ async def _activate_subscription(
         "gateway_payload": pv_data,
     }).eq("gateway_ref", reference).execute()
 
+    # ✅ Fixed typo: subscription_expic → subscription_expiry
     profile_update = supabase.table("profiles").update({
         "subscription_plan": plan_slug,
-        "subscription_expic": expires_iso,
+        "subscription_expiry": expires_iso,
     }).eq("id", user_id).execute()
 
     print(f"[Activate] user={user_id} plan={plan_slug} expires={expires_iso} profile={profile_update.data}")
@@ -407,7 +419,7 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
     try:
         profile_res = (
             supabase.table("profiles")
-            .select("subscription_plan, subscription_expic, created_at")
+            .select("subscription_plan, subscription_expiry, created_at")
             .eq("id", user_id)
             .maybe_single()
             .execute()
@@ -417,15 +429,19 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
 
     data = profile_res.data or {}
     plan = data.get("subscription_plan") or "free"
-    expires_at = data.get("subscription_expic")
+    expires_at = data.get("subscription_expiry")
     created_at = data.get("created_at")
 
     limits = get_plan_limits(plan, expires_at, created_at)
 
+    effective_plan = (
+        "trial" if limits.get("is_trial")
+        else (plan if limits["is_paid"] else "free")
+    )
+
     return {
-        "plan": "trial" if limits.get("is_trial") else (
-            plan if limits["is_paid"] else "free"
-        ),
+        "plan": effective_plan,
+        "effective_plan": effective_plan,   # ✅ added so frontend subData.effective_plan works
         "expires_at": expires_at,
         **limits,
     }
