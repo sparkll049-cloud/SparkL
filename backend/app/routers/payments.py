@@ -14,8 +14,8 @@ from app.services.subscription import get_plan_limits
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
-PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
-PAYSTACK_VERIFY_URL = "https://api.paystack.co/transaction/verify/{reference}"
+PAYVESSEL_SECRET_KEY = os.getenv("PAYVESSEL_SECRET_KEY")
+PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/api/externals/transactions/verify/{reference}"
 
 
 # ─── POST /api/payments/initiate ────────────────────────────────────────────
@@ -50,16 +50,16 @@ async def initiate_payment(
     supabase.table("payment_transactions").insert({
         "user_id": user_id,
         "plan": plan_slug,
-        "gateway": "paystack",
+        "gateway": "payvessel",
         "gateway_ref": reference,
-        "amount_kobo": plan["price_kobo"],
+        "amount_kobo": plan["price_kobo"],  # stored as kobo internally; PayVessel receives Naira
         "currency": plan["currency"],
         "status": "pending",
     }).execute()
 
     return {
         "reference": reference,
-        "amount": plan["price_kobo"] / 100,
+        "amount": plan["price_kobo"] / 100,          # Naira (for display)
         "amount_kobo": plan["price_kobo"],
         "plan": plan["plan"],
         "display_name": plan["display_name"],
@@ -70,13 +70,13 @@ async def initiate_payment(
 # ─── POST /api/payments/webhook ─────────────────────────────────────────────
 
 @router.post("/webhook")
-async def paystack_webhook(request: Request):
+async def payvessel_webhook(request: Request):
     body = await request.body()
-    signature = request.headers.get("x-paystack-signature", "")
+    signature = request.headers.get("x-payvessel-signature", "")
 
-    # Verify Paystack HMAC-SHA512 signature
+    # Verify PayVessel HMAC-SHA512 signature
     expected = hmac.new(
-        PAYSTACK_SECRET_KEY.encode("utf-8"),
+        PAYVESSEL_SECRET_KEY.encode("utf-8"),
         body,
         hashlib.sha512,
     ).hexdigest()
@@ -91,20 +91,20 @@ async def paystack_webhook(request: Request):
 
     print(f"[Webhook] event={event} ref={data.get('reference')}")
 
-    if event != "charge.success":
+    # PayVessel successful charge event
+    if event not in ("charge.success", "transaction.success"):
         return {"status": "ignored"}
 
     reference = data.get("reference", "")
-    ps_amount = data.get("amount")
-    ps_status = str(data.get("status", "")).lower()
+    pv_amount = data.get("amount")  # PayVessel sends amount in Naira
+    pv_status = str(data.get("status", "")).lower()
 
-    if ps_status != "success":
+    if pv_status not in ("success", "successful"):
         return {"status": "ignored"}
 
     if not reference.startswith("SPARKL-"):
         return {"status": "ignored"}
 
-    # Find transaction — no user_id filter since webhook has no auth context
     try:
         txn_res = (
             supabase.table("payment_transactions")
@@ -126,25 +126,28 @@ async def paystack_webhook(request: Request):
         print(f"[Webhook] Already verified ref={reference}")
         return {"status": "already_verified"}
 
-    # Amount check
-    if ps_amount:
+    # Amount check — PayVessel sends Naira, we store kobo
+    if pv_amount:
         try:
-            if int(ps_amount) != txn["amount_kobo"]:
+            pv_amount_kobo = int(float(pv_amount) * 100)
+            if pv_amount_kobo != txn["amount_kobo"]:
                 supabase.table("payment_transactions").update({
                     "status": "failed",
-                    "failed_reason": f"Webhook amount mismatch: got {ps_amount}, expected {txn['amount_kobo']}",
+                    "failed_reason": (
+                        f"Webhook amount mismatch: got {pv_amount_kobo} kobo, "
+                        f"expected {txn['amount_kobo']}"
+                    ),
                 }).eq("gateway_ref", reference).execute()
                 print(f"[Webhook] Amount mismatch ref={reference}")
                 return {"status": "amount_mismatch"}
         except (ValueError, TypeError):
             pass
 
-    # Activate subscription
     try:
         await _activate_subscription(
             user_id=txn["user_id"],
             plan_slug=txn["plan"],
-            ps_data=data,
+            pv_data=data,
             reference=reference,
         )
         print(f"[Webhook] Activated user={txn['user_id']} plan={txn['plan']} ref={reference}")
@@ -164,7 +167,7 @@ async def verify_payment(
 ):
     reference = body.get("reference")
     our_reference = body.get("our_reference", reference)
-    ps_data: dict | None = body.get("ps_data")
+    pv_data: dict | None = body.get("pv_data")  # pre-verified data from proxy
 
     if not reference:
         raise HTTPException(status_code=400, detail="Reference is required")
@@ -192,45 +195,59 @@ async def verify_payment(
     if txn["status"] == "success":
         return {"status": "already_verified", "message": "Subscription already active"}
 
-    if ps_data:
-        print(f"[Verify] Using ps_data from proxy for ref={reference}")
+    if pv_data:
+        print(f"[Verify] Using pv_data from proxy for ref={reference}")
     else:
+        # Direct verify against PayVessel API
         try:
             async with httpx.AsyncClient() as client:
-                ps_res = await client.get(
-                    PAYSTACK_VERIFY_URL.format(reference=reference),
+                pv_res = await client.get(
+                    PAYVESSEL_VERIFY_URL.format(reference=reference),
                     headers={
-                        "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+                        "Authorization": f"Bearer {PAYVESSEL_SECRET_KEY}",
                         "Content-Type": "application/json",
                     },
                     timeout=15.0,
                 )
-            print(f"[Paystack direct] status={ps_res.status_code} body={ps_res.text}")
-            ps_json = ps_res.json()
-            ps_data = ps_json.get("data", {})
+            print(f"[PayVessel direct] status={pv_res.status_code} body={pv_res.text}")
+            pv_json = pv_res.json()
+
+            if not pv_json.get("requestSuccessful"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=pv_json.get("message", "PayVessel verification failed"),
+                )
+
+            pv_data = pv_json.get("data", {})
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"[Paystack direct error] {str(e)}")
-            raise HTTPException(status_code=502, detail=f"Could not reach Paystack: {str(e)}")
+            print(f"[PayVessel direct error] {str(e)}")
+            raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
 
-    ps_status = str(ps_data.get("status", "")).lower()
-    ps_amount = ps_data.get("amount")
+    pv_status = str(pv_data.get("status", "")).lower()
+    pv_amount = pv_data.get("amount")  # Naira
 
-    print(f"[Verify] ps_status={ps_status}")
+    print(f"[Verify] pv_status={pv_status}")
 
-    if ps_status != "success":
+    if pv_status not in ("success", "successful"):
         supabase.table("payment_transactions").update({
             "status": "failed",
-            "failed_reason": f"Paystack status: {ps_status}",
+            "failed_reason": f"PayVessel status: {pv_status}",
         }).eq("gateway_ref", txn["gateway_ref"]).execute()
-        raise HTTPException(status_code=400, detail=f"Payment not successful: {ps_status}")
+        raise HTTPException(status_code=400, detail=f"Payment not successful: {pv_status}")
 
-    if ps_amount:
+    # Amount check — PayVessel amount in Naira → convert to kobo for comparison
+    if pv_amount:
         try:
-            ps_amount_kobo = int(ps_amount)
-            if ps_amount_kobo != txn["amount_kobo"]:
+            pv_amount_kobo = int(float(pv_amount) * 100)
+            if pv_amount_kobo != txn["amount_kobo"]:
                 supabase.table("payment_transactions").update({
                     "status": "failed",
-                    "failed_reason": f"Amount mismatch: got {ps_amount_kobo} kobo, expected {txn['amount_kobo']} kobo",
+                    "failed_reason": (
+                        f"Amount mismatch: got {pv_amount_kobo} kobo, "
+                        f"expected {txn['amount_kobo']} kobo"
+                    ),
                 }).eq("gateway_ref", txn["gateway_ref"]).execute()
                 raise HTTPException(status_code=400, detail="Amount mismatch")
         except (ValueError, TypeError):
@@ -239,7 +256,7 @@ async def verify_payment(
     return await _activate_subscription(
         user_id=user_id,
         plan_slug=txn["plan"],
-        ps_data=ps_data,
+        pv_data=pv_data,
         reference=txn["gateway_ref"],
     )
 
@@ -276,7 +293,7 @@ async def admin_grant_subscription(
     supabase.table("payment_transactions").insert({
         "user_id": target_user_id,
         "plan": plan_slug,
-        "gateway": "paystack",
+        "gateway": "payvessel",
         "gateway_ref": reference,
         "amount_kobo": 0,
         "currency": "NGN",
@@ -286,7 +303,7 @@ async def admin_grant_subscription(
     result = await _activate_subscription(
         user_id=target_user_id,
         plan_slug=plan_slug,
-        ps_data={"manual_grant": True, "note": note, "granted_by": admin_id},
+        pv_data={"manual_grant": True, "note": note, "granted_by": admin_id},
         reference=reference,
     )
 
@@ -299,7 +316,7 @@ async def admin_grant_subscription(
 async def _activate_subscription(
     user_id: str,
     plan_slug: str,
-    ps_data: dict,
+    pv_data: dict,
     reference: str,
 ) -> dict:
     plan_res = (
@@ -314,7 +331,7 @@ async def _activate_subscription(
 
     plan = plan_res.data
     now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(days=plan["duration_days"])
+    expires_at = now + timedelta(days=plan["duration_days"])  # 90 days for semester
     expires_iso = expires_at.isoformat()
 
     existing_sub_res = (
@@ -365,7 +382,7 @@ async def _activate_subscription(
         "status": "success",
         "paid_at": now.isoformat(),
         "subscription_id": subscription_id,
-        "gateway_payload": ps_data,
+        "gateway_payload": pv_data,
     }).eq("gateway_ref", reference).execute()
 
     profile_update = supabase.table("profiles").update({
