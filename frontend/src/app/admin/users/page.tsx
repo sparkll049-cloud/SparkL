@@ -37,6 +37,7 @@ type PendingAction =
   | { type: "suspend"; user: UserRow }
   | { type: "admin"; user: UserRow; role: string }
   | { type: "delete"; user: UserRow }
+  | { type: "revoke"; user: UserRow }
   | null;
 
 const ADMIN_ROLES = [
@@ -46,9 +47,9 @@ const ADMIN_ROLES = [
 ];
 
 const SUBSCRIPTION_PLANS = [
-  { value: "basic", label: "Basic", desc: "₦500/month · 10 downloads/day" },
-  { value: "pro", label: "Pro", desc: "₦1,000/month · 50 downloads/day" },
-  { value: "premium", label: "Premium", desc: "₦2,000/month · Unlimited downloads" },
+  { value: "basic", label: "Basic", desc: "₦2,000/sem · Limited AI chats, 3 uploads/day" },
+  { value: "pro", label: "Pro", desc: "₦3,500/sem · Unlimited uploads & chats, no YouTube" },
+  { value: "premium", label: "Premium", desc: "₦5,000/sem · Everything incl. YouTube/link study" },
 ];
 
 const MASK = "••••••••";
@@ -236,6 +237,34 @@ export default function AdminUsersPage() {
     }
   }
 
+  async function confirmRevoke(user: UserRow) {
+    setActioningId(user.id);
+    setGrantSuccess(null);
+    setError("");
+    const token = await getToken();
+    if (!token) { setError("Session expired."); setActioningId(null); setPendingAction(null); return; }
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/admin/revoke`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ user_id: user.id, note: "Subscription revoked by admin" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? "Failed to remove subscription.");
+      }
+      setUsers((prev) => prev.map((u) =>
+        u.id === user.id ? { ...u, subscription_plan: "free", subscription_expires_at: null } : u
+      ));
+      setGrantSuccess("Subscription removed. User is back on the free plan.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setActioningId(null);
+      setPendingAction(null);
+    }
+  }
+
   const filtered = users.filter((u) => {
     const q = search.toLowerCase();
     const matchSearch =
@@ -281,7 +310,7 @@ export default function AdminUsersPage() {
         </button>
       </div>
 
-      {/* Grant success banner */}
+      {/* Grant / revoke success banner */}
       {grantSuccess && (
         <div className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] px-5 py-4">
           <div className="flex items-center gap-3">
@@ -355,6 +384,7 @@ export default function AdminUsersPage() {
               const isRevealed = revealedIds.has(user.id);
               const isActioning = actioningId === user.id;
               const isGranting = grantingId === user.id;
+              const hasPaidPlan = !!user.subscription_plan && user.subscription_plan !== "free";
               const roleLabel = ADMIN_ROLES.find((r) => r.value === user.admin_role)?.label ?? user.admin_role;
 
               return (
@@ -385,7 +415,7 @@ export default function AdminUsersPage() {
                             Suspended
                           </span>
                         )}
-                        {user.subscription_plan && user.subscription_plan !== "free" && (
+                        {hasPaidPlan && (
                           <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 capitalize">
                             {user.subscription_plan}
                           </span>
@@ -461,13 +491,13 @@ export default function AdminUsersPage() {
                         <StatCell
                           label="Subscription"
                           value={isRevealed ? (user.subscription_plan ?? "Free") : MASK}
-                          color={user.subscription_plan && user.subscription_plan !== "free" ? "text-emerald-400" : "text-slate-500"}
+                          color={hasPaidPlan ? "text-emerald-400" : "text-slate-500"}
                           small
                         />
                       </div>
 
                       {/* Subscription expiry */}
-                      {isRevealed && user.subscription_expires_at && (
+                      {isRevealed && hasPaidPlan && user.subscription_expires_at && (
                         <div className="flex items-center gap-2 rounded-xl border border-emerald-500/15 bg-emerald-500/5 px-4 py-3">
                           <CreditCard className="h-4 w-4 shrink-0 text-emerald-400" />
                           <p className="text-xs text-emerald-300">
@@ -547,6 +577,17 @@ export default function AdminUsersPage() {
                             className="flex items-center gap-2 rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-2.5 text-xs font-semibold text-indigo-400 transition hover:bg-indigo-500/20 disabled:opacity-50"
                           >
                             <Sparkles className="h-3.5 w-3.5" /> Grant subscription
+                          </button>
+                        )}
+
+                        {/* Remove subscription button (only for paid users) */}
+                        {hasPaidPlan && (
+                          <button
+                            onClick={() => setPendingAction({ type: "revoke", user })}
+                            disabled={isActioning || isGranting}
+                            className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-2.5 text-xs font-semibold text-amber-400 transition hover:bg-amber-500/20 disabled:opacity-50"
+                          >
+                            <CreditCard className="h-3.5 w-3.5" /> Remove subscription
                           </button>
                         )}
 
@@ -674,6 +715,21 @@ export default function AdminUsersPage() {
         loading={actioningId === (pendingAction?.user.id ?? "")}
         onConfirm={() => pendingAction?.type === "admin" && confirmAdminToggle(pendingAction.user, pendingAction.role)}
         onCancel={() => { setPendingAction(null); setRolePickerId(null); }}
+      />
+
+      <ConfirmDialog
+        open={pendingAction?.type === "revoke"}
+        title="Remove this subscription?"
+        description={
+          pendingAction?.type === "revoke"
+            ? `${pendingAction.user.full_name ?? "This user"} will lose their ${pendingAction.user.subscription_plan} plan immediately and go back to free.`
+            : ""
+        }
+        confirmLabel="Remove subscription"
+        tone="danger"
+        loading={actioningId === (pendingAction?.type === "revoke" ? pendingAction.user.id : "")}
+        onConfirm={() => pendingAction?.type === "revoke" && confirmRevoke(pendingAction.user)}
+        onCancel={() => setPendingAction(null)}
       />
 
       <ConfirmDialog
