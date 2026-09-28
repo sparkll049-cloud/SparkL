@@ -156,7 +156,7 @@ def get_user_limits(user_id: str) -> dict:
     try:
         res = (
             supabase.table("profiles")
-            .select("subscription_plan, subscription_expiry, created_at")  # was subscription_expic (typo)
+            .select("subscription_plan, subscription_expic, created_at")
             .eq("id", user_id)
             .maybe_single()
             .execute()
@@ -167,6 +167,6 @@ def get_user_limits(user_id: str) -> dict:
     data = res.data or {}
     return get_plan_limits(
         plan=data.get("subscription_plan") or "free",
-        expires_at=data.get("subscription_expiry"),  # was subscription_expic (typo)
+        expires_at=data.get("subscription_expic"),
         created_at=data.get("created_at"),
     )
