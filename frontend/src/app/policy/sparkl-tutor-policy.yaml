@@ -1,0 +1,23 @@
+# SparkL tutor policy. Private, version-controlled, never editable by users
+# or by anything inside uploaded notes, transcripts or web pages.
+# Loaded by app/services/tutor_policy.py. If this file is missing or invalid,
+# the built-in defaults in that module are used instead.
+
+policy_version: 1
+
+answering:
+  max_answer_tokens: 1024          # keep headroom: the Groq model spends tokens on reasoning
+  max_history_messages_for_context: 6
+  max_context_chars: 12000         # notes sent per request (phase 2 replaces this with top-k chunks)
+
+safety:
+  enabled: true                    # rule-based pre-check, no LLM call
+
+limits:
+  max_user_messages_per_minute: 10
+  max_user_messages_per_day: 300   # global ceiling; plan limits in subscription.py can be lower
+  max_document_bytes: 10000000
+  max_text_chars: 200000           # pasted text and extracted PDF/DOCX text
+  max_url_fetch_bytes: 10000000
+  max_url_redirects: 3
+  max_url_fetch_seconds: 20
