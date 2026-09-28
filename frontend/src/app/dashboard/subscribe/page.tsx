@@ -67,6 +67,10 @@ const PLANS = [
 const PAID_PLANS = ["basic", "pro", "premium"];
 const PLAN_RANK: Record<string, number> = { free: 0, basic: 1, pro: 2, premium: 3 };
 
+// PayVessel channels must be UPPERCASE. Valid values: "BANK_TRANSFER", "CARD".
+// Add "CARD" here once card payments are enabled on your PayVessel account.
+const PAYVESSEL_CHANNELS = ["BANK_TRANSFER","CARD"];
+
 const planAccent: Record<string, { ring: string; badge: string; btn: string; glow: string }> = {
   basic: {
     ring: "ring-blue-500/30",
@@ -287,6 +291,7 @@ function SubscribePageInner() {
       const planSlug = plan.slug;
       const userName = user.name;
       const userEmail = user.email;
+      const userPhone = user.phone;
 
       fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`, {
         method: "POST",
@@ -315,8 +320,10 @@ function SubscribePageInner() {
             currency: "NGN",
             customer_name: userName,
             customer_email: userEmail,
+            // Only send phone if we have one (remove this line if PayVessel rejects it)
+            ...(userPhone ? { customer_phone_number: userPhone } : {}),
             reference: ourReference,
-            channels: ["bank_transfer", "ussd"],
+            channels: PAYVESSEL_CHANNELS, // UPPERCASE: "BANK_TRANSFER" | "CARD"
             metadata: { plan: planSlug, name: userName },
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
