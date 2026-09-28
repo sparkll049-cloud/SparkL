@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY!;
+const PAYVESSEL_SECRET_KEY = process.env.PAYVESSEL_SECRET_KEY!;
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL!;
 
 export async function POST(req: NextRequest) {
@@ -14,24 +14,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Step 1 — verify with Paystack from server (no CORS issues)
-    const psRes = await fetch(
-      `https://api.paystack.co/transaction/verify/${reference}`,
+    // Step 1 — verify with PayVessel from server (avoids CORS)
+    const pvRes = await fetch(
+      `https://api.payvessel.com/api/externals/transactions/verify/${reference}`,
       {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+          Authorization: `Bearer ${PAYVESSEL_SECRET_KEY}`,
           "Content-Type": "application/json",
         },
       }
     );
 
-    const psData = await psRes.json();
-    console.log("[Verify] Paystack response:", JSON.stringify(psData));
+    const pvData = await pvRes.json();
+    console.log("[Verify] PayVessel response:", JSON.stringify(pvData));
 
-    if (!psRes.ok || !psData.status) {
+    if (!pvRes.ok || pvData.requestSuccessful === false) {
       return NextResponse.json(
-        { detail: psData.message ?? "Paystack verification failed" },
+        { detail: pvData.message ?? "PayVessel verification failed" },
         { status: 400 }
       );
     }
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         reference,
         our_reference: our_reference ?? reference,
-        ps_data: psData.data, // pass Paystack data to backend
+        pv_data: pvData.data ?? pvData, // pass PayVessel response data to backend
       }),
     });
 
