@@ -312,7 +312,7 @@ function SubscribePageInner() {
             customer_name: user.name,
             customer_email: user.email,
             reference: ourReference,
-            channels: ["card", "bank_transfer", "ussd"],
+            channels: ["bank_transfer", "ussd"],
             metadata: { plan: planSlug, name: user.name },
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
