@@ -320,6 +320,38 @@ async def admin_grant_subscription(
     return {**result, "note": note}
 
 
+# ─── POST /api/payments/admin/revoke ────────────────────────────────────────
+
+@router.post("/admin/revoke")
+async def admin_revoke_subscription(
+    body: dict,
+    admin_id: str = Depends(get_current_admin),
+):
+    target_user_id = body.get("user_id")
+    note = body.get("note", "Subscription revoked by admin")
+
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # End any active subscription row
+    supabase.table("subscriptions").update({
+        "status": "cancelled",   # change if your status column uses another value
+        "expires_at": now_iso,
+        "auto_renew": False,
+    }).eq("user_id", target_user_id).eq("status", "active").execute()
+
+    # Drop the profile back to free
+    supabase.table("profiles").update({
+        "subscription_plan": "free",
+        "subscription_expiry": None,
+    }).eq("id", target_user_id).execute()
+
+    print(f"[Admin revoke] by={admin_id} user={target_user_id} note={note}")
+    return {"status": "revoked", "plan": "free", "note": note}
+
+
 # ─── Shared subscription activation ─────────────────────────────────────────
 
 async def _activate_subscription(
@@ -396,7 +428,6 @@ async def _activate_subscription(
         "gateway_payload": pv_data,
     }).eq("gateway_ref", reference).execute()
 
-    # ✅ Fixed typo: subscription_expic → subscription_expiry
     profile_update = supabase.table("profiles").update({
         "subscription_plan": plan_slug,
         "subscription_expiry": expires_iso,
@@ -440,8 +471,8 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
     )
 
     return {
-        "plan": effective_plan,
-        "effective_plan": effective_plan,   # ✅ added so frontend subData.effective_plan works
-        "expires_at": expires_at,
         **limits,
+        "plan": effective_plan,
+        "effective_plan": effective_plan,
+        "expires_at": expires_at,
     }
