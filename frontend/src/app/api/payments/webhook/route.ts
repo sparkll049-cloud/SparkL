@@ -1,10 +1,9 @@
-// app/api/payments/webhook/route.ts
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.text(); // raw — must not be parsed, signature depends on it
-    const signature = req.headers.get("x-paystack-signature") ?? "";
+    const signature = req.headers.get("x-payvessel-signature") ?? "";
 
     if (!signature) {
       return NextResponse.json({ detail: "Missing signature" }, { status: 400 });
@@ -16,9 +15,9 @@ export async function POST(req: NextRequest) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-paystack-signature": signature,
+          "x-payvessel-signature": signature,
         },
-        body, // forward raw body unchanged — do not JSON.parse/re-stringify
+        body, // forward raw body unchanged
       }
     );
 
