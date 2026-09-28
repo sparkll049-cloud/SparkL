@@ -345,7 +345,7 @@ async def admin_revoke_subscription(
     # Drop the profile back to free
     supabase.table("profiles").update({
         "subscription_plan": "free",
-        "subscription_expiry": None,
+        "subscription_expic": None,
     }).eq("id", target_user_id).execute()
 
     print(f"[Admin revoke] by={admin_id} user={target_user_id} note={note}")
@@ -430,7 +430,7 @@ async def _activate_subscription(
 
     profile_update = supabase.table("profiles").update({
         "subscription_plan": plan_slug,
-        "subscription_expiry": expires_iso,
+        "subscription_expic": expires_iso,
     }).eq("id", user_id).execute()
 
     print(f"[Activate] user={user_id} plan={plan_slug} expires={expires_iso} profile={profile_update.data}")
@@ -450,7 +450,7 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
     try:
         profile_res = (
             supabase.table("profiles")
-            .select("subscription_plan, subscription_expiry, created_at")
+            .select("subscription_plan, subscription_expic, created_at")
             .eq("id", user_id)
             .maybe_single()
             .execute()
@@ -460,7 +460,7 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
 
     data = profile_res.data or {}
     plan = data.get("subscription_plan") or "free"
-    expires_at = data.get("subscription_expiry")
+    expires_at = data.get("subscription_expic")
     created_at = data.get("created_at")
 
     limits = get_plan_limits(plan, expires_at, created_at)
