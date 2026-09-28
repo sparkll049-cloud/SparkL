@@ -65,7 +65,6 @@ const PLANS = [
 ];
 
 const PAID_PLANS = ["basic", "pro", "premium"];
-
 const PLAN_RANK: Record<string, number> = { free: 0, basic: 1, pro: 2, premium: 3 };
 
 const planAccent: Record<string, { ring: string; badge: string; btn: string; glow: string }> = {
@@ -98,7 +97,14 @@ interface CheckoutSummaryProps {
   isUpgrade: boolean;
 }
 
-function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }: CheckoutSummaryProps) {
+function CheckoutSummary({
+  plan,
+  user,
+  onConfirm,
+  onCancel,
+  loading,
+  isUpgrade,
+}: CheckoutSummaryProps) {
   const accent = planAccent[plan.slug];
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4 sm:pb-0">
@@ -131,6 +137,7 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
             You&apos;re subscribing to
           </p>
+
           <div className="flex items-center justify-between rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 mb-5">
             <div>
               <p className="text-sm font-bold text-white capitalize">{plan.name} Plan</p>
@@ -152,15 +159,19 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }
             ))}
           </ul>
 
-          {/* Duration callout */}
+          {/* Duration */}
           <div className="flex items-center gap-2 rounded-xl border border-emerald-500/15 bg-emerald-500/[0.05] px-3 py-2 mb-5">
             <Clock className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-            <p className="text-xs text-emerald-300 font-medium">Valid for 3 months (one full semester)</p>
+            <p className="text-xs text-emerald-300 font-medium">
+              Valid for 3 months (one full semester)
+            </p>
           </div>
 
           {/* User details */}
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 mb-5 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Paying as</p>
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+              Paying as
+            </p>
             <div className="flex justify-between text-xs">
               <span className="text-slate-500">Name</span>
               <span className="text-slate-300 font-medium">{user.name}</span>
@@ -225,7 +236,11 @@ function SubscribePageInner() {
         if (!session) { router.push("/auth/login"); return; }
 
         const [profileRes, subRes] = await Promise.all([
-          supabase.from("profiles").select("full_name, phone, subscription_plan").eq("id", session.user.id).single(),
+          supabase
+            .from("profiles")
+            .select("full_name, phone, subscription_plan")
+            .eq("id", session.user.id)
+            .single(),
           fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`, {
             headers: { Authorization: `Bearer ${session.access_token}` },
           }),
@@ -239,7 +254,11 @@ function SubscribePageInner() {
 
         if (subRes.ok) {
           const subData = await subRes.json();
-          setCurrentPlan(subData.is_paid ? (subData.effective_plan ?? subData.plan ?? "free") : "free");
+          setCurrentPlan(
+            subData.is_paid
+              ? (subData.effective_plan ?? subData.plan ?? "free")
+              : "free"
+          );
           setExpiresAt(subData.expires_at ?? null);
         } else {
           setCurrentPlan(profileRes.data?.subscription_plan ?? "free");
@@ -254,124 +273,94 @@ function SubscribePageInner() {
     loadUser();
   }, []);
 
-  // ./src/app/dashboard/subscribe/page.tsx
-// Only the handleConfirmCheckout function changes — rest of file stays identical
-
-async function handleConfirmCheckout() {
+  // ── NOT async, NOT awaiting initializeCheckout ──────────────────────────
+  function handleConfirmCheckout() {
     if (!user || !checkoutPlan) return;
     setError("");
     setProcessingPlan(checkoutPlan.slug);
 
-    try {
-      const { data: { session } } = await supabase.auth.refreshSession();
+    const plan = checkoutPlan;
+    setCheckoutPlan(null);
+
+    supabase.auth.refreshSession().then(({ data: { session } }) => {
       if (!session) { router.push("/auth/login"); return; }
 
-      const initiateRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ plan: checkoutPlan.slug }),
-      });
-
-      if (!initiateRes.ok) {
-        const err = await initiateRes.json();
-        throw new Error(err.detail ?? "Failed to initiate payment");
-      }
-
-      const { reference: ourReference } = await initiateRes.json();
       const accessToken = session.access_token;
-      const planSlug = checkoutPlan.slug;
+      const planSlug = plan.slug;
 
-      setCheckoutPlan(null);
-
-      const init = Checkout({ api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY! });
-
-      await init.initializeCheckout({
-        amount: String(checkoutPlan.price),
-        currency: "NGN",
-        customer_name: user.name,
-        customer_email: user.email,
-        reference: ourReference,
-        channels: ["card", "bank_transfer", "ussd"],  // ← fixes "channels is required"
-        metadata: { plan: planSlug, name: user.name },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        onSuccessfulOrder: (response: any) => {
-          fetch("/api/payments/verify", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              reference: response.reference ?? response.transactionReference ?? response.data?.reference ?? ourReference,
-              our_reference: ourReference,
-              access_token: accessToken,
-            }),
-          })
-            .then((res) => res.json())
-            .then((data) => {
-              if (data.status === "success" || data.status === "already_verified") {
-                setCurrentPlan(planSlug);
-                router.push("/dashboard/subscribe?subscribed=true");
-              } else {
-                setError(data.detail ?? "Verification failed. Please contact support.");
-              }
-            })
-            .catch(() => setError("Network error during verification. Please contact support."))
-            .finally(() => setProcessingPlan(null));
+      fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
         },
-        onError: (error: unknown) => {
-          console.error("[PayVessel error]", error);
-          setError("Payment failed. Please try again.");
+        body: JSON.stringify({ plan: planSlug }),
+      })
+        .then((res) => {
+          if (!res.ok) return res.json().then((e) => Promise.reject(new Error(e.detail ?? "Failed to initiate payment")));
+          return res.json();
+        })
+        .then(({ reference: ourReference }) => {
+          const init = Checkout({
+            api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
+          });
+
+          // ── No await here — initializeCheckout is callback-based ──
+          init.initializeCheckout({
+            amount: String(plan.price),
+            currency: "NGN",
+            customer_name: user.name,
+            customer_email: user.email,
+            reference: ourReference,
+            channels: ["card", "bank_transfer", "ussd"],
+            metadata: { plan: planSlug, name: user.name },
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            onSuccessfulOrder: (response: any) => {
+              const ref =
+                response.reference ??
+                response.transactionReference ??
+                response.data?.reference ??
+                ourReference;
+
+              fetch("/api/payments/verify", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  reference: ref,
+                  our_reference: ourReference,
+                  access_token: accessToken,
+                }),
+              })
+                .then((r) => r.json())
+                .then((data) => {
+                  if (data.status === "success" || data.status === "already_verified") {
+                    setCurrentPlan(planSlug);
+                    router.push("/dashboard/subscribe?subscribed=true");
+                  } else {
+                    setError(data.detail ?? "Verification failed. Please contact support.");
+                  }
+                })
+                .catch(() =>
+                  setError("Network error during verification. Please contact support.")
+                )
+                .finally(() => setProcessingPlan(null));
+            },
+
+            onError: (err: unknown) => {
+              console.error("[PayVessel error]", err);
+              setError("Payment failed. Please try again.");
+              setProcessingPlan(null);
+            },
+
+            onClose: () => setProcessingPlan(null),
+          });
+        })
+        .catch((err: Error) => {
+          setError(err.message ?? "Something went wrong.");
           setProcessingPlan(null);
-        },
-        onClose: () => setProcessingPlan(null),
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-      setProcessingPlan(null);
-    }
-  }
-
-      const init = Checkout({ api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY! });
-
-      await init.initializeCheckout({
-        amount: String(checkoutPlan.price),
-        currency: "NGN",
-        customer_name: user.name,         // ← fixes the type error
-        customer_email: user.email,
-        reference: ourReference,
-        metadata: { plan: planSlug, name: user.name },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        onSuccessfulOrder: (response: any) => {
-          fetch("/api/payments/verify", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              reference: response.reference ?? response.transactionReference ?? response.data?.reference ?? ourReference,
-              our_reference: ourReference,
-              access_token: accessToken,
-            }),
-          })
-            .then((res) => res.json())
-            .then((data) => {
-              if (data.status === "success" || data.status === "already_verified") {
-                setCurrentPlan(planSlug);
-                router.push("/dashboard/subscribe?subscribed=true");
-              } else {
-                setError(data.detail ?? "Verification failed. Please contact support.");
-              }
-            })
-            .catch(() => setError("Network error during verification. Please contact support."))
-            .finally(() => setProcessingPlan(null));
-        },
-        onError: (error: unknown) => {
-          console.error("[PayVessel error]", error);
-          setError("Payment failed. Please try again.");
-          setProcessingPlan(null);
-        },
-        onClose: () => setProcessingPlan(null),
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-      setProcessingPlan(null);
-    }
+        });
+    });
   }
 
   if (loadingUser) {
@@ -388,8 +377,14 @@ async function handleConfirmCheckout() {
   const formatExpiry = (iso: string | null) => {
     if (!iso) return null;
     try {
-      return new Date(iso).toLocaleDateString("en-NG", { day: "numeric", month: "long", year: "numeric" });
-    } catch { return null; }
+      return new Date(iso).toLocaleDateString("en-NG", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      });
+    } catch {
+      return null;
+    }
   };
 
   return (
@@ -481,7 +476,10 @@ async function handleConfirmCheckout() {
                 { label: "10 questions", sub: "Read mode" },
                 { label: "5 questions max", sub: "Practice mode" },
               ].map((item) => (
-                <div key={item.label} className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-4 py-3">
+                <div
+                  key={item.label}
+                  className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-4 py-3"
+                >
                   <p className="text-sm font-semibold text-slate-400">{item.label}</p>
                   <p className="text-xs text-slate-600 mt-0.5">{item.sub}</p>
                 </div>
@@ -517,7 +515,9 @@ async function handleConfirmCheckout() {
                 {/* Badges */}
                 {plan.popular && !isCurrentPlan && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <span className={`inline-flex items-center gap-1 rounded-full ${accent.badge} px-3 py-1 text-[10px] font-bold text-white uppercase tracking-wide`}>
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-full ${accent.badge} px-3 py-1 text-[10px] font-bold text-white uppercase tracking-wide`}
+                    >
                       <Zap className="h-2.5 w-2.5" fill="white" />
                       Most popular
                     </span>
@@ -534,7 +534,9 @@ async function handleConfirmCheckout() {
 
                 {/* Price */}
                 <div className="mb-4 mt-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{plan.name}</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    {plan.name}
+                  </p>
                   <p className="mt-1 text-3xl font-extrabold text-white">
                     {plan.priceLabel}
                     <span className="text-sm font-normal text-slate-500">/sem</span>
