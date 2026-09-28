@@ -7,6 +7,7 @@ import {
   ShieldCheck, CreditCard, X,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
+import { Checkout } from "payvessel-checkout";
 
 const PLANS = [
   {
@@ -14,7 +15,8 @@ const PLANS = [
     name: "Basic",
     price: 500,
     priceLabel: "₦500",
-    duration: "month",
+    duration: "semester",
+    durationLabel: "3 months",
     description: "Perfect for a single semester",
     perks: [
       "All courses unlocked",
@@ -29,7 +31,8 @@ const PLANS = [
     name: "Pro",
     price: 1000,
     priceLabel: "₦1,000",
-    duration: "month",
+    duration: "semester",
+    durationLabel: "3 months",
     description: "Best for serious students",
     popular: true,
     perks: [
@@ -44,7 +47,8 @@ const PLANS = [
     name: "Premium",
     price: 2000,
     priceLabel: "₦2,000",
-    duration: "month",
+    duration: "semester",
+    durationLabel: "3 months",
     description: "Full unlimited access",
     popular: false,
     perks: [
@@ -58,22 +62,6 @@ const PLANS = [
 
 const PAID_PLANS = ["basic", "pro", "premium"];
 
-// Paystack Nigeria local card fee calculation
-// 1.5% + ₦100 flat fee, capped at ₦2,000 total, waived if amount <= ₦2,500
-function calcPaystackFee(amount: number): number {
-  if (amount <= 2500) return 0;
-  const fee = amount * 0.015 + 100;
-  return Math.min(fee, 2000);
-}
-
-declare global {
-  interface Window {
-    PaystackPop: {
-      setup: (options: Record<string, unknown>) => { openIframe: () => void };
-    };
-  }
-}
-
 interface CheckoutSummaryProps {
   plan: typeof PLANS[0];
   user: { name: string; email: string; phone: string };
@@ -83,9 +71,6 @@ interface CheckoutSummaryProps {
 }
 
 function CheckoutSummary({ plan, user, onConfirm, onCancel, loading }: CheckoutSummaryProps) {
-  const fee = calcPaystackFee(plan.price);
-  const total = plan.price + fee;
-
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4 sm:pb-0">
       <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0D1130] shadow-2xl overflow-hidden">
@@ -107,7 +92,7 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading }: CheckoutS
         {/* Plan summary */}
         <div className="px-6 py-5">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-            You're subscribing to
+            You&apos;re subscribing to
           </p>
           <div className="flex items-center justify-between rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] px-4 py-3 mb-5">
             <div>
@@ -116,7 +101,7 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading }: CheckoutS
             </div>
             <div className="text-right">
               <p className="text-lg font-extrabold text-white">₦{plan.price.toLocaleString()}</p>
-              <p className="text-xs text-slate-500">per month</p>
+              <p className="text-xs text-slate-500">per semester (3 months)</p>
             </div>
           </div>
 
@@ -145,24 +130,15 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading }: CheckoutS
             </div>
           </div>
 
-          {/* Fee breakdown */}
+          {/* Amount */}
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 mb-6 space-y-2">
             <div className="flex justify-between text-xs">
-              <span className="text-slate-500">Subtotal</span>
+              <span className="text-slate-500">Plan fee</span>
               <span className="text-slate-300">₦{plan.price.toLocaleString()}</span>
-            </div>
-            <div className="flex justify-between text-xs">
-              <span className="text-slate-500">
-                Processing fee
-                {fee === 0 ? " (waived)" : " (1.5% + ₦100)"}
-              </span>
-              <span className={fee === 0 ? "text-emerald-400" : "text-slate-300"}>
-                {fee === 0 ? "Free" : `₦${fee.toLocaleString()}`}
-              </span>
             </div>
             <div className="border-t border-white/[0.06] pt-2 flex justify-between text-sm font-bold">
               <span className="text-white">Total</span>
-              <span className="text-white">₦{total.toLocaleString()}</span>
+              <span className="text-white">₦{plan.price.toLocaleString()}</span>
             </div>
           </div>
 
@@ -180,13 +156,13 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading }: CheckoutS
             ) : (
               <>
                 <CreditCard className="h-4 w-4" />
-                Pay ₦{total.toLocaleString()} with Paystack
+                Pay ₦{plan.price.toLocaleString()} with PayVessel
               </>
             )}
           </button>
 
           <p className="mt-3 text-center text-xs text-slate-600">
-            🔒 Secured by Paystack · Your card details are never stored
+            🔒 Secured by PayVessel · Your card details are never stored
           </p>
         </div>
       </div>
@@ -199,7 +175,6 @@ function SubscribePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const justSubscribed = searchParams.get("subscribed") === "true";
-  const paystackReady = useRef(false);
 
   const [user, setUser] = useState<{
     name: string;
@@ -211,19 +186,6 @@ function SubscribePageInner() {
   const [processingPlan, setProcessingPlan] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [checkoutPlan, setCheckoutPlan] = useState<typeof PLANS[0] | null>(null);
-
-  // Load Paystack inline script once
-  useEffect(() => {
-    if (document.querySelector('script[src="https://js.paystack.co/v1/inline.js"]')) {
-      paystackReady.current = true;
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://js.paystack.co/v1/inline.js";
-    script.async = true;
-    script.onload = () => { paystackReady.current = true; };
-    document.body.appendChild(script);
-  }, []);
 
   useEffect(() => {
     async function loadUser() {
@@ -267,31 +229,10 @@ function SubscribePageInner() {
     loadUser();
   }, []);
 
-  function waitForPaystack(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (paystackReady.current && window.PaystackPop) { resolve(); return; }
-      let attempts = 0;
-      const interval = setInterval(() => {
-        attempts++;
-        if (window.PaystackPop) {
-          paystackReady.current = true;
-          clearInterval(interval);
-          resolve();
-        } else if (attempts > 20) {
-          clearInterval(interval);
-          reject(new Error("Paystack failed to load. Please refresh and try again."));
-        }
-      }, 200);
-    });
-  }
-
   async function handleConfirmCheckout() {
     if (!user || !checkoutPlan) return;
     setError("");
     setProcessingPlan(checkoutPlan.slug);
-
-    const fee = calcPaystackFee(checkoutPlan.price);
-    const totalAmount = checkoutPlan.price + fee;
 
     try {
       const { data: { session } } = await supabase.auth.refreshSession();
@@ -321,26 +262,22 @@ function SubscribePageInner() {
 
       setCheckoutPlan(null); // close modal
 
-      // Step 2 — wait for Paystack
-      await waitForPaystack();
+      // Step 2 — open PayVessel checkout
+      const init = Checkout({
+        api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
+      });
 
-      // Step 3 — open Paystack popup
-      const handler = window.PaystackPop.setup({
-        key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY!,
-        email: user.email,
-        amount: totalAmount * 100, // kobo
+      await init.initializeCheckout({
+        amount: String(checkoutPlan.price), // PayVessel expects string in Naira
         currency: "NGN",
-        ref: ourReference,
+        customer_email: user.email,
+        reference: ourReference,
         metadata: {
-          custom_fields: [
-            { display_name: "Plan", variable_name: "plan", value: planSlug },
-            { display_name: "Name", variable_name: "name", value: user.name },
-          ],
+          plan: planSlug,
+          name: user.name,
         },
-        onClose: function() {
-          setProcessingPlan(null);
-        },
-        callback: function(response: { reference: string }) {
+        onSuccessfulOrder: (response: { reference: string }) => {
+          // Payment confirmed by PayVessel — verify on backend
           fetch("/api/payments/verify", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -366,9 +303,15 @@ function SubscribePageInner() {
               setProcessingPlan(null);
             });
         },
+        onError: (error: unknown) => {
+          console.error("[PayVessel error]", error);
+          setError("Payment failed. Please try again.");
+          setProcessingPlan(null);
+        },
+        onClose: () => {
+          setProcessingPlan(null);
+        },
       });
-
-      handler.openIframe();
 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -414,9 +357,9 @@ function SubscribePageInner() {
           <div className="mb-8 flex items-center gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] px-5 py-4">
             <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />
             <div>
-              <p className="text-sm font-semibold text-emerald-300">You're now subscribed!</p>
+              <p className="text-sm font-semibold text-emerald-300">You&apos;re now subscribed!</p>
               <p className="text-xs text-slate-500 mt-0.5">
-                Your plan is active — enjoy full access to all courses.
+                Your plan is active — enjoy full access to all courses this semester.
               </p>
             </div>
           </div>
@@ -434,7 +377,7 @@ function SubscribePageInner() {
           <p className="mt-2 text-sm text-slate-500 max-w-sm mx-auto">
             {isPaid
               ? `You're on the ${currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1)} plan. Upgrade anytime for more access.`
-              : "Get unlimited access to all past questions, practice mode, and more across every course"}
+              : "Get unlimited access to all past questions, practice mode, and more — valid for a full semester"}
           </p>
         </div>
 
@@ -485,7 +428,6 @@ function SubscribePageInner() {
           {PLANS.map((plan) => {
             const isCurrentPlan = currentPlan === plan.slug;
             const isProcessing = processingPlan === plan.slug;
-            const fee = calcPaystackFee(plan.price);
 
             return (
               <div
@@ -519,16 +461,10 @@ function SubscribePageInner() {
                   </p>
                   <p className="mt-1 text-3xl font-extrabold text-white">
                     {plan.priceLabel}
-                    <span className="text-sm font-normal text-slate-500">/{plan.duration}</span>
+                    <span className="text-sm font-normal text-slate-500">/semester</span>
                   </p>
                   <p className="mt-1 text-xs text-slate-600">{plan.description}</p>
-                  {fee === 0 ? (
-                    <p className="mt-1 text-xs text-emerald-400 font-medium">✓ No processing fee</p>
-                  ) : (
-                    <p className="mt-1 text-xs text-slate-600">
-                      +₦{fee.toFixed(0)} fee → ₦{(plan.price + fee).toLocaleString()} total
-                    </p>
-                  )}
+                  <p className="mt-1 text-xs text-emerald-400 font-medium">✓ Valid for 3 months</p>
                 </div>
 
                 <ul className="flex-1 space-y-2 mb-5">
@@ -577,7 +513,7 @@ function SubscribePageInner() {
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-600">
-          Secure payments via Paystack · Cancel anytime · NGN only
+          Secure payments via PayVessel · NGN only · 3-month access per subscription
         </p>
 
       </div>
