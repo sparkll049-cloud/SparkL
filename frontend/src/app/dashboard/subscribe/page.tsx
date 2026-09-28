@@ -1,4 +1,4 @@
-
+// ./src/app/dashboard/subscribe/page.tsx
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
@@ -14,8 +14,8 @@ const PLANS = [
   {
     slug: "basic",
     name: "Basic",
-    price: 500,
-    priceLabel: "₦500",
+    price: 2000,
+    priceLabel: "₦2,000",
     duration: "semester",
     durationLabel: "3 months",
     description: "Perfect for a single semester",
@@ -31,8 +31,8 @@ const PLANS = [
   {
     slug: "pro",
     name: "Pro",
-    price: 1000,
-    priceLabel: "₦1,000",
+    price: 3500,
+    priceLabel: "₦3,500",
     duration: "semester",
     durationLabel: "3 months",
     description: "Best for serious students",
@@ -48,8 +48,8 @@ const PLANS = [
   {
     slug: "premium",
     name: "Premium",
-    price: 2000,
-    priceLabel: "₦2,000",
+    price: 5000,
+    priceLabel: "₦5,000",
     duration: "semester",
     durationLabel: "3 months",
     description: "Full unlimited access",
@@ -285,6 +285,7 @@ function SubscribePageInner() {
       await init.initializeCheckout({
         amount: String(checkoutPlan.price),
         currency: "NGN",
+        customer_name: user.name,         // ← fixes the type error
         customer_email: user.email,
         reference: ourReference,
         metadata: { plan: planSlug, name: user.name },
