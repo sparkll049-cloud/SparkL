@@ -1,15 +1,15 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Search, BookOpen, Upload, FileText, GraduationCap,
-  ChevronRight, ArrowRight, Clock, Plus, Flame,
+  ChevronRight, ArrowRight, Plus, Flame,
   Users, AlertCircle, Crown, Sparkles,
-  Target, Trophy, Zap, Star, Bell, BarChart2,
-  CheckCircle2, Calendar, Award, ChevronUp,
+  Target, Trophy, Zap, Bell, BarChart2,
+  CheckCircle2, Calendar, Award, ChevronUp, Timer,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import Image from "next/image";
@@ -17,10 +17,6 @@ import Image from "next/image";
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Course { id: string; name: string; }
-interface CourseSearchResult {
-  id: string; name: string;
-  department?: string | null; institution?: string | null;
-}
 interface Profile {
   full_name: string | null; phone: string | null;
   institution: { name: string } | null;
@@ -39,6 +35,25 @@ interface DashboardData {
   profile: Profile;
   recent_questions: RecentQuestion[];
   stats: { questions_in_courses: number; my_uploads: number };
+}
+
+// Shape returned by GET /api/payments/subscription/status
+interface SubStatus {
+  is_paid: boolean;
+  is_trial: boolean;
+  effective_plan: string;
+  expires_at: string | null;
+  trial_days_left?: number;
+}
+
+interface Tier {
+  key: string;          // free | trial | basic | pro | premium | unknown
+  label: string;
+  detail: string;
+  color: string;
+  isPaid: boolean;      // true only for real paid plans (NOT trial)
+  isTrial: boolean;
+  expiringSoon: boolean;
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────────
@@ -75,7 +90,7 @@ async function fireStreakUpdate(
   }
 }
 
-// ── local  course search hook ─────────────────────────────────────────────────
+// ── local course search ───────────────────────────────────────────────────────
 function useLocalCourseSearch(query: string, courses: Course[]) {
   const q = query.trim().toLowerCase();
   if (!q) return { results: [] as Course[], searching: false };
@@ -84,6 +99,7 @@ function useLocalCourseSearch(query: string, courses: Course[]) {
     searching: false,
   };
 }
+
 // ── Count-up hook ──────────────────────────────────────────────────────────────
 
 function useCountUp(target: number, duration = 1200) {
@@ -103,7 +119,71 @@ function useCountUp(target: number, duration = 1200) {
   return value;
 }
 
-// ── Course palette ─────────────────────────────────────────────────────────────
+// ── Tier helpers ───────────────────────────────────────────────────────────────
+
+const TIER_COLORS: Record<string, string> = {
+  unknown: "#64748B",
+  free:    "#64748B",
+  trial:   "#F59E0B",
+  basic:   "#0EA5E9",
+  pro:     "#6366F1",
+  premium: "#8B5CF6",
+};
+
+function daysUntil(iso?: string | null): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.ceil((t - Date.now()) / 86_400_000);
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function getTier(sub: SubStatus | null): Tier {
+  if (!sub) {
+    return {
+      key: "unknown", label: "My plan", detail: "View plans",
+      color: TIER_COLORS.unknown, isPaid: false, isTrial: false, expiringSoon: false,
+    };
+  }
+
+  if (sub.is_trial) {
+    const d = sub.trial_days_left ?? 0;
+    return {
+      key: "trial", label: "Free Trial",
+      detail: `${d} day${d === 1 ? "" : "s"} left`,
+      color: TIER_COLORS.trial, isPaid: false, isTrial: true, expiringSoon: d <= 2,
+    };
+  }
+
+  if (sub.is_paid) {
+    const plan  = (sub.effective_plan || "pro").toLowerCase();
+    const label = plan.charAt(0).toUpperCase() + plan.slice(1);
+    const days  = daysUntil(sub.expires_at);
+    const soon  = days !== null && days <= 7;
+    let detail  = "Active";
+    if (days !== null) {
+      detail = days <= 0 ? "Expires today" : soon ? `${days}d left · Renew` : `Until ${formatDate(sub.expires_at!)}`;
+    }
+    return {
+      key: plan, label, detail,
+      color: TIER_COLORS[plan] ?? TIER_COLORS.pro, isPaid: true, isTrial: false, expiringSoon: soon,
+    };
+  }
+
+  // Free (or an expired paid plan)
+  const expiredDays = daysUntil(sub.expires_at);
+  const expired = expiredDays !== null && expiredDays <= 0;
+  return {
+    key: "free", label: "Free",
+    detail: expired ? "Plan expired · Renew" : "Upgrade for full access",
+    color: TIER_COLORS.free, isPaid: false, isTrial: false, expiringSoon: false,
+  };
+}
+
+// ── Course helpers ─────────────────────────────────────────────────────────────
 
 const COURSE_PALETTE = [
   { accent: "#6366F1", light: "rgba(99,102,241,0.10)",  border: "rgba(99,102,241,0.20)"  },
@@ -114,8 +194,6 @@ const COURSE_PALETTE = [
   { accent: "#EF4444", light: "rgba(239,68,68,0.10)",   border: "rgba(239,68,68,0.20)"   },
 ];
 
-// ── Initials helper (skips numeric words) ─────────────────────────────────────
-
 function courseInitials(name: string): string {
   const letters = name
     .split(" ")
@@ -125,6 +203,21 @@ function courseInitials(name: string): string {
     .join("");
   return letters || name.slice(0, 2).toUpperCase();
 }
+
+// "CSC 201 - Intro to Programming" → { code: "CSC 201", title: "Intro to Programming" }
+function splitCourseName(name: string): { code: string | null; title: string } {
+  const m = name.match(/^\s*([A-Za-z]{2,5})\s?-?\s?(\d{2,4}[A-Za-z]?)\s*[-:–—]?\s*(.*)$/);
+  if (!m) return { code: null, title: name };
+  const title = m[3].trim();
+  return { code: `${m[1].toUpperCase()} ${m[2]}`, title: title || name };
+}
+
+const clamp2: React.CSSProperties = {
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+};
 
 // ── Skeleton ───────────────────────────────────────────────────────────────────
 
@@ -150,12 +243,12 @@ function PageSkeleton() {
             <Bone className="h-40 rounded-2xl" />
           </div>
           <div className="space-y-6 lg:col-span-2">
-            <div className="grid grid-cols-3 gap-3">
-              {[...Array(3)].map((_, i) => <Bone key={i} className="h-24 rounded-2xl" />)}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[...Array(4)].map((_, i) => <Bone key={i} className="h-24 rounded-2xl" />)}
             </div>
             <Bone className="h-10 rounded-full" />
-            <div className="grid grid-cols-2 gap-3">
-              {[...Array(6)].map((_, i) => <Bone key={i} className="h-28 rounded-2xl" />)}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {[...Array(6)].map((_, i) => <Bone key={i} className="h-40 rounded-2xl" />)}
             </div>
             <Bone className="h-48 rounded-2xl" />
           </div>
@@ -224,6 +317,35 @@ function LevelBadge({ xp = 0 }: { xp: number }) {
   );
 }
 
+// ── Tier pill (top bar) — clickable, goes to subscribe page ──────────────────
+
+function TierPill({ tier }: { tier: Tier }) {
+  return (
+    <Link
+      href="/dashboard/subscribe"
+      title="View or manage your plan"
+      className="flex shrink-0 items-center gap-2 rounded-xl border px-2 py-1.5 transition-all hover:-translate-y-0.5 hover:shadow-md sm:px-2.5"
+      style={{ background: `${tier.color}12`, borderColor: `${tier.color}38` }}
+    >
+      <span
+        className="flex h-6 w-6 items-center justify-center rounded-lg text-white"
+        style={{ background: tier.color }}
+      >
+        {tier.isPaid
+          ? <Crown className="h-3 w-3" fill="currentColor" />
+          : tier.isTrial
+          ? <Timer className="h-3 w-3" />
+          : <Sparkles className="h-3 w-3" />}
+      </span>
+      <span className="hidden leading-tight sm:block">
+        <span className="block text-[11px] font-black" style={{ color: tier.color }}>{tier.label}</span>
+        <span className="block text-[9px]" style={{ color: "var(--sp-text-3)" }}>{tier.detail}</span>
+      </span>
+      <span className="text-[11px] font-black sm:hidden" style={{ color: tier.color }}>{tier.label}</span>
+    </Link>
+  );
+}
+
 // ── Stat card ──────────────────────────────────────────────────────────────────
 
 function StatCard({ icon, label, value, accent, delta }: {
@@ -251,74 +373,137 @@ function StatCard({ icon, label, value, accent, delta }: {
   );
 }
 
-// ── Course card ────────────────────────────────────────────────────────────────
+// ── Plan tile (4th stat tile) — clickable ─────────────────────────────────────
+
+function PlanTile({ tier }: { tier: Tier }) {
+  return (
+    <Link
+      href="/dashboard/subscribe"
+      className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+      style={{ background: "var(--sp-bg-card)", borderColor: `${tier.color}45` }}
+    >
+      <div className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-25 blur-xl transition-opacity group-hover:opacity-50"
+        style={{ background: tier.color }} />
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ background: `${tier.color}20` }}>
+          <Crown className="h-4 w-4" style={{ color: tier.color }} />
+        </div>
+        <ChevronRight className="h-3.5 w-3.5 opacity-40 transition-opacity group-hover:opacity-90" style={{ color: tier.color }} />
+      </div>
+      <p className="truncate text-xl font-black leading-tight" style={{ color: tier.color }}>{tier.label}</p>
+      <p className="mt-0.5 truncate text-[11px] font-medium" style={{ color: "var(--sp-text-3)" }}>{tier.detail}</p>
+    </Link>
+  );
+}
+
+// ── Course card (thumbnail style) ─────────────────────────────────────────────
 
 function CourseCard({ course, index }: { course: Course; index: number }) {
-  const p       = COURSE_PALETTE[index % COURSE_PALETTE.length];
+  const p        = COURSE_PALETTE[index % COURSE_PALETTE.length];
+  const { code, title } = splitCourseName(course.name);
   const initials = courseInitials(course.name);
   return (
     <Link
       href={`/dashboard/courses/${course.id}`}
-      className="group relative flex flex-col overflow-hidden rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-1 hover:shadow-xl"
-      style={{ background: p.light, borderColor: p.border }}
+      className="group flex w-[152px] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border transition-all duration-200 hover:-translate-y-1 hover:shadow-xl sm:w-auto"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
     >
-      <div className="absolute inset-x-0 top-0 h-0.5 rounded-t-2xl opacity-60" style={{ background: p.accent }} />
+      {/* Thumbnail */}
       <div
-        className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl text-sm font-black text-white shadow-md"
-        style={{ background: p.accent, boxShadow: `0 4px 12px ${p.accent}40` }}
+        className="relative h-24 overflow-hidden"
+        style={{ background: `linear-gradient(135deg, ${p.accent}26, ${p.accent}0D)` }}
       >
-        {initials}
+        <div
+          className="absolute left-1/2 top-4 h-[84px] w-16 -translate-x-1/2 rounded-md bg-white transition-transform duration-200 group-hover:-translate-y-1"
+          style={{ boxShadow: `0 6px 16px ${p.accent}35` }}
+        >
+          <div className="mx-2 mt-2 h-1.5 rounded-full" style={{ background: p.accent }} />
+          {[0, 1, 2, 3, 4, 5].map(i => (
+            <div
+              key={i}
+              className="mx-2 mt-1.5 h-[3px] rounded-full bg-slate-200"
+              style={{ width: `${62 + ((i * 17) % 32)}%` }}
+            />
+          ))}
+        </div>
+        <span
+          className="absolute left-2 top-2 rounded-md px-1.5 py-0.5 text-[9px] font-black text-white shadow"
+          style={{ background: p.accent }}
+        >
+          {code ?? initials}
+        </span>
       </div>
-      <p className="flex-1 text-xs font-bold leading-snug" style={{ color: p.accent }}>{course.name}</p>
-      <div
-        className="mt-3 flex items-center gap-1 text-[10px] font-bold opacity-0 transition-opacity group-hover:opacity-100"
-        style={{ color: p.accent }}
-      >
-        Study now <ArrowRight className="h-2.5 w-2.5" />
+
+      {/* Body */}
+      <div className="flex flex-1 flex-col p-3">
+        <p className="min-h-[2rem] text-xs font-bold leading-snug" style={{ ...clamp2, color: "var(--sp-text)" }}>
+          {title}
+        </p>
+        <p className="mt-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+          Past questions · Practice
+        </p>
+        <div
+          className="mt-2.5 flex items-center gap-1 text-[10px] font-bold"
+          style={{ color: p.accent }}
+        >
+          Study now
+          <ArrowRight className="h-2.5 w-2.5 transition-transform group-hover:translate-x-0.5" />
+        </div>
       </div>
     </Link>
   );
 }
 
-// ── Activity item ──────────────────────────────────────────────────────────────
+// ── Activity item (feed style) ────────────────────────────────────────────────
 
 function ActivityItem({ q, index }: { q: RecentQuestion; index: number }) {
   const p = COURSE_PALETTE[index % COURSE_PALETTE.length];
+  const courseCode = q.course?.name ? splitCourseName(q.course.name).code : null;
   return (
     <Link
       href={`/questions/${q.id}`}
-      className="group flex items-center gap-3 rounded-xl border p-3 transition-all hover:border-indigo-500/30 hover:shadow-md"
+      className="group block rounded-xl border p-3 transition-all hover:border-indigo-500/30 hover:shadow-md"
       style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
     >
-      <div
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white"
-        style={{ background: p.accent, boxShadow: `0 3px 10px ${p.accent}35` }}
-      >
-        <FileText className="h-4 w-4" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{q.title}</p>
-        <p className="truncate text-[10px] mt-0.5" style={{ color: "var(--sp-text-3)" }}>
-          {q.course?.name ?? "—"}{q.year ? ` · ${q.year}` : ""}
-        </p>
-      </div>
-      <div className="flex shrink-0 flex-col items-end gap-1">
-        <span className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-          {new Date(q.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short" })}
-        </span>
-        {q.views != null && (
-          <span className="flex items-center gap-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-            <Users className="h-2.5 w-2.5" />{q.views}
-          </span>
-        )}
+      <div className="flex items-start gap-3">
+        <div
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white"
+          style={{ background: p.accent, boxShadow: `0 3px 10px ${p.accent}35` }}
+        >
+          <FileText className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex items-center gap-1.5">
+            <span
+              className="rounded px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide"
+              style={{ background: `${p.accent}18`, color: p.accent }}
+            >
+              Past question
+            </span>
+            <span className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+              {new Date(q.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short" })}
+            </span>
+          </div>
+          <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{q.title}</p>
+          <div className="mt-0.5 flex items-center gap-2 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+            <span className="truncate">
+              {courseCode ?? q.course?.name ?? "—"}{q.year ? ` · ${q.year}` : ""}
+            </span>
+            {q.views != null && (
+              <span className="flex shrink-0 items-center gap-1">
+                <Users className="h-2.5 w-2.5" />{q.views} views
+              </span>
+            )}
+          </div>
+        </div>
       </div>
     </Link>
   );
 }
 
-// ── Upgrade card ───────────────────────────────────────────────────────────────
+// ── Upgrade card (free / trial users) ─────────────────────────────────────────
 
-function UpgradeCard() {
+function UpgradeCard({ tier }: { tier: Tier }) {
   return (
     <div
       className="relative overflow-hidden rounded-2xl p-5 text-white"
@@ -332,19 +517,22 @@ function UpgradeCard() {
             <Crown className="h-4 w-4 text-yellow-300" fill="currentColor" />
           </div>
           <div>
-            <p className="text-xs font-black">SparkL Pro</p>
-            <p className="text-[10px] text-white/60">Student edition</p>
+            <p className="text-xs font-black">{tier.isTrial ? "Keep your full access" : "Upgrade SparkL"}</p>
+            <p className="text-[10px] text-white/60">
+              {tier.isTrial ? tier.detail : "Semester plans for students"}
+            </p>
           </div>
         </div>
         <p className="text-[11px] text-white/80 leading-relaxed">
-          Supercharge your studies with AI-powered tools built for Nigerian tertiary students.
+          Unlock every course and the AI study tools built for Nigerian tertiary students.
         </p>
         <div className="mt-3 space-y-2">
           {[
-            { icon: <Sparkles className="h-3 w-3" />,   text: "AI answer explanations" },
-            { icon: <BarChart2 className="h-3 w-3" />,  text: "Unlimited practice mode" },
-            { icon: <Award className="h-3 w-3" />,      text: "Certificates & badges" },
-            { icon: <CheckCircle2 className="h-3 w-3"/>, text: "Download past questions" },
+            { icon: <BookOpen className="h-3 w-3" />,     text: "All courses unlocked" },
+            { icon: <BarChart2 className="h-3 w-3" />,    text: "Unlimited read & practice mode" },
+            { icon: <Sparkles className="h-3 w-3" />,     text: "AI Cram study assistant" },
+            { icon: <CheckCircle2 className="h-3 w-3" />, text: "Unlimited note uploads (Pro)" },
+            { icon: <Award className="h-3 w-3" />,        text: "YouTube & link study (Premium)" },
           ].map(f => (
             <div key={f.text} className="flex items-center gap-2">
               <span className="text-yellow-300">{f.icon}</span>
@@ -357,7 +545,51 @@ function UpgradeCard() {
           className="mt-4 flex items-center justify-center gap-1.5 rounded-xl bg-white py-2.5 text-[11px] font-black text-indigo-700 transition hover:bg-yellow-50"
         >
           <Crown className="h-3 w-3 text-yellow-500" fill="currentColor" />
-          Unlock Pro — ₦2,500/mo
+          See plans — from ₦2,000/semester
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// ── Tier card (paid users) ────────────────────────────────────────────────────
+
+function TierCard({ tier }: { tier: Tier }) {
+  return (
+    <div
+      className="relative overflow-hidden rounded-2xl border p-4"
+      style={{ background: "var(--sp-bg-card)", borderColor: `${tier.color}45` }}
+    >
+      <div className="pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full opacity-20 blur-xl"
+        style={{ background: tier.color }} />
+      <div className="relative">
+        <div className="mb-3 flex items-center gap-3">
+          <div
+            className="flex h-10 w-10 items-center justify-center rounded-xl shadow-lg"
+            style={{ background: tier.color, boxShadow: `0 6px 16px ${tier.color}45` }}
+          >
+            <Crown className="h-5 w-5 text-yellow-300" fill="currentColor" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>SparkL {tier.label}</p>
+            <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>{tier.detail}</p>
+          </div>
+        </div>
+
+        {tier.expiringSoon && (
+          <div className="mb-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.07] px-3 py-2">
+            <p className="text-[10px] font-semibold text-amber-500">
+              Your plan ends soon — renew to keep your access.
+            </p>
+          </div>
+        )}
+
+        <Link
+          href="/dashboard/subscribe"
+          className="flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:-translate-y-0.5"
+          style={{ borderColor: `${tier.color}45`, color: tier.color, background: `${tier.color}0F` }}
+        >
+          {tier.expiringSoon ? "Renew plan" : "Manage plan"} <ChevronRight className="h-3 w-3" />
         </Link>
       </div>
     </div>
@@ -384,7 +616,7 @@ function TodayFocus({ courses }: { courses: Course[] }) {
         <Target className="h-3.5 w-3.5" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: p.accent }}>Today's focus</p>
+        <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: p.accent }}>Today&apos;s focus</p>
         <p className="truncate text-xs font-bold" style={{ color: "var(--sp-text)" }}>{c.name}</p>
       </div>
       <ArrowRight
@@ -466,10 +698,8 @@ function StreakSection({ streak }: { streak: number }) {
       <div className="flex items-center gap-4">
         <StreakRing streak={streak} size={72} />
         <div className="flex-1 space-y-2">
-          {/* Day dots — Mon to Sun */}
           <div className="flex gap-1">
             {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => {
-              // A day is "done" if it's before today AND within the current streak window
               const done    = i <= todayMF && (todayMF - i) < streak;
               const isToday = i === todayMF;
               return (
@@ -514,7 +744,7 @@ export default function DashboardHomePage() {
 
   const [query, setQuery]                 = useState("");
   const [avatarUrl, setAvatarUrl]         = useState<string | null>(null);
-  const [isPro, setIsPro]                 = useState(false);
+  const [sub, setSub]                     = useState<SubStatus | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
@@ -545,7 +775,16 @@ export default function DashboardHomePage() {
           `${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`,
           { headers: { Authorization: `Bearer ${session.access_token}` } },
         );
-        if (r2.ok) { const j = await r2.json(); setIsPro(j.is_paid === true); }
+        if (r2.ok) {
+          const j = await r2.json();
+          setSub({
+            is_paid:         j.is_paid === true,
+            is_trial:        j.is_trial === true,
+            effective_plan:  j.effective_plan ?? j.plan ?? "free",
+            expires_at:      j.expires_at ?? null,
+            trial_days_left: j.trial_days_left,
+          });
+        }
       } catch {}
     }
     load();
@@ -562,13 +801,14 @@ export default function DashboardHomePage() {
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
-
+  const tier            = getTier(sub);
   const courses         = data?.profile.courses ?? [];
   const recentQuestions = data?.recent_questions ?? [];
   const stats           = data?.stats ?? { questions_in_courses: 0, my_uploads: 0 };
   const streak          = data?.profile.streak ?? 0;
   const xp              = data?.profile.xp ?? 0;
-const { results: searchResults, searching: searchLoading } = useLocalCourseSearch(query, courses);
+  const { results: searchResults, searching: searchLoading } = useLocalCourseSearch(query, courses);
+
   if (isLoading) return <PageSkeleton />;
 
   if (error || !data) {
@@ -607,6 +847,8 @@ const { results: searchResults, searching: searchLoading } = useLocalCourseSearc
         .anim-4 { animation: fadeUp 0.4s ease both; animation-delay: 0.20s }
         .anim-5 { animation: fadeUp 0.4s ease both; animation-delay: 0.25s }
         .anim-6 { animation: fadeUp 0.4s ease both; animation-delay: 0.30s }
+        .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
       `}</style>
 
       {/* ══ TOPBAR ══ */}
@@ -614,16 +856,16 @@ const { results: searchResults, searching: searchLoading } = useLocalCourseSearc
         className="sticky top-0 z-40 border-b backdrop-blur-xl transition-colors"
         style={{ background: "var(--sp-header-bg)", borderColor: "var(--sp-border)" }}
       >
-        <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 lg:px-6">
+        <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 lg:gap-4 lg:px-6">
 
           {/* Logo */}
-          <Link href="/dashboard" className="flex shrink-0 items-center gap-2.5 mr-2">
+          <Link href="/dashboard" className="flex shrink-0 items-center gap-2.5 mr-1">
             <Image src="/images/logo.jpg" alt="SparkL" width={32} height={32} className="rounded-xl object-cover shadow-md" />
             <span className="hidden text-base font-black tracking-tight sm:block" style={{ color: "var(--sp-text)" }}>SparkL</span>
           </Link>
 
           {/* Search */}
-          <div className="relative flex-1 max-w-md mx-auto" ref={searchRef}>
+          <div className="relative min-w-0 flex-1 max-w-md mx-auto" ref={searchRef}>
             <Search
               className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 transition-colors"
               style={{ color: searchFocused ? "#6366F1" : "var(--sp-text-3)" }}
@@ -671,7 +913,7 @@ const { results: searchResults, searching: searchLoading } = useLocalCourseSearc
                     {searchResults.map((c, i) => {
                       const p        = COURSE_PALETTE[i % COURSE_PALETTE.length];
                       const initials = courseInitials(c.name);
-                      
+
                       return (
                         <Link
                           key={c.id}
@@ -687,7 +929,6 @@ const { results: searchResults, searching: searchLoading } = useLocalCourseSearc
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{c.name}</p>
-                            
                           </div>
                           <ArrowRight className="ml-auto h-3 w-3 shrink-0" style={{ color: p.accent }} />
                         </Link>
@@ -701,8 +942,9 @@ const { results: searchResults, searching: searchLoading } = useLocalCourseSearc
 
           {/* Right actions */}
           <div className="flex items-center gap-2">
+            <TierPill tier={tier} />
             <button
-              className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30"
+              className="relative hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 sm:flex"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
             >
               <Bell className="h-4 w-4" style={{ color: "var(--sp-text-2)" }} />
@@ -803,7 +1045,7 @@ const { results: searchResults, searching: searchLoading } = useLocalCourseSearc
           </aside>
 
           {/* ── MAIN ── */}
-          <main className="space-y-5 lg:col-span-2">
+          <main className="space-y-5 lg:col-span-2 min-w-0">
 
             {/* Greeting */}
             <div
@@ -830,24 +1072,25 @@ const { results: searchResults, searching: searchLoading } = useLocalCourseSearc
                     </p>
                   )}
                 </div>
-                {!isPro && (
+                {!tier.isPaid && (
                   <Link
                     href="/dashboard/subscribe"
                     className="shrink-0 flex items-center gap-1.5 rounded-full bg-indigo-600 px-3.5 py-2 text-[11px] font-black text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5"
                   >
                     <Crown className="h-3 w-3 text-yellow-300" fill="currentColor" />
-                    Go Pro
+                    Upgrade
                   </Link>
                 )}
               </div>
             </div>
 
-            {/* Stats */}
-            <div className="anim-2 grid grid-cols-3 gap-3">
-              <StatCard icon={<BookOpen className="h-4 w-4" />} label="My courses"  value={courses.length}                accent="#6366F1" />
-              <StatCard icon={<FileText className="h-4 w-4" />} label="Past papers" value={stats.questions_in_courses}    accent="#8B5CF6" />
-              <StatCard icon={<Trophy className="h-4 w-4" />}   label="Uploads"     value={stats.my_uploads}              accent="#10B981"
+            {/* Stats (4 tiles — the last one is the clickable plan tile) */}
+            <div className="anim-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <StatCard icon={<BookOpen className="h-4 w-4" />} label="My courses"  value={courses.length}             accent="#6366F1" />
+              <StatCard icon={<FileText className="h-4 w-4" />} label="Past papers" value={stats.questions_in_courses} accent="#8B5CF6" />
+              <StatCard icon={<Trophy className="h-4 w-4" />}   label="Uploads"     value={stats.my_uploads}           accent="#10B981"
                 delta={stats.my_uploads > 0 ? `${stats.my_uploads}` : undefined} />
+              <PlanTile tier={tier} />
             </div>
 
             {/* Today's focus */}
@@ -881,11 +1124,11 @@ const { results: searchResults, searching: searchLoading } = useLocalCourseSearc
                   cta={{ href: "/onboarding", label: "Choose courses" }}
                 />
               ) : (
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className="no-scrollbar -mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0">
                   {courses.map((c, i) => <CourseCard key={c.id} course={c} index={i} />)}
                   <Link
                     href="/onboarding"
-                    className="flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-4 transition-all hover:border-indigo-500/40 hover:bg-indigo-500/[0.03]"
+                    className="flex min-h-[170px] w-[152px] shrink-0 snap-start flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-4 transition-all hover:border-indigo-500/40 hover:bg-indigo-500/[0.03] sm:w-auto"
                     style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
                   >
                     <Plus className="h-5 w-5" />
@@ -894,6 +1137,26 @@ const { results: searchResults, searching: searchLoading } = useLocalCourseSearc
                 </div>
               )}
             </section>
+
+            {/* Simulate the real exam */}
+            {courses.length > 0 && (
+              <Link
+                href="/dashboard/courses"
+                className="anim-4 group flex items-center gap-4 rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+              >
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/30">
+                  <Timer className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-black" style={{ color: "var(--sp-text)" }}>Simulate the real exam</p>
+                  <p className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>
+                    Pick a course and practise past questions like the real thing.
+                  </p>
+                </div>
+                <ArrowRight className="h-4 w-4 shrink-0 text-indigo-500 opacity-60 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" />
+              </Link>
+            )}
 
             {/* Recent uploads */}
             <section className="anim-5">
@@ -923,20 +1186,7 @@ const { results: searchResults, searching: searchLoading } = useLocalCourseSearc
 
           {/* ── RIGHT RAIL ── */}
           <aside className="space-y-4 anim-6">
-            {!isPro && <UpgradeCard />}
-
-            {isPro && (
-              <div
-                className="rounded-2xl border p-4 text-center"
-                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-              >
-                <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600">
-                  <Crown className="h-5 w-5 text-yellow-300" fill="currentColor" />
-                </div>
-                <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>SparkL Pro Active</p>
-                <p className="mt-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>All features unlocked</p>
-              </div>
-            )}
+            {tier.isPaid ? <TierCard tier={tier} /> : <UpgradeCard tier={tier} />}
 
             {stats.my_uploads === 0 && (
               <div
