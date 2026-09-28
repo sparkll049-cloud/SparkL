@@ -254,7 +254,10 @@ function SubscribePageInner() {
     loadUser();
   }, []);
 
-  async function handleConfirmCheckout() {
+  // ./src/app/dashboard/subscribe/page.tsx
+// Only the handleConfirmCheckout function changes — rest of file stays identical
+
+async function handleConfirmCheckout() {
     if (!user || !checkoutPlan) return;
     setError("");
     setProcessingPlan(checkoutPlan.slug);
@@ -279,6 +282,52 @@ function SubscribePageInner() {
       const planSlug = checkoutPlan.slug;
 
       setCheckoutPlan(null);
+
+      const init = Checkout({ api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY! });
+
+      await init.initializeCheckout({
+        amount: String(checkoutPlan.price),
+        currency: "NGN",
+        customer_name: user.name,
+        customer_email: user.email,
+        reference: ourReference,
+        channels: ["card", "bank_transfer", "ussd"],  // ← fixes "channels is required"
+        metadata: { plan: planSlug, name: user.name },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        onSuccessfulOrder: (response: any) => {
+          fetch("/api/payments/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              reference: response.reference ?? response.transactionReference ?? response.data?.reference ?? ourReference,
+              our_reference: ourReference,
+              access_token: accessToken,
+            }),
+          })
+            .then((res) => res.json())
+            .then((data) => {
+              if (data.status === "success" || data.status === "already_verified") {
+                setCurrentPlan(planSlug);
+                router.push("/dashboard/subscribe?subscribed=true");
+              } else {
+                setError(data.detail ?? "Verification failed. Please contact support.");
+              }
+            })
+            .catch(() => setError("Network error during verification. Please contact support."))
+            .finally(() => setProcessingPlan(null));
+        },
+        onError: (error: unknown) => {
+          console.error("[PayVessel error]", error);
+          setError("Payment failed. Please try again.");
+          setProcessingPlan(null);
+        },
+        onClose: () => setProcessingPlan(null),
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+      setProcessingPlan(null);
+    }
+  }
 
       const init = Checkout({ api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY! });
 
