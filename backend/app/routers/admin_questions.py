@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
+import math
 from datetime import datetime, timezone
 from typing import Literal, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
@@ -13,6 +15,18 @@ from app.services.question_processor import ProcessingError, process_questions
 from app.services.watermarked_preview import watermark_preview
 from app.storage import delete_file, download_bytes, get_signed_url, upload_bytes
 from app.supabase_client import supabase
+
+try:
+    from pdf2image import convert_from_bytes
+    _PDF2IMAGE_OK = True
+except ImportError:
+    _PDF2IMAGE_OK = False
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    _PILLOW_OK = True
+except ImportError:
+    _PILLOW_OK = False
 
 router = APIRouter(prefix="/api/admin/questions", tags=["admin-questions"])
 MAX_EXTRACTED_TEXT_LENGTH = 50_000
@@ -66,6 +80,105 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# ── Page-preview helpers (sync — run in threadpool) ───────────────────────────
+
+def _get_font(size: int):
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _apply_admin_watermark(img: "Image.Image", admin_id: str) -> "Image.Image":
+    """Light tiled watermark + admin footer bar — applied per page."""
+    img = img.convert("RGBA")
+    w, h = img.size
+
+    # Tiled diagonal text
+    font_size = max(18, w // 35)
+    font = _get_font(font_size)
+    text = "SPARKL ADMIN"
+    color = (99, 102, 241, 30)
+
+    diag = int(math.hypot(w, h))
+    canvas = Image.new("RGBA", (diag * 2, diag * 2), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw = (bbox[2] - bbox[0]) + 48
+    th = (bbox[3] - bbox[1]) + 48
+    cw, ch = canvas.size
+    for row in range(-2, (ch // th) + 3):
+        for col in range(-2, (cw // tw) + 3):
+            x = col * tw + (row % 2) * (tw // 2)
+            y = row * th
+            draw.text((x, y), text, font=font, fill=color)
+    canvas = canvas.rotate(-26, resample=Image.BICUBIC)
+    ox = (canvas.width - w) // 2
+    oy = (canvas.height - h) // 2
+    cropped = canvas.crop((ox, oy, ox + w, oy + h))
+    img = Image.alpha_composite(img, cropped)
+
+    # Footer bar
+    bar_h = max(32, h // 28)
+    ffont = _get_font(max(11, w // 60))
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    footer = f"Admin review only — SparkL  ·  {admin_id[:8]}…  ·  {stamp}"
+    draw2 = ImageDraw.Draw(img)
+    draw2.rectangle([(0, h - bar_h), (w, h)], fill=(10, 10, 30, 200))
+    fb = draw2.textbbox((0, 0), footer, font=ffont)
+    tx = (w - (fb[2] - fb[0])) // 2
+    ty = h - bar_h + (bar_h - (fb[3] - fb[1])) // 2
+    draw2.text((tx, ty), footer, font=ffont, fill=(255, 255, 255, 200))
+
+    return img.convert("RGB")
+
+
+def _page_count_sync(file_bytes: bytes, mime_type: str) -> int:
+    if mime_type == "application/pdf":
+        from pypdf import PdfReader
+        try:
+            return len(PdfReader(io.BytesIO(file_bytes)).pages)
+        except Exception:
+            return 1
+    return 1  # images are always 1 page
+
+
+def _render_page_sync(
+    file_bytes: bytes, mime_type: str, page_num: int, admin_id: str
+) -> bytes:
+    if mime_type == "application/pdf":
+        if not _PDF2IMAGE_OK:
+            raise HTTPException(status_code=500, detail="pdf2image is not installed.")
+        pages = convert_from_bytes(
+            file_bytes, dpi=150, first_page=page_num, last_page=page_num, fmt="jpeg"
+        )
+        if not pages:
+            raise HTTPException(status_code=404, detail=f"Page {page_num} does not exist.")
+        buf = io.BytesIO()
+        pages[0].save(buf, format="JPEG", quality=92)
+        img_bytes = buf.getvalue()
+    else:
+        img_bytes = file_bytes  # JPEG / PNG — single page
+
+    if not _PILLOW_OK:
+        return img_bytes
+
+    img = Image.open(io.BytesIO(img_bytes))
+    watermarked = _apply_admin_watermark(img, admin_id)
+    out = io.BytesIO()
+    watermarked.save(out, format="JPEG", quality=88, optimize=True)
+    return out.getvalue()
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
 @router.get("")
 async def list_questions(
     status: Optional[str] = Query(None),
@@ -98,7 +211,12 @@ async def list_questions(
     ids = [q["id"] for q in questions]
     processed_ids: set[str] = set()
     if ids:
-        result = supabase.table("questions").select("past_question_id").in_("past_question_id", ids).execute()
+        result = (
+            supabase.table("questions")
+            .select("past_question_id")
+            .in_("past_question_id", ids)
+            .execute()
+        )
         processed_ids = {r["past_question_id"] for r in (result.data or [])}
 
     for question in questions:
@@ -106,7 +224,6 @@ async def list_questions(
         question["uploader"] = {"full_name": profile.get("full_name")} if profile else None
         question.pop("uploaded_by", None)
         question["ai_processed"] = question["id"] in processed_ids
-        # Never put the original B2 key in the admin list response either.
         question.pop("file_url", None)
     return questions
 
@@ -116,7 +233,7 @@ async def get_watermarked_preview_url(
     question_id: str,
     admin_id: str = Depends(get_current_admin),
 ):
-    """Return a short-lived URL to a watermarked derivative, never the original."""
+    """Legacy endpoint — kept for compatibility. Prefer preview-page/{n} instead."""
     _check_uuid(question_id, "question id")
     result = (
         supabase.table("past_questions")
@@ -137,12 +254,76 @@ async def get_watermarked_preview_url(
     preview_key = f"admin-previews/{question_id}/{admin_id}/{stamp}.preview"
     await run_in_threadpool(upload_bytes, preview_bytes, preview_key, preview_mime)
 
-    # Configure a B2 lifecycle rule for admin-previews/* (recommended: 1 hour).
     return {
         "url": get_signed_url(preview_key, expires_in=PREVIEW_EXPIRY_SECONDS),
         "expires_in": PREVIEW_EXPIRY_SECONDS,
         "watermarked": True,
     }
+
+
+@router.get("/{question_id}/preview-page-count")
+async def get_admin_preview_page_count(
+    question_id: str,
+    admin_id: str = Depends(get_current_admin),
+):
+    """Returns the total page count for the stored file."""
+    _check_uuid(question_id, "question id")
+    result = (
+        supabase.table("past_questions")
+        .select("id, file_url, mime_type")
+        .eq("id", question_id)
+        .maybe_single()
+        .execute()
+    )
+    row = result.data
+    if not row or not row.get("file_url"):
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    file_bytes = await run_in_threadpool(download_bytes, row["file_url"])
+    count = await run_in_threadpool(
+        _page_count_sync, file_bytes, row.get("mime_type", "application/pdf")
+    )
+    return {"page_count": count}
+
+
+@router.get("/{question_id}/preview-page/{page_num}")
+async def get_admin_preview_page(
+    question_id: str,
+    page_num: int = Path(..., ge=1, le=500),
+    admin_id: str = Depends(get_current_admin),
+):
+    """Render one page of the stored file as a watermarked JPEG — never exposes the raw B2 key."""
+    _check_uuid(question_id, "question id")
+    result = (
+        supabase.table("past_questions")
+        .select("id, file_url, mime_type")
+        .eq("id", question_id)
+        .maybe_single()
+        .execute()
+    )
+    row = result.data
+    if not row or not row.get("file_url"):
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    file_bytes = await run_in_threadpool(download_bytes, row["file_url"])
+    jpeg = await run_in_threadpool(
+        _render_page_sync,
+        file_bytes,
+        row.get("mime_type", "application/pdf"),
+        page_num,
+        str(admin_id),
+    )
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, private",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.patch("/{question_id}/status")
@@ -221,7 +402,10 @@ async def process_question_with_ai(
             .execute()
         )
         if reviewed.data:
-            raise HTTPException(status_code=409, detail="Reviewed questions exist; use force=true to regenerate.")
+            raise HTTPException(
+                status_code=409,
+                detail="Reviewed questions exist; use force=true to regenerate.",
+            )
 
     course_name = (record.get("course") or {}).get("name", "")
     try:
@@ -263,7 +447,10 @@ async def process_question_with_ai(
 
 
 @router.get("/{question_id}/processed-questions")
-async def get_processed_questions(question_id: str, admin_id: str = Depends(get_current_admin)):
+async def get_processed_questions(
+    question_id: str,
+    admin_id: str = Depends(get_current_admin),
+):
     _check_uuid(question_id, "question id")
     result = (
         supabase.table("questions")
@@ -303,7 +490,10 @@ async def update_question_item(
     if merged.get("question_type") == "mcq":
         filled = {key for key in "abcd" if (merged.get(f"option_{key}") or "").strip()}
         if len(filled) < 2 or merged.get("correct_answer") not in filled:
-            raise HTTPException(status_code=400, detail="MCQ needs at least two options and a valid answer.")
+            raise HTTPException(
+                status_code=400,
+                detail="MCQ needs at least two options and a valid answer.",
+            )
     else:
         for col in ("option_a", "option_b", "option_c", "option_d", "correct_answer"):
             data[col] = None
@@ -331,7 +521,11 @@ async def update_question_item(
 
 
 @router.delete("/{question_id}/items/{item_id}")
-async def delete_question_item(question_id: str, item_id: str, admin_id: str = Depends(get_current_admin)):
+async def delete_question_item(
+    question_id: str,
+    item_id: str,
+    admin_id: str = Depends(get_current_admin),
+):
     _check_uuid(question_id, "question id")
     _check_uuid(item_id, "item id")
     result = (
@@ -347,7 +541,10 @@ async def delete_question_item(question_id: str, item_id: str, admin_id: str = D
 
 
 @router.post("/{question_id}/verify-all")
-async def verify_all_items(question_id: str, admin_id: str = Depends(get_current_admin)):
+async def verify_all_items(
+    question_id: str,
+    admin_id: str = Depends(get_current_admin),
+):
     _check_uuid(question_id, "question id")
     result = (
         supabase.table("questions")
@@ -359,7 +556,10 @@ async def verify_all_items(question_id: str, admin_id: str = Depends(get_current
 
 
 @router.delete("/{question_id}")
-async def delete_question(question_id: str, admin_id: str = Depends(get_current_admin)):
+async def delete_question(
+    question_id: str,
+    admin_id: str = Depends(get_current_admin),
+):
     _check_uuid(question_id, "question id")
     existing = (
         supabase.table("past_questions")
@@ -376,4 +576,4 @@ async def delete_question(question_id: str, admin_id: str = Depends(get_current_
         raise HTTPException(status_code=404, detail="Question not found.")
     if file_key:
         delete_file(file_key)
-      return {"deleted": True}
+    return {"deleted": True}
