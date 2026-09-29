@@ -1,9 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, Lock, Mail, ArrowRight } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  Lock,
+  Mail,
+  ArrowRight,
+  ShieldCheck,
+} from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { Button } from "@/components/ui/button";
 
@@ -13,27 +21,39 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const formValid = email.trim() !== "" && password.trim() !== "";
+  const formValid =
+    email.trim() !== "" && password.trim() !== "";
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+
     setErrorMsg("");
-    if (!formValid) return;
+
+    if (!formValid || loading || googleLoading) return;
+
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } =
+      await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
     if (error) {
       setLoading(false);
+
       setErrorMsg(
         error.message === "Invalid login credentials"
           ? "Incorrect email or password."
           : error.message
       );
+
       return;
     }
 
@@ -45,171 +65,341 @@ export default function LoginPage() {
         .single();
 
       setLoading(false);
-      router.push(profile?.onboarding_completed ? "/dashboard" : "/onboarding");
+
+      router.push(
+        profile?.onboarding_completed
+          ? "/dashboard"
+          : "/onboarding"
+      );
+    }
+  }
+
+  async function handleGoogleLogin() {
+    setErrorMsg("");
+    setGoogleLoading(true);
+
+    const { error } =
+      await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
+        },
+      });
+
+    if (error) {
+      setGoogleLoading(false);
+      setErrorMsg(error.message);
     }
   }
 
   return (
-    <div className="min-h-screen bg-[#0A0F2C] flex">
+    <main className="min-h-dvh bg-slate-50">
+      <div className="grid min-h-dvh lg:h-dvh lg:grid-cols-2">
 
-      {/* ── Left panel: branding ── */}
-      <div className="hidden lg:flex lg:w-1/2 relative flex-col justify-between p-14 overflow-hidden">
+        {/* =========================================================
+            LEFT BRAND PANEL
+        ========================================================= */}
+        <aside className="relative hidden overflow-hidden bg-[#2563EB] lg:flex lg:flex-col lg:justify-between">
+          {/* Decorative background */}
+          <div className="pointer-events-none absolute inset-0">
+            <div className="absolute -right-32 -top-32 h-96 w-96 rounded-full bg-white/10 blur-3xl" />
 
-        {/* Grid bg */}
-        <div
-          className="absolute inset-0 opacity-[0.04]"
-          style={{
-            backgroundImage:
-              "linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)",
-            backgroundSize: "60px 60px",
-          }}
-        />
+            <div className="absolute -bottom-40 -left-32 h-[500px] w-[500px] rounded-full bg-blue-900/20 blur-3xl" />
 
-        {/* Glow */}
-        <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-600/20 rounded-full blur-[120px] pointer-events-none" />
+            <div
+              className="absolute inset-0 opacity-[0.06]"
+              style={{
+                backgroundImage:
+                  "linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)",
+                backgroundSize: "56px 56px",
+              }}
+            />
+          </div>
 
-        {/* Logo */}
-        <div className="relative">
-          <Link href="/" className="inline-flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-[#2563EB] flex items-center justify-center">
-              <span className="text-white font-black text-sm">S</span>
-            </div>
-            <span className="text-white font-bold text-xl tracking-tight">SparkL</span>
-          </Link>
-        </div>
+          {/* Logo */}
+          <div className="relative z-10 px-12 pt-10">
+            <Link
+              href="/"
+              className="inline-flex items-center"
+              aria-label="SparkL home"
+            >
+              <Image
+                src="/images/logo-white.png"
+                alt="SparkL"
+                width={120}
+                height={44}
+                priority
+                className="h-10 w-auto object-contain"
+              />
+            </Link>
+          </div>
 
-        {/* Quote block */}
-        <div className="relative max-w-sm">
-          <p className="text-3xl font-extrabold text-white leading-snug mb-6">
-            Every past question you need — in one place.
-          </p>
-          <p className="text-slate-400 text-sm leading-7">
-            Thousands of Nigerian tertiary institution students are already using
-            SparkL to prepare smarter. Welcome back.
-          </p>
+          {/* Main content */}
+          <div className="relative z-10 px-12">
+            <div className="max-w-md">
+              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3.5 py-1.5 text-xs font-semibold text-blue-50">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                Secure authentication
+              </div>
 
-          {/* Stats row */}
-          <div className="mt-10 flex gap-10">
-            <div>
-              <p className="text-2xl font-black text-white">10K+</p>
-              <p className="text-xs text-slate-500 mt-1">Students</p>
-            </div>
-            <div>
-              <p className="text-2xl font-black text-white">3K+</p>
-              <p className="text-xs text-slate-500 mt-1">Past questions</p>
-            </div>
-            <div>
-              <p className="text-2xl font-black text-white">Free</p>
-              <p className="text-xs text-slate-500 mt-1">Always</p>
+              <h2 className="text-5xl font-black leading-[1.02] tracking-[-0.04em] text-white">
+                Welcome
+                <br />
+                back.
+              </h2>
+
+              <p className="mt-6 max-w-sm text-sm leading-7 text-blue-100">
+                Pick up where you left off and keep making progress
+                with your studies.
+              </p>
+
+              <div className="mt-8 grid grid-cols-3 gap-3">
+                <div className="rounded-xl border border-white/10 bg-white/10 p-4">
+                  <p className="text-lg font-black text-white">
+                    Past
+                  </p>
+                  <p className="mt-1 text-xs text-blue-100">
+                    Questions
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-white/10 p-4">
+                  <p className="text-lg font-black text-white">
+                    Learn
+                  </p>
+                  <p className="mt-1 text-xs text-blue-100">
+                    Together
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-white/10 p-4">
+                  <p className="text-lg font-black text-white">
+                    Grow
+                  </p>
+                  <p className="mt-1 text-xs text-blue-100">
+                    Smarter
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Footer */}
-        <p className="relative text-xs text-slate-600">
-          © {new Date().getFullYear()} SparkL. All rights reserved.
-        </p>
-      </div>
+          {/* Footer */}
+          <div className="relative z-10 px-12 pb-8">
+            <p className="text-xs text-blue-100/60">
+              © {new Date().getFullYear()} SparkL. All rights reserved.
+            </p>
+          </div>
+        </aside>
 
-      {/* ── Right panel: form ── */}
-      <div className="w-full lg:w-1/2 flex items-center justify-center px-6 py-16 bg-[#060B1F]">
-        <div className="w-full max-w-md">
+        {/* =========================================================
+            RIGHT FORM
+        ========================================================= */}
+        <section className="min-h-dvh bg-slate-50">
+          <div className="mx-auto flex min-h-dvh w-full max-w-xl items-center px-5 py-8 sm:px-8 lg:px-12 lg:py-8">
 
-          {/* Mobile logo */}
-          <Link href="/" className="inline-flex items-center gap-3 mb-10 lg:hidden">
-            <div className="h-8 w-8 rounded-xl bg-[#2563EB] flex items-center justify-center">
-              <span className="text-white font-black text-xs">S</span>
-            </div>
-            <span className="text-white font-bold text-lg">SparkL</span>
-          </Link>
+            <div className="w-full">
 
-          <h1 className="text-3xl font-extrabold text-white">Welcome back</h1>
-          <p className="mt-2 text-slate-400 text-sm">Log in to continue studying.</p>
-
-          <form onSubmit={handleSubmit} className="mt-10 space-y-5">
-
-            {/* Email */}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Email address
-              </label>
-              <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
-                <Mail size={18} className="text-slate-500 shrink-0" />
-                <input
-                  type="email"
-                  placeholder="your@email.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="ml-3 w-full bg-transparent text-white placeholder:text-slate-600 outline-none text-sm"
-                />
-              </div>
-            </div>
-
-            {/* Password */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-slate-300">Password</label>
+              {/* Mobile header */}
+              <div className="mb-9 flex items-center justify-between lg:hidden">
                 <Link
-                  href="/auth/forgot-password"
-                  className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                  href="/"
+                  aria-label="SparkL home"
+                  className="flex items-center"
                 >
-                  Forgot password?
+                  <Image
+                    src="/images/logo.jpg"
+                    alt="SparkL"
+                    width={48}
+                    height={48}
+                    priority
+                    className="h-11 w-auto object-contain"
+                  />
+                </Link>
+
+                <Link
+                  href="/auth/signup"
+                  className="text-sm font-semibold text-slate-600 transition-colors hover:text-blue-600"
+                >
+                  Create account
                 </Link>
               </div>
-              <div className="flex h-13 items-center rounded-xl border border-white/10 bg-white/[0.04] px-4 transition duration-200 focus-within:border-blue-500 focus-within:bg-white/[0.07] focus-within:ring-1 focus-within:ring-blue-500/40">
-                <Lock size={18} className="text-slate-500 shrink-0" />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  placeholder="Enter your password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="ml-3 w-full bg-transparent text-white placeholder:text-slate-600 outline-none text-sm"
+
+              {/* Heading */}
+              <div className="mb-7">
+                <p className="mb-2 text-xs font-bold uppercase tracking-[0.12em] text-blue-600">
+                  Welcome back
+                </p>
+
+                <h1 className="text-3xl font-black tracking-[-0.035em] text-slate-950 sm:text-4xl">
+                  Log in to SparkL
+                </h1>
+
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  Continue your learning journey.
+                </p>
+              </div>
+
+              {/* Google */}
+              <button
+                type="button"
+                onClick={handleGoogleLogin}
+                disabled={loading || googleLoading}
+                className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 shadow-sm transition-all duration-200 hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Image
+                  src="/images/google.png"
+                  alt="Google"
+                  width={18}
+                  height={18}
+                  className="h-[18px] w-[18px] object-contain"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="text-slate-500 hover:text-slate-300 transition-colors"
+
+                {googleLoading
+                  ? "Connecting to Google..."
+                  : "Continue with Google"}
+              </button>
+
+              {/* Divider */}
+              <div className="my-6 flex items-center gap-4">
+                <div className="h-px flex-1 bg-slate-200" />
+
+                <span className="text-xs font-medium text-slate-400">
+                  or continue with email
+                </span>
+
+                <div className="h-px flex-1 bg-slate-200" />
+              </div>
+
+              {/* Form */}
+              <form
+                onSubmit={handleSubmit}
+                className="space-y-5"
+                autoComplete="on"
+              >
+                {/* Email */}
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">
+                    Email address
+                  </label>
+
+                  <div className="flex h-12 items-center rounded-xl border border-slate-200 bg-white px-3.5 transition-all duration-200 focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10">
+                    <Mail className="h-[18px] w-[18px] shrink-0 text-slate-400" />
+
+                    <input
+                      type="email"
+                      name="email"
+                      inputMode="email"
+                      autoComplete="email"
+                      placeholder="your@email.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="ml-3 min-w-0 w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Password */}
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <label className="text-sm font-semibold text-slate-700">
+                      Password
+                    </label>
+
+                    <Link
+                      href="/auth/forgot-password"
+                      className="text-xs font-semibold text-blue-600 transition-colors hover:text-blue-700"
+                    >
+                      Forgot password?
+                    </Link>
+                  </div>
+
+                  <div className="flex h-12 items-center rounded-xl border border-slate-200 bg-white px-3.5 transition-all duration-200 focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10">
+                    <Lock className="h-[18px] w-[18px] shrink-0 text-slate-400" />
+
+                    <input
+                      type={
+                        showPassword ? "text" : "password"
+                      }
+                      name="password"
+                      autoComplete="current-password"
+                      placeholder="Enter your password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="ml-3 min-w-0 w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setShowPassword((prev) => !prev)
+                      }
+                      className="ml-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                      aria-label={
+                        showPassword
+                          ? "Hide password"
+                          : "Show password"
+                      }
+                    >
+                      {showPassword ? (
+                        <EyeOff className="h-[18px] w-[18px]" />
+                      ) : (
+                        <Eye className="h-[18px] w-[18px]" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Remember */}
+                <label className="flex cursor-pointer items-center gap-3 text-sm text-slate-500">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-slate-300 accent-blue-600"
+                  />
+
+                  Keep me logged in
+                </label>
+
+                {/* Error */}
+                {errorMsg && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+                    <p className="text-sm text-red-600">
+                      {errorMsg}
+                    </p>
+                  </div>
+                )}
+
+                {/* Submit */}
+                <Button
+                  type="submit"
+                  disabled={!formValid || loading || googleLoading}
+                  className="h-12 w-full rounded-xl bg-[#2563EB] text-sm font-bold text-white shadow-sm shadow-blue-600/20 transition-all duration-200 hover:bg-blue-700 hover:shadow-md hover:shadow-blue-600/20 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
+                  {loading ? (
+                    "Logging in..."
+                  ) : (
+                    <>
+                      Log in
+                      <ArrowRight className="ml-1 h-4 w-4" />
+                    </>
+                  )}
+                </Button>
+              </form>
+
+              {/* Signup */}
+              <p className="mt-7 pb-3 text-center text-sm text-slate-500">
+                Don't have an account?{" "}
+                <Link
+                  href="/auth/signup"
+                  className="font-semibold text-blue-600 transition-colors hover:text-blue-700"
+                >
+                  Sign up free
+                </Link>
+              </p>
             </div>
-
-            {/* Remember me */}
-            <label className="flex items-center gap-3 text-sm text-slate-400 cursor-pointer">
-              <input
-                type="checkbox"
-                className="rounded border-white/20 bg-white/5 accent-blue-500"
-              />
-              Keep me logged in
-            </label>
-
-            {/* Error */}
-            {errorMsg && (
-              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3">
-                <p className="text-sm text-red-400">{errorMsg}</p>
-              </div>
-            )}
-
-            {/* Submit */}
-            <Button
-              type="submit"
-              disabled={!formValid || loading}
-              className="w-full h-13 rounded-xl bg-[#2563EB] text-sm font-semibold text-white hover:bg-blue-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {loading ? "Logging in..." : "Log in"}
-              {!loading && <ArrowRight size={16} />}
-            </Button>
-          </form>
-
-          <p className="mt-8 text-center text-sm text-slate-500">
-            Don't have an account?{" "}
-            <Link href="/auth/signup" className="text-blue-400 font-medium hover:text-blue-300 transition-colors">
-              Sign up free
-            </Link>
-          </p>
-        </div>
+          </div>
+        </section>
       </div>
-    </div>
+    </main>
   );
 }
