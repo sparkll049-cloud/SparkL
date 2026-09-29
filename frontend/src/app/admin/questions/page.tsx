@@ -18,7 +18,7 @@ import {
 import { createClient } from "@/utils/supabase/client";
 import ConfirmDialog from "../components/ConfirmDialog";
 import QuestionReviewPanel from "@/components/QuestionReviewPanel";
-import AdminWatermarkedPreview from "@/components/AdminWatermarkedPreview";
+import AdminPaperViewer from "@/components/AdminPaperViewer";
 
 interface Question {
   id: string;
@@ -641,9 +641,8 @@ export default function AdminQuestionsPage() {
       </div>
 
       {previewId && (
-        <AdminWatermarkedPreview
+        <AdminPaperViewer
           questionId={previewId}
-          mimeType={questions.find((q) => q.id === previewId)?.mime_type}
           open={true}
           onClose={() => setPreviewId(null)}
         />
