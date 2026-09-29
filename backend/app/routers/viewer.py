@@ -9,15 +9,13 @@ Students never receive:
   - a raw PDF or image byte stream of the original
 
 What they DO receive:
-  - server-rendered page images (for the page viewer)
+  - server-rendered page images (watermarked with their email)
   - structured question data (for practice mode — already handled in questions.py)
 """
 from __future__ import annotations
 
 import io
-import os
 import time
-from functools import lru_cache
 from typing import Optional
 from uuid import UUID
 
@@ -34,15 +32,14 @@ SIGNED_URL_TTL = 300
 FREE_PAGE_LIMIT = 2
 
 # ── In-memory page cache ──────────────────────────────────────────────────────
-# Stores rendered JPEG bytes per (question_id, page_number)
-# TTL: 30 minutes — clears itself to keep memory low on free tier
-_PAGE_CACHE: dict[tuple[str, int], tuple[bytes, float]] = {}
-_CACHE_TTL = 30 * 60  # 30 minutes in seconds
-_MAX_CACHE_ENTRIES = 40  # ~40 pages max in memory at once
+# Key: (question_id, page_number, user_email) — per-user so watermark is correct
+_PAGE_CACHE: dict[tuple[str, int, str], tuple[bytes, float]] = {}
+_CACHE_TTL = 30 * 60        # 30 minutes
+_MAX_CACHE_ENTRIES = 40     # ~40 pages max in memory at once
 
 
-def _cache_get(question_id: str, page: int) -> bytes | None:
-    key = (question_id, page)
+def _cache_get(question_id: str, page: int, user_email: str) -> bytes | None:
+    key = (question_id, page, user_email)
     entry = _PAGE_CACHE.get(key)
     if not entry:
         return None
@@ -53,21 +50,16 @@ def _cache_get(question_id: str, page: int) -> bytes | None:
     return data
 
 
-def _cache_set(question_id: str, page: int, data: bytes) -> None:
-    # Evict oldest entries if at cap
+def _cache_set(question_id: str, page: int, user_email: str, data: bytes) -> None:
     if len(_PAGE_CACHE) >= _MAX_CACHE_ENTRIES:
         oldest_key = min(_PAGE_CACHE, key=lambda k: _PAGE_CACHE[k][1])
         del _PAGE_CACHE[oldest_key]
-    _PAGE_CACHE[(question_id, page)] = (data, time.time())
+    _PAGE_CACHE[(question_id, page, user_email)] = (data, time.time())
 
 
 # ── Key normaliser ────────────────────────────────────────────────────────────
 
 def _to_key(file_url: str) -> str:
-    """
-    Old uploads stored the full B2 URL; new ones store just the key.
-    Always return a plain key so download_bytes works correctly.
-    """
     if not file_url.startswith("http"):
         return file_url
     marker = f"/file/{B2_BUCKET}/"
@@ -78,6 +70,24 @@ def _to_key(file_url: str) -> str:
     if len(parts) == 2:
         return parts[1]
     return file_url
+
+
+# ── Watermark ─────────────────────────────────────────────────────────────────
+
+def _add_watermark(img, text: str):
+    """Burn user email diagonally across the page."""
+    from PIL import Image, ImageDraw
+
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # Repeat watermark text diagonally across entire page
+    for y in range(-img.height, img.height * 2, 160):
+        for x in range(-img.width, img.width * 2, 320):
+            draw.text((x, y), text, fill=(140, 140, 140, 55))
+
+    watermarked = Image.alpha_composite(img.convert("RGBA"), overlay)
+    return watermarked.convert("RGB")
 
 
 # ── Auth helper ───────────────────────────────────────────────────────────────
@@ -109,7 +119,11 @@ async def get_current_user(
             profile.data.get("is_admin") or profile.data.get("admin_role")
         )
 
-    return {"id": UUID(user.id), "is_admin": is_admin}
+    return {
+        "id": UUID(user.id),
+        "is_admin": is_admin,
+        "email": user.email or str(user.id),  # fallback to id if no email
+    }
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -141,22 +155,29 @@ def _get_subscription(user_id: str) -> dict:
     return {"is_paid": False}
 
 
-# ── Core render function (download + render all pages at once) ────────────────
+# ── Core render function ──────────────────────────────────────────────────────
 
-def _render_all_pages(file_key: str, mime_type: str, question_id: str) -> int:
+def _render_all_pages(
+    file_key: str,
+    mime_type: str,
+    question_id: str,
+    user_email: str,
+) -> int:
     """
-    Downloads the file once, renders ALL pages to JPEG, caches them all.
+    Downloads the file once, renders ALL pages to watermarked JPEG, caches them.
     Returns total page count.
-    This way B2 is only hit once no matter how many pages the student views.
     """
+    from PIL import Image
+
     file_bytes = download_bytes(file_key)
 
-    # Guard: 15MB cap for free tier memory safety
     if len(file_bytes) > 15 * 1024 * 1024:
         raise HTTPException(
             status_code=413,
             detail="File too large to render on this plan.",
         )
+
+    watermark_text = f"SparkL · {user_email}"
 
     if mime_type == "application/pdf":
         try:
@@ -172,28 +193,35 @@ def _render_all_pages(file_key: str, mime_type: str, question_id: str) -> int:
 
         for i in range(total):
             page_num = i + 1
-            # Skip if already cached
-            if _cache_get(question_id, page_num) is not None:
+            # Skip if already cached for this user
+            if _cache_get(question_id, page_num, user_email) is not None:
                 continue
+
             page = pdf[i]
             bitmap = page.render(scale=150 / 72)
             pil_image = bitmap.to_pil()
+
+            # Burn watermark into the image
+            pil_image = _add_watermark(pil_image, watermark_text)
+
             buf = io.BytesIO()
             pil_image.save(buf, format="JPEG", quality=82, optimize=True)
-            _cache_set(question_id, page_num, buf.getvalue())
+            _cache_set(question_id, page_num, user_email, buf.getvalue())
 
         return total
 
     else:
         # Single image file
-        from PIL import Image
         img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
         if img.width > 1600:
             ratio = 1600 / img.width
             img = img.resize((1600, int(img.height * ratio)), Image.LANCZOS)
+
+        img = _add_watermark(img, watermark_text)
+
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=82, optimize=True)
-        _cache_set(question_id, 1, buf.getvalue())
+        _cache_set(question_id, 1, user_email, buf.getvalue())
         return 1
 
 
@@ -225,8 +253,10 @@ async def get_page_image(
                 detail=f"Free accounts can view the first {FREE_PAGE_LIMIT} pages only.",
             )
 
-    # Check cache first — avoid B2 download if already rendered
-    cached = _cache_get(question_id, page_number)
+    user_email = user["email"]
+
+    # Check cache first
+    cached = _cache_get(question_id, page_number, user_email)
     if cached:
         return Response(
             content=cached,
@@ -234,13 +264,15 @@ async def get_page_image(
             headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
         )
 
-    # Not cached — download and render ALL pages at once
+    # Not cached — download, watermark, and cache all pages
     file_key = _to_key(record["file_url"])
     mime_type: str = record.get("mime_type") or "application/pdf"
 
-    await run_in_threadpool(_render_all_pages, file_key, mime_type, question_id)
+    await run_in_threadpool(
+        _render_all_pages, file_key, mime_type, question_id, user_email
+    )
 
-    jpeg_bytes = _cache_get(question_id, page_number)
+    jpeg_bytes = _cache_get(question_id, page_number, user_email)
     if not jpeg_bytes:
         raise HTTPException(status_code=404, detail=f"Page {page_number} not found.")
 
@@ -267,9 +299,8 @@ async def get_page_count(
     file_key = _to_key(record["file_url"])
     mime_type: str = record.get("mime_type") or "application/pdf"
 
-    # Render all pages now so subsequent /page/{n} requests are instant
     total = await run_in_threadpool(
-        _render_all_pages, file_key, mime_type, question_id
+        _render_all_pages, file_key, mime_type, question_id, user["email"]
     )
 
     sub = {"is_paid": True} if user["is_admin"] else await run_in_threadpool(
