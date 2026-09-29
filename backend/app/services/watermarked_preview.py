@@ -27,7 +27,6 @@ def _pdf_overlay(width: float, height: float, text: str) -> bytes:
     c.setFont("Helvetica-Bold", max(12, min(width, height) / 42))
     c.translate(width / 2, height / 2)
     c.rotate(32)
-    # Repeated text makes casual cropping/removal harder.
     for y in range(-int(height), int(height) + 1, 90):
         for x in range(-int(width * 1.5), int(width * 1.5) + 1, 260):
             c.drawCentredString(x, y, text)
@@ -60,7 +59,6 @@ def watermark_image(image_bytes: bytes, admin_id: str) -> bytes:
         font = ImageFont.truetype("DejaVuSans-Bold.ttf", max(18, image.width // 45))
     except OSError:
         font = ImageFont.load_default()
-    # Visible repeated watermark; never claim browser content is impossible to copy.
     for y in range(-image.height, image.height * 2, max(100, image.height // 7)):
         for x in range(-image.width, image.width * 2, max(280, image.width // 4)):
             draw.text((x, y), text, fill=(30, 45, 90, 55), font=font)
@@ -74,4 +72,4 @@ def watermark_preview(file_bytes: bytes, mime_type: str, admin_id: str) -> tuple
         return watermark_pdf(file_bytes, admin_id), "application/pdf"
     if mime_type in {"image/jpeg", "image/png"}:
         return watermark_image(file_bytes, admin_id), "image/webp"
-       raise ValueError(f"Unsupported preview type: {mime_type}")
+    raise ValueError(f"Unsupported preview type: {mime_type}")
