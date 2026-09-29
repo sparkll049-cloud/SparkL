@@ -124,3 +124,4 @@ export default function SecureViewer({ questionId, inline = false }: Props) {
       )}
     </section>
   );
+}
