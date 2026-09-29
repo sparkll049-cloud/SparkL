@@ -15,8 +15,6 @@ from app.supabase_client import supabase
 router = APIRouter(prefix="/api/questions", tags=["Questions"])
 
 
-# Keep admin detection server-side for the unusual case where a staff client
-# needs to use the public detail route. Do not use it to expose file URLs.
 def _is_admin(user_id: UUID) -> bool:
     try:
         result = (
@@ -66,8 +64,6 @@ async def get_question(
     if not _can_access(row, user_id):
         raise HTTPException(status_code=404, detail="Question not found.")
 
-    # Deliberately omit file_url/storage_key/mime-level storage details that
-    # could help a student locate the original object.
     response = (
         supabase.table("past_questions")
         .select(
@@ -104,4 +100,4 @@ async def get_processed_questions(
         .order("question_number")
         .execute()
     )
-  return response.data or []
+    return response.data or []
