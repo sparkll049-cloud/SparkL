@@ -10,11 +10,11 @@ interface AuthLayoutProps {
 
 export default function AuthLayout({ children }: AuthLayoutProps) {
   return (
-    <main className="min-h-dvh w-full overflow-hidden bg-[#07091A]">
+    <main className="min-h-dvh w-full overflow-hidden bg-slate-50">
       <div className="grid min-h-dvh w-full lg:grid-cols-[0.9fr_1.1fr]">
-        {/* =======================================================
+        {/* =====================================================
             LEFT PANEL — DESKTOP
-        ======================================================= */}
+        ===================================================== */}
         <section className="relative hidden min-h-dvh overflow-hidden bg-blue-600 lg:flex">
           {/* Background decoration */}
           <div className="pointer-events-none absolute inset-0">
@@ -29,9 +29,8 @@ export default function AuthLayout({ children }: AuthLayoutProps) {
             <div className="absolute right-24 top-32 h-10 w-10 rounded-full border border-white/10" />
           </div>
 
-          {/* Content */}
           <div className="relative z-10 flex w-full flex-col px-10 py-9 xl:px-14 xl:py-10">
-            {/* Logo */}
+            {/* Desktop Logo */}
             <Link
               href="/"
               className="group inline-flex w-fit items-center"
@@ -47,7 +46,7 @@ export default function AuthLayout({ children }: AuthLayoutProps) {
               />
             </Link>
 
-            {/* Main content */}
+            {/* Main Content */}
             <div className="my-auto max-w-lg py-8">
               <p className="mb-4 text-sm font-semibold uppercase tracking-[0.16em] text-blue-100">
                 Your academic journey
@@ -67,7 +66,7 @@ export default function AuthLayout({ children }: AuthLayoutProps) {
               </p>
 
               {/* Illustration */}
-              <div className="mt-8 flex items-center">
+              <div className="mt-8">
                 <Image
                   src="/images/auth-illustration.png"
                   alt=""
@@ -90,35 +89,11 @@ export default function AuthLayout({ children }: AuthLayoutProps) {
           </div>
         </section>
 
-        {/* =======================================================
-            RIGHT PANEL — AUTH CONTENT
-        ======================================================= */}
-        <section className="relative flex min-h-dvh items-center justify-center overflow-y-auto bg-[#07091A] px-5 py-7 sm:px-8 lg:px-10 xl:px-14">
-          {/* Subtle background decoration */}
-          <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            <div className="absolute -right-40 -top-40 h-80 w-80 rounded-full bg-blue-600/10 blur-3xl" />
-
-            <div className="absolute -bottom-40 -left-40 h-80 w-80 rounded-full bg-blue-600/5 blur-3xl" />
-
-            <div className="absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-gradient-to-r from-transparent via-blue-500/20 to-transparent" />
-          </div>
-
-          {/* Auth content */}
-          <div className="relative z-10 w-full max-w-[440px]">
-            {/* Mobile logo */}
-            <div className="mb-7 flex justify-center lg:hidden">
-              <Link href="/" aria-label="SparkL home">
-                <Image
-                  src="/images/logo.jpg"
-                  alt="SparkL"
-                  width={46}
-                  height={46}
-                  priority
-                  className="h-11 w-11 rounded-xl object-cover"
-                />
-              </Link>
-            </div>
-
+        {/* =====================================================
+            RIGHT PANEL — AUTH
+        ===================================================== */}
+        <section className="flex min-h-dvh items-center justify-center overflow-y-auto bg-slate-50 px-5 py-5 sm:px-8 sm:py-8 lg:px-10 xl:px-14">
+          <div className="w-full max-w-[440px]">
             {children}
           </div>
         </section>
