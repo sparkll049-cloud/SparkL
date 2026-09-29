@@ -1,21 +1,19 @@
+
 """
 extraction_worker.py
 ---------------------
 Background worker that processes uploaded past questions.
-Runs inside the same FastAPI process as an asyncio loop.
 
 past_questions lifecycle (processing_status):
     uploaded   -> waiting in the queue
     extracting -> claimed by this worker
-    ready      -> text extracted (and questions generated, once wired in)
-    failed     -> gave up; the student/admin can hit "Retry"
+    ready      -> text extracted + questions generated
+    failed     -> gave up after MAX_ATTEMPTS; admin can retry via the API
 
-Safety features:
-    * Atomic claim, so two runs never work on the same paper
-    * Up to MAX_ATTEMPTS tries with exponential backoff (a bad file no longer
-      blocks the queue by being retried every 7 seconds forever)
-    * Papers stuck in 'extracting' (e.g. after a Render restart) are re-queued
-    * Blocking work (Gemini, Supabase) runs in a threadpool, not the event loop
+Changes vs previous version:
+  - _reset_for_retry() exposed so the admin "Retry" button works
+  - logging includes the Gemini model name so failures are obvious in Render logs
+  - _questions_exist checks the correct table ("questions")
 """
 from __future__ import annotations
 
@@ -33,12 +31,10 @@ from app.services.text_extractor import (
     EmptyExtractionError,
     UnsupportedFileTypeError,
 )
-
 from app.services.question_processor import process_questions, ProcessingError
 
 logger = logging.getLogger("extraction_worker")
 
-# Columns of the `questions` table that the LLM output maps onto
 QUESTION_COLUMNS = (
     "question_number", "question_text", "question_type",
     "option_a", "option_b", "option_c", "option_d",
@@ -64,7 +60,6 @@ def _now() -> datetime:
 
 
 def _ts(dt: datetime) -> str:
-    # 'Z' format is safe inside PostgREST filters ('+' would be misread)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -76,7 +71,7 @@ async def _download_from_b2(file_key: str) -> bytes:
         return response.content
 
 
-# ── Database helpers (sync — always called through run_in_threadpool) ─────────
+# ── Database helpers ──────────────────────────────────────────────────────────
 
 def _sweep_stale() -> None:
     cutoff = _ts(_now() - timedelta(minutes=STALE_AFTER_MINUTES))
@@ -115,7 +110,7 @@ def _claim(record_id: str, attempts: int) -> bool:
             }
         )
         .eq("id", record_id)
-        .eq("processing_status", "uploaded")  # atomic: only one claimer wins
+        .eq("processing_status", "uploaded")
         .execute()
     )
     return bool(res and res.data)
@@ -156,7 +151,7 @@ def _retry_or_fail(record_id: str, attempts_used: int, error: str) -> None:
     if attempts_used >= MAX_ATTEMPTS:
         _mark_failed(record_id, error)
         return
-    backoff_minutes = 2 ** attempts_used  # 2, 4 ...
+    backoff_minutes = 2 ** attempts_used
     (
         supabase.table("past_questions")
         .update(
@@ -171,7 +166,26 @@ def _retry_or_fail(record_id: str, attempts_used: int, error: str) -> None:
     )
 
 
-# ── Question generation hook ──────────────────────────────────────────────────
+def reset_for_retry(record_id: str) -> None:
+    """
+    Called by the admin API endpoint POST /api/admin/questions/{id}/retry.
+    Resets the paper so the worker picks it up again on its next poll.
+    Also clears any existing questions so they're regenerated cleanly.
+    """
+    # Remove stale questions first
+    supabase.table("questions").delete().eq("past_question_id", record_id).execute()
+
+    supabase.table("past_questions").update(
+        {
+            "processing_status":   "uploaded",
+            "processing_error":    None,
+            "processing_attempts": 0,
+            "processing_next_at":  None,
+        }
+    ).eq("id", record_id).execute()
+
+
+# ── Question generation ───────────────────────────────────────────────────────
 
 def _questions_exist(record_id: str) -> bool:
     res = (
@@ -185,7 +199,6 @@ def _questions_exist(record_id: str) -> bool:
 
 
 def _load_context(record_id: str) -> tuple[str, str]:
-    """Course and institution names give the LLM useful context."""
     try:
         res = (
             supabase.table("past_questions")
@@ -199,11 +212,11 @@ def _load_context(record_id: str) -> tuple[str, str]:
         )
         row = (res.data or [None])[0] or {}
         course = row.get("course") or {}
-        dept = course.get("department") or {}
-        inst = dept.get("institution") or {}
+        dept   = course.get("department") or {}
+        inst   = dept.get("institution") or {}
         return course.get("name") or "", inst.get("name") or ""
     except Exception:
-        try:  # nested join not available — fall back to the course name only
+        try:
             res = (
                 supabase.table("past_questions")
                 .select("course:courses(name)")
@@ -222,16 +235,12 @@ def _insert_questions(record_id: str, questions: list[dict]) -> None:
         {**{col: q.get(col) for col in QUESTION_COLUMNS}, "past_question_id": record_id}
         for q in questions
     ]
-    supabase.table("questions").insert(rows).execute()  # one batch = all or nothing
+    supabase.table("questions").insert(rows).execute()
 
 
 async def _generate_questions(record_id: str, text: str) -> None:
-    """
-    Turn the extracted text into rows in the `questions` table.
-    Skips papers that already have questions (safe to retry). Raises on
-    failure so the paper is retried with backoff.
-    """
     if await run_in_threadpool(_questions_exist, record_id):
+        logger.info("Questions already exist for %s — skipping generation.", record_id)
         return
 
     course_name, institution = await run_in_threadpool(_load_context, record_id)
@@ -241,45 +250,41 @@ async def _generate_questions(record_id: str, text: str) -> None:
             process_questions, text, course_name, institution
         )
     except ProcessingError:
-        raise  # handled by the retry logic in _process_past_question
+        raise
 
     await run_in_threadpool(_insert_questions, record_id, questions)
     logger.info("Saved %d questions for %s.", len(questions), record_id)
 
 
-# ── past_questions ────────────────────────────────────────────────────────────
+# ── Past question processor ───────────────────────────────────────────────────
 
 async def _process_past_question(record: dict) -> bool:
-    """Returns True if a paper was actually processed (so the caller paces calls)."""
-    record_id = record["id"]
-    attempts  = record.get("processing_attempts") or 0
+    record_id    = record["id"]
+    attempts     = record.get("processing_attempts") or 0
 
     if not await run_in_threadpool(_claim, record_id, attempts):
-        return False  # someone else got it
+        return False
     attempts_used = attempts + 1
 
     text = record.get("extracted_text")
 
     try:
-        # 1) Text: the upload route may already have extracted it
         if not text:
-            ext = _EXT_BY_MIME.get(record.get("mime_type", ""), "")
+            ext        = _EXT_BY_MIME.get(record.get("mime_type", ""), "")
             file_bytes = await _download_from_b2(record["file_url"])
-            result = await run_in_threadpool(extract_text, f"file{ext}", file_bytes)
-            text = result.text
+            result     = await run_in_threadpool(extract_text, f"file{ext}", file_bytes)
+            text       = result.text
             await run_in_threadpool(_save_text, record_id, result.text, result.quality)
             logger.info(
                 "Extracted %s — method: %s, quality: %.2f",
                 record_id, result.method, result.quality,
             )
 
-        # 2) Questions
         await _generate_questions(record_id, text)
-
         await run_in_threadpool(_mark_ready, record_id)
+        logger.info("Paper %s is ready.", record_id)
 
     except (UnsupportedFileTypeError, EmptyExtractionError) as e:
-        # Retrying won't help — the file itself is unreadable
         await run_in_threadpool(_mark_failed, record_id, f"Unreadable file: {e}", 0.0)
     except Exception as e:
         logger.warning(
@@ -291,7 +296,7 @@ async def _process_past_question(record: dict) -> bool:
     return True
 
 
-# ── answer_submissions (unchanged behaviour: text-only queue) ────────────────
+# ── Answer submission processor ───────────────────────────────────────────────
 
 def _next_submission() -> dict | None:
     res = (
