@@ -1,18 +1,11 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
 import {
-  Loader2,
-  FileText,
-  CheckCircle2,
-  XCircle,
-  Trash2,
-  ExternalLink,
-  ChevronDown,
-  Pencil,
-  Sparkles,
-  Clock,
-  AlertCircle,
+  Loader2, FileText, CheckCircle2, XCircle, Trash2,
+  ExternalLink, ChevronDown, Pencil, Sparkles, Clock,
+  AlertCircle, RefreshCw,
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
@@ -26,6 +19,7 @@ interface Question {
   year: string | null;
   status: "pending" | "approved" | "rejected";
   processing_status?: "uploaded" | "extracting" | "ready" | "failed";
+  processing_error?: string | null;
   created_at: string;
   mime_type: string | null;
   extracted_text: string | null;
@@ -38,61 +32,74 @@ interface Question {
 }
 
 const TABS = [
-  { key: "pending", label: "Pending" },
+  { key: "pending",  label: "Pending"  },
   { key: "approved", label: "Approved" },
   { key: "rejected", label: "Rejected" },
-  { key: "", label: "All" },
+  { key: "",         label: "All"      },
 ] as const;
 
-// The review panel uses --sp-* theme variables; this admin page is always dark,
-// so define them here for the panel.
 const PANEL_THEME = {
   "--sp-input-bg": "rgba(255,255,255,0.04)",
-  "--sp-border": "rgba(255,255,255,0.10)",
-  "--sp-bg-card": "rgba(255,255,255,0.02)",
-  "--sp-text": "#e2e8f0",
-  "--sp-text-2": "#cbd5e1",
-  "--sp-text-3": "#64748b",
+  "--sp-border":   "rgba(255,255,255,0.10)",
+  "--sp-bg-card":  "rgba(255,255,255,0.02)",
+  "--sp-text":     "#e2e8f0",
+  "--sp-text-2":   "#cbd5e1",
+  "--sp-text-3":   "#64748b",
 } as React.CSSProperties;
 
 // ── Status pill ───────────────────────────────────────────────────────────────
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { bg: string; label: string; icon: React.ReactNode }> = {
-    pending: {
-      bg: "bg-amber-500/10 text-amber-400 border border-amber-500/20",
-      label: "Pending",
-      icon: <Clock className="h-3 w-3" />,
-    },
-    approved: {
-      bg: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
-      label: "Approved",
-      icon: <CheckCircle2 className="h-3 w-3" />,
-    },
-    rejected: {
-      bg: "bg-red-500/10 text-red-400 border border-red-500/20",
-      label: "Rejected",
-      icon: <XCircle className="h-3 w-3" />,
-    },
+    pending:  { bg: "bg-amber-500/10 text-amber-400 border border-amber-500/20",   label: "Pending",  icon: <Clock       className="h-3 w-3" /> },
+    approved: { bg: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20", label: "Approved", icon: <CheckCircle2 className="h-3 w-3" /> },
+    rejected: { bg: "bg-red-500/10 text-red-400 border border-red-500/20",         label: "Rejected", icon: <XCircle     className="h-3 w-3" /> },
   };
   const s = map[status] ?? map.pending;
   return (
     <span className={`flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${s.bg}`}>
-      {s.icon}
-      {s.label}
+      {s.icon}{s.label}
     </span>
   );
 }
 
-function ProcessingBadge({ s }: { s?: string }) {
+// ── Processing badge + retry button ──────────────────────────────────────────
+function ProcessingBadge({
+  s, errorMsg, onRetry, retrying,
+}: {
+  s?: string;
+  errorMsg?: string | null;
+  onRetry: () => void;
+  retrying: boolean;
+}) {
   if (!s || s === "ready") return null;
-  if (s === "failed") {
-    return (
-      <p className="mt-2 flex items-center gap-1.5 text-xs text-red-400">
-        <AlertCircle className="h-3.5 w-3.5" />
-        Processing failed — open Review questions to retry
+
+  if (s === "failed") return (
+    <div className="mt-2 space-y-1.5">
+      <p className="flex items-center gap-1.5 text-xs text-red-400">
+        <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+        Processing failed{errorMsg ? `: ${errorMsg}` : ""}
       </p>
-    );
-  }
+      <button
+        onClick={onRetry}
+        disabled={retrying}
+        className="flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-400 transition hover:bg-blue-500/20 disabled:opacity-50"
+      >
+        {retrying
+          ? <Loader2 size={12} className="animate-spin" />
+          : <RefreshCw size={12} />
+        }
+        {retrying ? "Queuing…" : "Retry processing"}
+      </button>
+    </div>
+  );
+
+  if (s === "extracting") return (
+    <p className="mt-2 flex items-center gap-1.5 text-xs text-blue-400">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      Extracting text…
+    </p>
+  );
+
   return (
     <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
       <Loader2 className="h-3 w-3 animate-spin" />
@@ -105,31 +112,32 @@ function ProcessingBadge({ s }: { s?: string }) {
 export default function AdminQuestionsPage() {
   const supabase = createClient();
 
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<string>("pending");
-  const [actioningId, setActioningId] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [reviewId, setReviewId] = useState<string | null>(null);
-  const [previewId, setPreviewId] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [bulkLoading, setBulkLoading] = useState(false);
+  const [questions,    setQuestions]    = useState<Question[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState("");
+  const [activeTab,    setActiveTab]    = useState<string>("pending");
+  const [actioningId,  setActioningId]  = useState<string | null>(null);
+  const [expandedId,   setExpandedId]   = useState<string | null>(null);
+  const [reviewId,     setReviewId]     = useState<string | null>(null);
+  const [previewId,    setPreviewId]    = useState<string | null>(null);
+  const [selected,     setSelected]     = useState<Set<string>>(new Set());
+  const [bulkLoading,  setBulkLoading]  = useState(false);
+  const [retryingId,   setRetryingId]   = useState<string | null>(null);
 
-  const [deleteTarget, setDeleteTarget] = useState<Question | null>(null);
-  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
-  const [rejectTarget, setRejectTarget] = useState<Question | null>(null);
-  const [rejectReason, setRejectReason] = useState("");
+  const [deleteTarget,     setDeleteTarget]     = useState<Question | null>(null);
+  const [bulkConfirmOpen,  setBulkConfirmOpen]  = useState(false);
+  const [rejectTarget,     setRejectTarget]     = useState<Question | null>(null);
+  const [rejectReason,     setRejectReason]     = useState("");
 
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editText, setEditText] = useState("");
+  const [editingId,    setEditingId]    = useState<string | null>(null);
+  const [editText,     setEditText]     = useState("");
   const [savingTextId, setSavingTextId] = useState<string | null>(null);
-  const [textError, setTextError] = useState("");
+  const [textError,    setTextError]    = useState("");
 
   async function getToken() {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return null;
-    const expiresAt = session.expires_at ? session.expires_at * 1000 : 0;
+    const expiresAt      = session.expires_at ? session.expires_at * 1000 : 0;
     const isExpiringSoon = expiresAt - Date.now() < 60_000;
     if (isExpiringSoon) {
       const { data: refreshed } = await supabase.auth.refreshSession();
@@ -160,6 +168,32 @@ export default function AdminQuestionsPage() {
 
   useEffect(() => { loadQuestions(); }, [activeTab]);
 
+  // ── Retry failed processing ───────────────────────────────────────────────
+  async function retryProcessing(id: string) {
+    setRetryingId(id);
+    const token = await getToken();
+    if (!token) { setRetryingId(null); return; }
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/retry`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) throw new Error("Could not queue retry.");
+      // Update local state so badge flips to "uploading"
+      setQuestions(prev =>
+        prev.map(q => q.id === id
+          ? { ...q, processing_status: "uploaded", processing_error: null }
+          : q
+        )
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Retry failed.");
+    } finally {
+      setRetryingId(null);
+    }
+  }
+
   async function updateStatus(id: string, status: "approved" | "pending") {
     setActioningId(id);
     const token = await getToken();
@@ -176,9 +210,9 @@ export default function AdminQuestionsPage() {
       );
       if (!res.ok) throw new Error("Failed to update status.");
       if (activeTab && activeTab !== status) {
-        setQuestions((prev) => prev.filter((q) => q.id !== id));
+        setQuestions(prev => prev.filter(q => q.id !== id));
       } else {
-        setQuestions((prev) => prev.map((q) => (q.id === id ? { ...q, status } : q)));
+        setQuestions(prev => prev.map(q => q.id === id ? { ...q, status } : q));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -204,10 +238,10 @@ export default function AdminQuestionsPage() {
       );
       if (!res.ok) throw new Error("Failed to reject.");
       if (activeTab && activeTab !== "rejected") {
-        setQuestions((prev) => prev.filter((q) => q.id !== rejectTarget.id));
+        setQuestions(prev => prev.filter(q => q.id !== rejectTarget.id));
       } else {
-        setQuestions((prev) =>
-          prev.map((q) =>
+        setQuestions(prev =>
+          prev.map(q =>
             q.id === rejectTarget.id
               ? { ...q, status: "rejected", rejection_reason: rejectReason.trim() }
               : q
@@ -234,7 +268,7 @@ export default function AdminQuestionsPage() {
         { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
       );
       if (!res.ok) throw new Error("Failed to delete.");
-      setQuestions((prev) => prev.filter((q) => q.id !== id));
+      setQuestions(prev => prev.filter(q => q.id !== id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -244,17 +278,16 @@ export default function AdminQuestionsPage() {
   }
 
   function toggleSelected(id: string) {
-    setSelected((prev) => {
+    setSelected(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   }
 
   function toggleSelectAll() {
     if (selected.size === questions.length) setSelected(new Set());
-    else setSelected(new Set(questions.map((q) => q.id)));
+    else setSelected(new Set(questions.map(q => q.id)));
   }
 
   async function performBulkApprove() {
@@ -264,9 +297,8 @@ export default function AdminQuestionsPage() {
     const ids = Array.from(selected);
 
     try {
-      // fetch() doesn't throw on 4xx/5xx, so check each response
       const results = await Promise.all(
-        ids.map(async (id) => {
+        ids.map(async id => {
           try {
             const res = await fetch(
               `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/status`,
@@ -283,20 +315,19 @@ export default function AdminQuestionsPage() {
         })
       );
 
-      const okIds = new Set(results.filter((r) => r.ok).map((r) => r.id));
+      const okIds  = new Set(results.filter(r => r.ok).map(r => r.id));
       const failed = results.length - okIds.size;
 
       if (activeTab && activeTab !== "approved") {
-        setQuestions((prev) => prev.filter((q) => !okIds.has(q.id)));
+        setQuestions(prev => prev.filter(q => !okIds.has(q.id)));
       } else {
-        setQuestions((prev) =>
-          prev.map((q) => (okIds.has(q.id) ? { ...q, status: "approved" } : q))
+        setQuestions(prev =>
+          prev.map(q => okIds.has(q.id) ? { ...q, status: "approved" } : q)
         );
       }
-      setSelected(new Set(results.filter((r) => !r.ok).map((r) => r.id)));
-      if (failed > 0) {
-        setError(`${failed} paper${failed !== 1 ? "s" : ""} could not be approved. They're still selected.`);
-      }
+      setSelected(new Set(results.filter(r => !r.ok).map(r => r.id)));
+      if (failed > 0)
+        setError(`${failed} paper${failed !== 1 ? "s" : ""} could not be approved.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Bulk approve failed.");
     } finally {
@@ -335,8 +366,8 @@ export default function AdminQuestionsPage() {
         }
       );
       if (!res.ok) throw new Error("Failed to save changes.");
-      setQuestions((prev) =>
-        prev.map((q) => (q.id === id ? { ...q, extracted_text: trimmed } : q))
+      setQuestions(prev =>
+        prev.map(q => q.id === id ? { ...q, extracted_text: trimmed } : q)
       );
       setEditingId(null);
       setEditText("");
@@ -352,11 +383,8 @@ export default function AdminQuestionsPage() {
     <div className="min-h-screen bg-[#07091A] px-4 py-8 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-5xl">
 
-        {/* Header */}
         <div className="mb-8">
-          <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">
-            Admin
-          </p>
+          <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">Admin</p>
           <h1 className="text-3xl font-extrabold text-white">Past Questions</h1>
           <p className="mt-2 text-sm text-slate-500">
             Review uploads, check the AI-generated questions and answers, then approve before students see them.
@@ -366,7 +394,7 @@ export default function AdminQuestionsPage() {
         {/* Tabs + Bulk action */}
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2">
-            {TABS.map((tab) => (
+            {TABS.map(tab => (
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
@@ -392,7 +420,6 @@ export default function AdminQuestionsPage() {
           )}
         </div>
 
-        {/* Error */}
         {error && (
           <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
@@ -402,7 +429,6 @@ export default function AdminQuestionsPage() {
 
         {/* Question list */}
         <div className="rounded-2xl border border-white/[0.06] bg-[#0D1230] overflow-hidden">
-
           {loading ? (
             <div className="flex justify-center py-20">
               <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
@@ -418,7 +444,6 @@ export default function AdminQuestionsPage() {
             </div>
           ) : (
             <>
-              {/* Select all row */}
               <div className="flex items-center gap-3 border-b border-white/[0.05] px-5 py-3">
                 <input
                   type="checkbox"
@@ -431,10 +456,9 @@ export default function AdminQuestionsPage() {
               </div>
 
               <div className="divide-y divide-white/[0.05]">
-                {questions.map((q) => (
+                {questions.map(q => (
                   <div key={q.id} className="p-5">
 
-                    {/* Top row */}
                     <div className="flex flex-wrap items-start justify-between gap-4">
                       <div className="flex items-start gap-3">
                         <input
@@ -443,19 +467,16 @@ export default function AdminQuestionsPage() {
                           onChange={() => toggleSelected(q.id)}
                           className="mt-1 h-4 w-4 shrink-0 rounded border-white/20 bg-white/5 accent-blue-500"
                         />
-
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10">
                           <FileText className="h-4.5 w-4.5 text-blue-400" size={18} />
                         </div>
-
                         <div>
                           <p className="font-semibold text-white">{q.title}</p>
                           <p className="mt-0.5 text-sm text-slate-500">
                             {q.course?.name ?? "No course"}
                             {q.semester?.name ? ` · ${q.semester.name}` : ""}
                             {q.year ? ` · ${q.year}` : ""}
-                            {" · "}
-                            {q.uploader?.full_name ?? "Unknown"}
+                            {" · "}{q.uploader?.full_name ?? "Unknown"}
                           </p>
                           <p className="mt-1 text-xs text-slate-600">
                             {new Date(q.created_at).toLocaleDateString("en-GB", {
@@ -463,9 +484,14 @@ export default function AdminQuestionsPage() {
                             })}
                           </p>
 
-                          <ProcessingBadge s={q.processing_status} />
+                          {/* Processing badge with working retry button */}
+                          <ProcessingBadge
+                            s={q.processing_status}
+                            errorMsg={q.processing_error}
+                            onRetry={() => retryProcessing(q.id)}
+                            retrying={retryingId === q.id}
+                          />
 
-                          {/* Extraction quality warning */}
                           {q.extraction_quality !== null && q.extraction_quality < 0.5 && (
                             <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
                               <AlertCircle className="h-3.5 w-3.5" />
@@ -473,16 +499,13 @@ export default function AdminQuestionsPage() {
                             </div>
                           )}
 
-                          {/* Original file: admin-only, watermarked preview */}
                           <button
                             onClick={() => setPreviewId(q.id)}
                             className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
                           >
-                            Preview watermarked file
-                            <ExternalLink size={11} />
+                            Preview watermarked file <ExternalLink size={11} />
                           </button>
 
-                          {/* Extracted text toggle */}
                           {q.extracted_text && editingId !== q.id && (
                             <div className="mt-2 flex items-center gap-3">
                               <button
@@ -499,8 +522,7 @@ export default function AdminQuestionsPage() {
                                 onClick={() => startEditing(q)}
                                 className="flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
                               >
-                                <Pencil size={11} />
-                                Edit
+                                <Pencil size={11} /> Edit
                               </button>
                             </div>
                           )}
@@ -515,31 +537,26 @@ export default function AdminQuestionsPage() {
                           )}
                         </div>
                       </div>
-
                       <StatusPill status={q.status} />
                     </div>
 
-                    {/* Extracted text preview */}
                     {expandedId === q.id && q.extracted_text && editingId !== q.id && (
                       <div className="mt-4 max-h-48 overflow-y-auto rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm leading-7 text-slate-400">
                         {q.extracted_text}
                       </div>
                     )}
 
-                    {/* Extracted text editor */}
                     {editingId === q.id && (
                       <div className="mt-4">
                         <textarea
                           value={editText}
-                          onChange={(e) => setEditText(e.target.value)}
+                          onChange={e => setEditText(e.target.value)}
                           rows={10}
                           className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                         />
-                        {textError && (
-                          <p className="mt-1.5 text-xs text-red-400">{textError}</p>
-                        )}
+                        {textError && <p className="mt-1.5 text-xs text-red-400">{textError}</p>}
                         <p className="mt-1.5 text-[11px] text-slate-600">
-                          After changing the text, use Regenerate in Review questions to rebuild the questions from it.
+                          After changing the text, use Retry processing to rebuild questions from it.
                         </p>
                         <div className="mt-2 flex gap-2">
                           <button
@@ -569,22 +586,18 @@ export default function AdminQuestionsPage() {
                           disabled={actioningId === q.id}
                           className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20 disabled:opacity-50"
                         >
-                          <CheckCircle2 size={13} />
-                          Approve
+                          <CheckCircle2 size={13} /> Approve
                         </button>
                       )}
-
                       {q.status !== "rejected" && (
                         <button
                           onClick={() => { setRejectTarget(q); setRejectReason(""); }}
                           disabled={actioningId === q.id}
                           className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-400 transition hover:bg-amber-500/20 disabled:opacity-50"
                         >
-                          <XCircle size={13} />
-                          Reject
+                          <XCircle size={13} /> Reject
                         </button>
                       )}
-
                       {q.status !== "pending" && (
                         <button
                           onClick={() => updateStatus(q.id, "pending")}
@@ -594,18 +607,16 @@ export default function AdminQuestionsPage() {
                           Reset to Pending
                         </button>
                       )}
-
                       <button
                         onClick={() => setDeleteTarget(q)}
                         disabled={actioningId === q.id}
                         className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-400 transition hover:bg-red-500/20 disabled:opacity-50"
                       >
-                        <Trash2 size={13} />
-                        Delete
+                        <Trash2 size={13} /> Delete
                       </button>
                     </div>
 
-                    {/* ── Review questions (available before approval) ── */}
+                    {/* Review questions panel */}
                     {q.status !== "rejected" && (
                       <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
                         <button
@@ -648,7 +659,6 @@ export default function AdminQuestionsPage() {
         />
       )}
 
-      {/* ── Dialogs ── */}
       <ConfirmDialog
         open={deleteTarget !== null}
         title="Delete this past question?"
@@ -663,7 +673,7 @@ export default function AdminQuestionsPage() {
       <ConfirmDialog
         open={bulkConfirmOpen}
         title={`Approve ${selected.size} question${selected.size !== 1 ? "s" : ""}?`}
-        description="These will immediately become visible to students in their course pages and dashboards."
+        description="These will immediately become visible to students."
         confirmLabel="Approve All"
         tone="default"
         loading={bulkLoading}
@@ -671,7 +681,6 @@ export default function AdminQuestionsPage() {
         onCancel={() => setBulkConfirmOpen(false)}
       />
 
-      {/* Reject modal */}
       {rejectTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
           <div className="w-full max-w-sm rounded-2xl border border-white/[0.08] bg-[#0D1230] p-6 shadow-2xl">
@@ -681,7 +690,7 @@ export default function AdminQuestionsPage() {
             </p>
             <textarea
               value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
+              onChange={e => setRejectReason(e.target.value)}
               placeholder="e.g. Blurry scan, wrong course, incomplete pages..."
               rows={3}
               maxLength={300}
