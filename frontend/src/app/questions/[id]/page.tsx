@@ -748,7 +748,7 @@ export default function QuestionDetailPage() {
                     Practice questions not ready yet
                   </p>
                   <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                    AI is processing this paper. Check back shortly.
+                    Our Team are currently processing this paper. Check back shortly.
                   </p>
                 </div>
               )}
