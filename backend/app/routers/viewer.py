@@ -1,212 +1,282 @@
+"""
+viewer.py
+---------
+Serves protected past-question content to students and admins.
+
+Students never receive:
+  - the original B2 key
+  - a permanent URL
+  - a raw PDF or image byte stream of the original
+
+What they DO receive:
+  - short-lived signed URLs for admins only (watermarked derivative)
+  - server-rendered page images (for the page viewer)
+  - structured question data (for practice mode — already handled in questions.py)
+"""
 from __future__ import annotations
 
 import io
-import math
-from datetime import datetime, timezone
+import os
+from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import Response
 
-from app.auth import get_current_user  # ← adjust to your student auth dependency
-from app.storage import download_bytes
 from app.supabase_client import supabase
+from app.storage import download_bytes, get_signed_url
 
-try:
-    from pdf2image import convert_from_bytes
-    _PDF2IMAGE_OK = True
-except ImportError:
-    _PDF2IMAGE_OK = False
+router = APIRouter(prefix="/api/questions", tags=["Viewer"])
 
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    _PILLOW_OK = True
-except ImportError:
-    _PILLOW_OK = False
+# How many seconds a signed URL lives — admin preview only
+SIGNED_URL_TTL = 300
 
-router = APIRouter(prefix="/api/viewer", tags=["viewer"])
-
+# Free-tier page limit
 FREE_PAGE_LIMIT = 2
-RENDER_DPI = 110  # lighter than admin (150) to stay within Render free-tier memory
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Auth helper (same pattern as uploads.py) ──────────────────────────────────
 
-def _check_uuid(value: str) -> None:
+async def get_current_user(
+    authorization: Optional[str] = Header(None),
+) -> dict:
+    """Returns {"id": UUID, "is_admin": bool}"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    token = authorization.removeprefix("Bearer ").strip()
     try:
-        UUID(value)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid question id.") from exc
-
-
-def _user_id(user) -> str:
-    """Works whether get_current_user returns an id string, a dict, or an object."""
-    if isinstance(user, str):
-        return user
-    if isinstance(user, dict):
-        return str(user.get("id") or user.get("sub"))
-    return str(getattr(user, "id", user))
-
-
-def _is_paid(user_id: str) -> bool:
-    """
-    ADAPT THIS to however your /api/payments/subscription/status decides is_paid.
-    Example below assumes a `subscriptions` table with user_id, status, expires_at.
-    """
-    try:
-        res = (
-            supabase.table("subscriptions")
-            .select("status, expires_at")
-            .eq("user_id", user_id)
-            .eq("status", "active")
-            .limit(1)
-            .execute()
-        )
-        rows = res.data or []
-        if not rows:
-            return False
-        exp = rows[0].get("expires_at")
-        if exp:
-            expires = datetime.fromisoformat(exp.replace("Z", "+00:00"))
-            return expires > datetime.now(timezone.utc)
-        return True
+        user_response = supabase.auth.get_user(token)
     except Exception:
-        return False
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
+    user = getattr(user_response, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
 
-
-def _get_paper(question_id: str) -> dict:
-    res = (
-        supabase.table("past_questions")
-        .select("id, file_url, mime_type, status")
-        .eq("id", question_id)
-        .maybe_single()
+    # Check admin flag from profiles table
+    profile = (
+        supabase.table("profiles")
+        .select("is_admin, admin_role")
+        .eq("id", user.id)
+        .single()
         .execute()
     )
-    row = res.data if res else None
-    if not row or not row.get("file_url") or row.get("status") != "approved":
-        raise HTTPException(status_code=404, detail="Paper not found.")
-    return row
-
-
-def _get_font(size: int):
-    for path in (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-    ):
-        try:
-            return ImageFont.truetype(path, size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
-
-
-def _watermark(img: "Image.Image", user_id: str) -> "Image.Image":
-    img = img.convert("RGBA")
-    w, h = img.size
-    font = _get_font(max(16, w // 40))
-    text = f"SPARKL · {user_id[:8]}"
-    color = (99, 102, 241, 28)
-
-    diag = int(math.hypot(w, h))
-    canvas = Image.new("RGBA", (diag * 2, diag * 2), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(canvas)
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = (bbox[2] - bbox[0]) + 56
-    th = (bbox[3] - bbox[1]) + 56
-    cw, ch = canvas.size
-    for row in range(-2, (ch // th) + 3):
-        for col in range(-2, (cw // tw) + 3):
-            x = col * tw + (row % 2) * (tw // 2)
-            draw.text((x, row * th), text, font=font, fill=color)
-    canvas = canvas.rotate(-26, resample=Image.BICUBIC)
-    ox = (canvas.width - w) // 2
-    oy = (canvas.height - h) // 2
-    img = Image.alpha_composite(img, canvas.crop((ox, oy, ox + w, oy + h)))
-    return img.convert("RGB")
-
-
-def _page_count_sync(file_bytes: bytes, mime_type: str) -> int:
-    if mime_type == "application/pdf":
-        from pypdf import PdfReader
-        try:
-            return len(PdfReader(io.BytesIO(file_bytes)).pages)
-        except Exception:
-            return 1
-    return 1
-
-
-def _render_page_sync(
-    file_bytes: bytes, mime_type: str, page_num: int, user_id: str
-) -> bytes:
-    if mime_type == "application/pdf":
-        if not _PDF2IMAGE_OK:
-            raise HTTPException(status_code=500, detail="Page rendering unavailable.")
-        pages = convert_from_bytes(
-            file_bytes, dpi=RENDER_DPI, first_page=page_num, last_page=page_num, fmt="jpeg"
+    is_admin = False
+    if profile and profile.data:
+        is_admin = bool(
+            profile.data.get("is_admin") or profile.data.get("admin_role")
         )
-        if not pages:
-            raise HTTPException(status_code=404, detail=f"Page {page_num} does not exist.")
-        img = pages[0]
-    else:
-        if page_num != 1:
-            raise HTTPException(status_code=404, detail=f"Page {page_num} does not exist.")
-        img = Image.open(io.BytesIO(file_bytes))
 
-    if _PILLOW_OK:
-        img = _watermark(img, user_id)
-    out = io.BytesIO()
-    img.convert("RGB").save(out, format="JPEG", quality=85, optimize=True)
-    return out.getvalue()
+    return {"id": UUID(user.id), "is_admin": is_admin}
+
+
+def _get_question_record(question_id: str) -> dict:
+    res = (
+        supabase.table("past_questions")
+        .select("id, file_url, mime_type, status, uploaded_by, extraction_quality")
+        .eq("id", question_id)
+        .single()
+        .execute()
+    )
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
+    return res.data
+
+
+def _get_subscription(user_id: str) -> dict:
+    res = (
+        supabase.table("subscriptions")
+        .select("status, plan")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if res and res.data:
+        row = res.data[0]
+        is_paid = row.get("status") == "active"
+        return {"is_paid": is_paid}
+    return {"is_paid": False}
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@router.get("/{question_id}/page-count")
-async def page_count(question_id: str, user=Depends(get_current_user)):
-    _check_uuid(question_id)
-    row = _get_paper(question_id)
-    file_bytes = await run_in_threadpool(download_bytes, row["file_url"])
-    count = await run_in_threadpool(
-        _page_count_sync, file_bytes, row.get("mime_type") or "application/pdf"
-    )
-    return {"page_count": count, "free_page_limit": FREE_PAGE_LIMIT}
-
-
-@router.get("/{question_id}/page/{page_num}")
-async def get_page(
+@router.get(
+    "/{question_id}/page/{page_number}",
+    summary="Stream a single rendered page image — no raw file ever sent to browser",
+    response_class=Response,
+)
+async def get_page_image(
     question_id: str,
-    page_num: int = Path(..., ge=1, le=500),
-    user=Depends(get_current_user),
+    page_number: int,
+    user: dict = Depends(get_current_user),
 ):
-    _check_uuid(question_id)
-    uid = _user_id(user)
-    row = _get_paper(question_id)
+    """
+    Renders the requested page of the stored PDF/image as a JPEG and streams
+    it back. The original B2 key and file bytes never leave the server.
 
-    if page_num > FREE_PAGE_LIMIT:
-        paid = await run_in_threadpool(_is_paid, uid)
-        if not paid:
+    Page numbers are 1-indexed.
+    Free users are limited to the first FREE_PAGE_LIMIT pages.
+    """
+    if page_number < 1:
+        raise HTTPException(status_code=400, detail="Page number must be 1 or greater.")
+
+    record = await run_in_threadpool(_get_question_record, question_id)
+
+    # Only approved papers are visible to students
+    if not user["is_admin"] and record["status"] != "approved":
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    # Enforce free-tier page cap
+    if not user["is_admin"]:
+        sub = await run_in_threadpool(_get_subscription, str(user["id"]))
+        if not sub["is_paid"] and page_number > FREE_PAGE_LIMIT:
             raise HTTPException(
                 status_code=403,
-                detail="Upgrade your plan to read the full paper.",
+                detail=f"Free accounts can view the first {FREE_PAGE_LIMIT} pages only.",
             )
 
-    file_bytes = await run_in_threadpool(download_bytes, row["file_url"])
-    jpeg = await run_in_threadpool(
-        _render_page_sync,
-        file_bytes,
-        row.get("mime_type") or "application/pdf",
-        page_num,
-        uid,
+    file_key: str = record["file_url"]
+    mime_type: str = record.get("mime_type", "application/pdf")
+
+    # Download original bytes server-side — never forwarded to client
+    file_bytes = await run_in_threadpool(download_bytes, file_key)
+
+    # Render the requested page to JPEG
+    jpeg_bytes = await run_in_threadpool(
+        _render_page_to_jpeg, file_bytes, mime_type, page_number
     )
+
     return Response(
-        content=jpeg,
+        content=jpeg_bytes,
         media_type="image/jpeg",
         headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate, private",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "Content-Disposition": "inline",
+            # No caching — each response is auth-gated
+            "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get(
+    "/{question_id}/page-count",
+    summary="Return the total page count for a paper",
+)
+async def get_page_count(
+    question_id: str,
+    user: dict = Depends(get_current_user),
+):
+    record = await run_in_threadpool(_get_question_record, question_id)
+    if not user["is_admin"] and record["status"] != "approved":
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    file_key: str = record["file_url"]
+    mime_type: str = record.get("mime_type", "application/pdf")
+    file_bytes = await run_in_threadpool(download_bytes, file_key)
+
+    total = await run_in_threadpool(_count_pages, file_bytes, mime_type)
+
+    sub = {"is_paid": True} if user["is_admin"] else await run_in_threadpool(
+        _get_subscription, str(user["id"])
+    )
+
+    return {
+        "total_pages": total,
+        "viewable_pages": total if sub["is_paid"] else min(total, FREE_PAGE_LIMIT),
+        "is_paid": sub["is_paid"],
+    }
+
+
+@router.get(
+    "/{question_id}/admin-url",
+    summary="Short-lived signed URL for admin preview only — never expose to students",
+)
+async def get_admin_signed_url(
+    question_id: str,
+    user: dict = Depends(get_current_user),
+):
+    if not user["is_admin"]:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+
+    record = await run_in_threadpool(_get_question_record, question_id)
+    file_key: str = record["file_url"]
+
+    signed_url = await run_in_threadpool(get_signed_url, file_key, SIGNED_URL_TTL)
+    return {
+        "url": signed_url,
+        "expires_in": SIGNED_URL_TTL,
+        "warning": "Admin only. Do not expose to students.",
+    }
+
+
+# ── Page rendering helpers ────────────────────────────────────────────────────
+
+def _render_page_to_jpeg(file_bytes: bytes, mime_type: str, page_number: int) -> bytes:
+    """
+    Convert one page of a PDF or image to JPEG bytes.
+    Uses pypdfium2 for PDFs (fast, no poppler dependency needed on Render).
+    Images are returned directly after optional resize.
+    """
+    if mime_type == "application/pdf":
+        return _pdf_page_to_jpeg(file_bytes, page_number)
+    else:
+        return _image_to_jpeg(file_bytes)
+
+
+def _pdf_page_to_jpeg(file_bytes: bytes, page_number: int) -> bytes:
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="PDF rendering library not installed. Run: pip install pypdfium2",
+        )
+
+    pdf = pdfium.PdfDocument(file_bytes)
+    total = len(pdf)
+
+    if page_number > total:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Page {page_number} does not exist. This paper has {total} pages.",
+        )
+
+    page = pdf[page_number - 1]  # 0-indexed
+    # 150 DPI equivalent — readable but not high enough to be worth downloading
+    bitmap = page.render(scale=150 / 72)
+    pil_image = bitmap.to_pil()
+
+    buf = io.BytesIO()
+    pil_image.save(buf, format="JPEG", quality=82, optimize=True)
+    return buf.getvalue()
+
+
+def _image_to_jpeg(file_bytes: bytes) -> bytes:
+    try:
+        from PIL import Image
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="Image library not installed. Run: pip install Pillow",
+        )
+
+    img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+    # Cap at 1600px wide — legible but not print-quality
+    if img.width > 1600:
+        ratio = 1600 / img.width
+        img = img.resize((1600, int(img.height * ratio)), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=82, optimize=True)
+    return buf.getvalue()
+
+
+def _count_pages(file_bytes: bytes, mime_type: str) -> int:
+    if mime_type == "application/pdf":
+        try:
+            import pypdfium2 as pdfium
+            pdf = pdfium.PdfDocument(file_bytes)
+            return len(pdf)
+        except Exception:
+            return 1
+    return 1  # images are always 1 page
