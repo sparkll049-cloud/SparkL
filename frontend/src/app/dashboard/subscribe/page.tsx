@@ -92,6 +92,13 @@ const planAccent: Record<string, { ring: string; badge: string; btn: string; glo
   },
 };
 
+/*
+  Theme note: colours that change between light and dark use the same CSS
+  variables as the dashboard page (--sp-bg, --sp-bg-card, --sp-border,
+  --sp-text, --sp-text-2, --sp-text-3), which ThemeProvider defines.
+  Accent colours (indigo, emerald, amber) work on both themes.
+*/
+
 interface CheckoutSummaryProps {
   plan: typeof PLANS[0];
   user: { name: string; email: string; phone: string };
@@ -111,85 +118,123 @@ function CheckoutSummary({
 }: CheckoutSummaryProps) {
   const accent = planAccent[plan.slug];
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4 sm:pb-0">
-      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0D1130] shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm px-4 pb-4 sm:pb-0">
+      <div
+        className="w-full max-w-md rounded-3xl border shadow-2xl overflow-hidden"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+      >
 
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-white/[0.06]">
+        <div
+          className="flex items-center justify-between px-6 pt-6 pb-4 border-b"
+          style={{ borderColor: "var(--sp-border)" }}
+        >
           <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-emerald-400" />
-            <span className="text-sm font-semibold text-white">Secure Checkout</span>
+            <ShieldCheck className="h-4 w-4 text-emerald-500" />
+            <span className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+              Secure Checkout
+            </span>
           </div>
           <button
             onClick={onCancel}
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-white/[0.06] hover:bg-white/10 transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-indigo-500/10"
+            style={{ background: "var(--sp-input-bg)" }}
+            aria-label="Close"
           >
-            <X className="h-4 w-4 text-slate-400" />
+            <X className="h-4 w-4" style={{ color: "var(--sp-text-3)" }} />
           </button>
         </div>
 
         <div className="px-6 py-5">
           {isUpgrade && (
-            <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2">
-              <Star className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-              <p className="text-xs text-amber-300 font-medium">
+            <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2">
+              <Star className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+              <p className="text-xs text-amber-600 font-medium">
                 Upgrading plan — your remaining days carry over
               </p>
             </div>
           )}
 
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+          <p
+            className="text-xs font-semibold uppercase tracking-wider mb-3"
+            style={{ color: "var(--sp-text-3)" }}
+          >
             You&apos;re subscribing to
           </p>
 
-          <div className="flex items-center justify-between rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 mb-5">
+          <div
+            className="flex items-center justify-between rounded-2xl border px-4 py-3 mb-5"
+            style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)" }}
+          >
             <div>
-              <p className="text-sm font-bold text-white capitalize">{plan.name} Plan</p>
-              <p className="text-xs text-slate-500 mt-0.5">{plan.description}</p>
+              <p className="text-sm font-bold capitalize" style={{ color: "var(--sp-text)" }}>
+                {plan.name} Plan
+              </p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
+                {plan.description}
+              </p>
             </div>
             <div className="text-right">
-              <p className="text-lg font-extrabold text-white">₦{plan.price.toLocaleString()}</p>
-              <p className="text-xs text-slate-500">per semester</p>
+              <p className="text-lg font-extrabold" style={{ color: "var(--sp-text)" }}>
+                ₦{plan.price.toLocaleString()}
+              </p>
+              <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>per semester</p>
             </div>
           </div>
 
           <ul className="space-y-1.5 mb-5">
             {plan.perks.map((perk) => (
-              <li key={perk} className="flex items-center gap-2 text-xs text-slate-400">
-                <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+              <li
+                key={perk}
+                className="flex items-center gap-2 text-xs"
+                style={{ color: "var(--sp-text-2)" }}
+              >
+                <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
                 {perk}
               </li>
             ))}
           </ul>
 
-          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/15 bg-emerald-500/[0.05] px-3 py-2 mb-5">
-            <Clock className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-            <p className="text-xs text-emerald-300 font-medium">
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.07] px-3 py-2 mb-5">
+            <Clock className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+            <p className="text-xs text-emerald-600 font-medium">
               Valid for 3 months (one full semester)
             </p>
           </div>
 
-          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 mb-5 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+          <div
+            className="rounded-xl border px-4 py-3 mb-5 space-y-2"
+            style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)" }}
+          >
+            <p
+              className="text-xs font-semibold uppercase tracking-wider mb-2"
+              style={{ color: "var(--sp-text-3)" }}
+            >
               Paying as
             </p>
             <div className="flex justify-between text-xs">
-              <span className="text-slate-500">Name</span>
-              <span className="text-slate-300 font-medium">{user.name}</span>
+              <span style={{ color: "var(--sp-text-3)" }}>Name</span>
+              <span className="font-medium" style={{ color: "var(--sp-text)" }}>{user.name}</span>
             </div>
             <div className="flex justify-between text-xs">
-              <span className="text-slate-500">Email</span>
-              <span className="text-slate-300 font-medium">{user.email}</span>
+              <span style={{ color: "var(--sp-text-3)" }}>Email</span>
+              <span className="font-medium" style={{ color: "var(--sp-text)" }}>{user.email}</span>
             </div>
           </div>
 
-          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 mb-6 space-y-2">
+          <div
+            className="rounded-xl border px-4 py-3 mb-6 space-y-2"
+            style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)" }}
+          >
             <div className="flex justify-between text-xs">
-              <span className="text-slate-500">Plan fee</span>
-              <span className="text-slate-300">₦{plan.price.toLocaleString()}</span>
+              <span style={{ color: "var(--sp-text-3)" }}>Plan fee</span>
+              <span style={{ color: "var(--sp-text-2)" }}>₦{plan.price.toLocaleString()}</span>
             </div>
-            <div className="border-t border-white/[0.06] pt-2 flex justify-between text-sm font-bold">
-              <span className="text-white">Total</span>
-              <span className="text-white">₦{plan.price.toLocaleString()}</span>
+            <div
+              className="border-t pt-2 flex justify-between text-sm font-bold"
+              style={{ borderColor: "var(--sp-border)" }}
+            >
+              <span style={{ color: "var(--sp-text)" }}>Total</span>
+              <span style={{ color: "var(--sp-text)" }}>₦{plan.price.toLocaleString()}</span>
             </div>
           </div>
 
@@ -205,7 +250,7 @@ function CheckoutSummary({
             )}
           </button>
 
-          <p className="mt-3 text-center text-xs text-slate-600">
+          <p className="mt-3 text-center text-xs" style={{ color: "var(--sp-text-3)" }}>
             🔒 Secured by PayVessel · Your card details are never stored
           </p>
         </div>
@@ -383,8 +428,11 @@ function SubscribePageInner() {
 
   if (loadingUser) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center bg-[#07091A]">
-        <Loader2 className="h-7 w-7 animate-spin text-indigo-400" />
+      <div
+        className="flex min-h-[60vh] items-center justify-center"
+        style={{ background: "var(--sp-bg)" }}
+      >
+        <Loader2 className="h-7 w-7 animate-spin text-indigo-500" />
       </div>
     );
   }
@@ -406,7 +454,7 @@ function SubscribePageInner() {
   };
 
   return (
-    <div className="min-h-screen bg-[#07091A] px-5 pb-20 pt-8">
+    <div className="min-h-screen px-5 pb-20 pt-8" style={{ background: "var(--sp-bg)" }}>
 
       {checkoutPlan && user && (
         <CheckoutSummary
@@ -426,20 +474,21 @@ function SubscribePageInner() {
 
         <button
           onClick={() => router.back()}
-          className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-300 transition-colors mb-8"
+          className="inline-flex items-center gap-1.5 text-sm transition-colors mb-8 hover:text-indigo-500"
+          style={{ color: "var(--sp-text-3)" }}
         >
           <ArrowLeft className="h-4 w-4" />
           Back
         </button>
 
         {justSubscribed && (
-          <div className="mb-8 flex items-center gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] px-5 py-4">
-            <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />
+          <div className="mb-8 flex items-center gap-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] px-5 py-4">
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
             <div>
-              <p className="text-sm font-semibold text-emerald-300">
+              <p className="text-sm font-semibold text-emerald-600">
                 You&apos;re now subscribed!
               </p>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
                 Your plan is active — enjoy full access to all courses this semester.
               </p>
             </div>
@@ -449,13 +498,16 @@ function SubscribePageInner() {
         <div className="text-center mb-10">
           <div className="flex justify-center mb-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/15">
-              <Sparkles className="h-5 w-5 text-indigo-400" />
+              <Sparkles className="h-5 w-5 text-indigo-500" />
             </div>
           </div>
-          <h1 className="text-3xl font-extrabold text-white tracking-tight">
+          <h1
+            className="text-3xl font-extrabold tracking-tight"
+            style={{ color: "var(--sp-text)" }}
+          >
             {isPaid ? "Manage Your Plan" : "Unlock SparkL Premium"}
           </h1>
-          <p className="mt-2 text-sm text-slate-500 max-w-sm mx-auto">
+          <p className="mt-2 text-sm max-w-sm mx-auto" style={{ color: "var(--sp-text-3)" }}>
             {isPaid
               ? `You're on the ${currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1)} plan. Upgrade anytime for more access.`
               : "Get unlimited access to all past questions, practice mode, and more — valid for a full semester."}
@@ -463,30 +515,36 @@ function SubscribePageInner() {
         </div>
 
         {isPaid && (
-          <div className="mb-8 flex items-center gap-4 rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] px-5 py-4">
+          <div className="mb-8 flex items-center gap-4 rounded-2xl border border-indigo-500/25 bg-indigo-500/[0.07] px-5 py-4">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15">
-              <Crown className="h-5 w-5 text-indigo-400" />
+              <Crown className="h-5 w-5 text-indigo-500" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-indigo-300 capitalize">
+              <p className="text-sm font-semibold text-indigo-600 capitalize">
                 {currentPlan} Plan — Active
               </p>
               {expiresAt && (
-                <p className="text-xs text-slate-500 mt-0.5">
+                <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
                   Expires {formatExpiry(expiresAt)}
                 </p>
               )}
             </div>
-            <div className="flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/[0.08] px-3 py-1">
-              <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-xs font-semibold text-emerald-400">Active</span>
+            <div className="flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/[0.10] px-3 py-1">
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-xs font-semibold text-emerald-600">Active</span>
             </div>
           </div>
         )}
 
         {!isPaid && (
-          <div className="mb-8 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">
+          <div
+            className="mb-8 rounded-2xl border p-5"
+            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+          >
+            <p
+              className="text-xs font-semibold uppercase tracking-wider mb-4"
+              style={{ color: "var(--sp-text-3)" }}
+            >
               Free plan (current)
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -497,10 +555,15 @@ function SubscribePageInner() {
               ].map((item) => (
                 <div
                   key={item.label}
-                  className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-4 py-3"
+                  className="rounded-xl border px-4 py-3"
+                  style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)" }}
                 >
-                  <p className="text-sm font-semibold text-slate-400">{item.label}</p>
-                  <p className="text-xs text-slate-600 mt-0.5">{item.sub}</p>
+                  <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>
+                    {item.label}
+                  </p>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
+                    {item.sub}
+                  </p>
                 </div>
               ))}
             </div>
@@ -508,8 +571,8 @@ function SubscribePageInner() {
         )}
 
         {error && (
-          <div className="mb-6 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
-            <p className="text-sm text-red-400">{error}</p>
+          <div className="mb-6 rounded-xl border border-red-500/25 bg-red-500/[0.07] px-4 py-3">
+            <p className="text-sm text-red-500">{error}</p>
           </div>
         )}
 
@@ -526,9 +589,13 @@ function SubscribePageInner() {
                 key={plan.slug}
                 className={`relative flex flex-col rounded-2xl border p-5 transition-all shadow-lg ${
                   plan.popular
-                    ? `border-indigo-500/40 bg-indigo-500/[0.06] ${accent.glow}`
-                    : "border-white/[0.07] bg-white/[0.02]"
+                    ? `border-indigo-500/40 ${accent.glow}`
+                    : ""
                 } ${isCurrentPlan ? `ring-2 ${accent.ring}` : ""}`}
+                style={{
+                  background: plan.popular ? "rgba(99,102,241,0.07)" : "var(--sp-bg-card)",
+                  borderColor: plan.popular ? undefined : "var(--sp-border)",
+                }}
               >
                 {plan.popular && !isCurrentPlan && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2">
@@ -550,30 +617,41 @@ function SubscribePageInner() {
                 )}
 
                 <div className="mb-4 mt-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  <p
+                    className="text-xs font-semibold uppercase tracking-wider"
+                    style={{ color: "var(--sp-text-3)" }}
+                  >
                     {plan.name}
                   </p>
-                  <p className="mt-1 text-3xl font-extrabold text-white">
+                  <p className="mt-1 text-3xl font-extrabold" style={{ color: "var(--sp-text)" }}>
                     {plan.priceLabel}
-                    <span className="text-sm font-normal text-slate-500">/sem</span>
+                    <span className="text-sm font-normal" style={{ color: "var(--sp-text-3)" }}>
+                      /sem
+                    </span>
                   </p>
-                  <p className="mt-1 text-xs text-slate-600">{plan.description}</p>
-                  <p className="mt-1 text-xs text-emerald-400 font-medium flex items-center gap-1">
+                  <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+                    {plan.description}
+                  </p>
+                  <p className="mt-1 text-xs text-emerald-600 font-medium flex items-center gap-1">
                     <Clock className="h-3 w-3" /> 3 months access
                   </p>
                 </div>
 
                 <ul className="flex-1 space-y-2 mb-5">
                   {plan.perks.map((perk) => (
-                    <li key={perk} className="flex items-start gap-2 text-xs text-slate-400">
-                      <Check className="h-3.5 w-3.5 mt-0.5 shrink-0 text-emerald-400" />
+                    <li
+                      key={perk}
+                      className="flex items-start gap-2 text-xs"
+                      style={{ color: "var(--sp-text-2)" }}
+                    >
+                      <Check className="h-3.5 w-3.5 mt-0.5 shrink-0 text-emerald-500" />
                       {perk}
                     </li>
                   ))}
                 </ul>
 
                 {isCurrentPlan ? (
-                  <div className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 py-2.5 text-xs font-semibold text-emerald-400">
+                  <div className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.08] py-2.5 text-xs font-semibold text-emerald-600">
                     <CheckCircle2 className="h-3.5 w-3.5" />
                     Current plan
                   </div>
@@ -599,7 +677,7 @@ function SubscribePageInner() {
           })}
         </div>
 
-        <p className="mt-8 text-center text-xs text-slate-600">
+        <p className="mt-8 text-center text-xs" style={{ color: "var(--sp-text-3)" }}>
           Secure payments via PayVessel · NGN only · 3-month access per subscription
         </p>
 
@@ -612,8 +690,11 @@ export default function SubscribePage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-[60vh] items-center justify-center bg-[#07091A]">
-          <Loader2 className="h-7 w-7 animate-spin text-indigo-400" />
+        <div
+          className="flex min-h-[60vh] items-center justify-center"
+          style={{ background: "var(--sp-bg)" }}
+        >
+          <Loader2 className="h-7 w-7 animate-spin text-indigo-500" />
         </div>
       }
     >
