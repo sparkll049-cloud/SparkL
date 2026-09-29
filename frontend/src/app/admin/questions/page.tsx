@@ -11,19 +11,20 @@ import {
   ChevronDown,
   Pencil,
   Sparkles,
-  Eye,
   Clock,
   AlertCircle,
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
 import ConfirmDialog from "../components/ConfirmDialog";
+import QuestionReviewPanel from "@/components/QuestionReviewPanel";
 
 interface Question {
   id: string;
   title: string;
   year: string | null;
   status: "pending" | "approved" | "rejected";
+  processing_status?: "uploaded" | "extracting" | "ready" | "failed";
   created_at: string;
   file_url: string | null;
   extracted_text: string | null;
@@ -41,6 +42,17 @@ const TABS = [
   { key: "rejected", label: "Rejected" },
   { key: "", label: "All" },
 ] as const;
+
+// The review panel uses --sp-* theme variables; this admin page is always dark,
+// so define them here for the panel.
+const PANEL_THEME = {
+  "--sp-input-bg": "rgba(255,255,255,0.04)",
+  "--sp-border": "rgba(255,255,255,0.10)",
+  "--sp-bg-card": "rgba(255,255,255,0.02)",
+  "--sp-text": "#e2e8f0",
+  "--sp-text-2": "#cbd5e1",
+  "--sp-text-3": "#64748b",
+} as React.CSSProperties;
 
 // ── Status pill ───────────────────────────────────────────────────────────────
 function StatusPill({ status }: { status: string }) {
@@ -70,6 +82,24 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+function ProcessingBadge({ s }: { s?: string }) {
+  if (!s || s === "ready") return null;
+  if (s === "failed") {
+    return (
+      <p className="mt-2 flex items-center gap-1.5 text-xs text-red-400">
+        <AlertCircle className="h-3.5 w-3.5" />
+        Processing failed — open Review questions to retry
+      </p>
+    );
+  }
+  return (
+    <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      Processing…
+    </p>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function AdminQuestionsPage() {
   const supabase = createClient();
@@ -80,6 +110,7 @@ export default function AdminQuestionsPage() {
   const [activeTab, setActiveTab] = useState<string>("pending");
   const [actioningId, setActioningId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [reviewId, setReviewId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
 
@@ -92,12 +123,6 @@ export default function AdminQuestionsPage() {
   const [editText, setEditText] = useState("");
   const [savingTextId, setSavingTextId] = useState<string | null>(null);
   const [textError, setTextError] = useState("");
-
-  const [processingId, setProcessingId] = useState<string | null>(null);
-  const [processResults, setProcessResults] = useState<Record<string, number>>({});
-  const [previewId, setPreviewId] = useState<string | null>(null);
-  const [previewQuestions, setPreviewQuestions] = useState<any[]>([]);
-  const [previewLoading, setPreviewLoading] = useState(false);
 
   async function getToken() {
     const { data: { session } } = await supabase.auth.getSession();
@@ -237,23 +262,39 @@ export default function AdminQuestionsPage() {
     const ids = Array.from(selected);
 
     try {
-      await Promise.all(
-        ids.map((id) =>
-          fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/status`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ status: "approved" }),
-          })
-        )
+      // fetch() doesn't throw on 4xx/5xx, so check each response
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const res = await fetch(
+              `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/status`,
+              {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ status: "approved" }),
+              }
+            );
+            return { id, ok: res.ok };
+          } catch {
+            return { id, ok: false };
+          }
+        })
       );
+
+      const okIds = new Set(results.filter((r) => r.ok).map((r) => r.id));
+      const failed = results.length - okIds.size;
+
       if (activeTab && activeTab !== "approved") {
-        setQuestions((prev) => prev.filter((q) => !selected.has(q.id)));
+        setQuestions((prev) => prev.filter((q) => !okIds.has(q.id)));
       } else {
         setQuestions((prev) =>
-          prev.map((q) => (selected.has(q.id) ? { ...q, status: "approved" } : q))
+          prev.map((q) => (okIds.has(q.id) ? { ...q, status: "approved" } : q))
         );
       }
-      setSelected(new Set());
+      setSelected(new Set(results.filter((r) => !r.ok).map((r) => r.id)));
+      if (failed > 0) {
+        setError(`${failed} paper${failed !== 1 ? "s" : ""} could not be approved. They're still selected.`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Bulk approve failed.");
     } finally {
@@ -304,47 +345,6 @@ export default function AdminQuestionsPage() {
     }
   }
 
-  async function handleProcess(questionId: string) {
-    setProcessingId(questionId);
-    const token = await getToken();
-    if (!token) { setProcessingId(null); return; }
-
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${questionId}/process`,
-        { method: "POST", headers: { Authorization: `Bearer ${token}` } }
-      );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail ?? "Processing failed.");
-      setProcessResults((prev) => ({ ...prev, [questionId]: data.questions_created }));
-      setQuestions((prev) =>
-        prev.map((q) => (q.id === questionId ? { ...q, ai_processed: true } : q))
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "AI processing failed.");
-    } finally {
-      setProcessingId(null);
-    }
-  }
-
-  async function loadPreview(questionId: string) {
-    if (previewId === questionId) { setPreviewId(null); return; }
-    setPreviewId(questionId);
-    setPreviewLoading(true);
-    const token = await getToken();
-    if (!token) { setPreviewLoading(false); return; }
-
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${questionId}/processed-questions`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (res.ok) setPreviewQuestions(await res.json());
-    } finally {
-      setPreviewLoading(false);
-    }
-  }
-
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-[#07091A] px-4 py-8 sm:px-6 lg:px-10">
@@ -357,7 +357,7 @@ export default function AdminQuestionsPage() {
           </p>
           <h1 className="text-3xl font-extrabold text-white">Past Questions</h1>
           <p className="mt-2 text-sm text-slate-500">
-            Review uploads, approve content, and run AI processing before students see it.
+            Review uploads, check the AI-generated questions and answers, then approve before students see them.
           </p>
         </div>
 
@@ -461,11 +461,13 @@ export default function AdminQuestionsPage() {
                             })}
                           </p>
 
+                          <ProcessingBadge s={q.processing_status} />
+
                           {/* Extraction quality warning */}
                           {q.extraction_quality !== null && q.extraction_quality < 0.5 && (
                             <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
                               <AlertCircle className="h-3.5 w-3.5" />
-                              Low extraction quality — review text before processing
+                              Low extraction quality — review text before approving
                             </div>
                           )}
 
@@ -546,6 +548,9 @@ export default function AdminQuestionsPage() {
                         {textError && (
                           <p className="mt-1.5 text-xs text-red-400">{textError}</p>
                         )}
+                        <p className="mt-1.5 text-[11px] text-slate-600">
+                          After changing the text, use Regenerate in Review questions to rebuild the questions from it.
+                        </p>
                         <div className="mt-2 flex gap-2">
                           <button
                             onClick={() => saveExtractedText(q.id)}
@@ -610,134 +615,29 @@ export default function AdminQuestionsPage() {
                       </button>
                     </div>
 
-                    {/* ── AI Processing section ── */}
-                    {q.status === "approved" && (
+                    {/* ── Review questions (available before approval) ── */}
+                    {q.status !== "rejected" && (
                       <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-                        <div className="flex items-center justify-between gap-3 flex-wrap">
-                          <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setReviewId(reviewId === q.id ? null : q.id)}
+                          className="flex w-full items-center justify-between gap-3 text-left"
+                        >
+                          <span className="flex items-center gap-2 text-xs font-semibold text-slate-300">
                             <Sparkles className="h-4 w-4 text-violet-400" />
-                            <span className="text-xs font-semibold text-slate-300">
-                              AI Processing
-                            </span>
-                          </div>
+                            Review questions
+                          </span>
+                          <span className="flex items-center gap-2 text-xs text-slate-500">
+                            {q.ai_processed ? "AI drafts ready" : "No questions yet"}
+                            <ChevronDown
+                              size={14}
+                              className={`transition-transform ${reviewId === q.id ? "rotate-180" : ""}`}
+                            />
+                          </span>
+                        </button>
 
-                          <div className="flex items-center gap-2">
-                            {q.ai_processed ? (
-                              <>
-                                <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
-                                  <CheckCircle2 className="h-3.5 w-3.5" />
-                                  Processed
-                                  {processResults[q.id] !== undefined
-                                    ? ` · ${processResults[q.id]} questions`
-                                    : ""}
-                                </span>
-
-                                <button
-                                  onClick={() => loadPreview(q.id)}
-                                  className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-semibold text-slate-300 transition hover:bg-white/[0.08]"
-                                >
-                                  <Eye size={12} />
-                                  {previewId === q.id ? "Hide" : "Preview"}
-                                </button>
-
-                                <button
-                                  onClick={() => handleProcess(q.id)}
-                                  disabled={processingId === q.id}
-                                  className="flex items-center gap-1 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2.5 py-1.5 text-xs font-semibold text-violet-300 transition hover:bg-violet-500/20 disabled:opacity-50"
-                                >
-                                  {processingId === q.id ? (
-                                    <Loader2 size={12} className="animate-spin" />
-                                  ) : (
-                                    <Sparkles size={12} />
-                                  )}
-                                  Re-run
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <span className="text-xs text-slate-600">Not yet processed</span>
-                                <button
-                                  onClick={() => handleProcess(q.id)}
-                                  disabled={processingId === q.id || !q.extracted_text}
-                                  className="flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-300 transition hover:bg-violet-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
-                                >
-                                  {processingId === q.id ? (
-                                    <><Loader2 size={12} className="animate-spin" /> Processing…</>
-                                  ) : (
-                                    <><Sparkles size={12} /> Process with AI</>
-                                  )}
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* No extracted text warning */}
-                        {!q.extracted_text && (
-                          <p className="mt-3 text-xs text-amber-400">
-                            No extracted text — upload a cleaner scan or edit the text manually before processing.
-                          </p>
-                        )}
-
-                        {/* Preview panel */}
-                        {previewId === q.id && (
-                          <div className="mt-4 space-y-3">
-                            {previewLoading ? (
-                              <div className="flex justify-center py-6">
-                                <Loader2 className="h-5 w-5 animate-spin text-violet-400" />
-                              </div>
-                            ) : previewQuestions.length === 0 ? (
-                              <p className="text-xs text-slate-500">No processed questions found.</p>
-                            ) : (
-                              previewQuestions.map((pq: any, i: number) => (
-                                <div
-                                  key={pq.id}
-                                  className="rounded-lg border border-white/[0.05] bg-white/[0.02] p-3"
-                                >
-                                  <div className="flex items-start justify-between gap-2 mb-2">
-                                    <span className="text-xs font-semibold text-violet-400">
-                                      Q{pq.question_number ?? i + 1}
-                                    </span>
-                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-slate-400 capitalize">
-                                      {pq.question_type}
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-slate-300 leading-6">
-                                    {pq.question_text}
-                                  </p>
-                                  {pq.option_a && (
-                                    <div className="mt-2 grid grid-cols-2 gap-1.5">
-                                      {["a", "b", "c", "d"].map((opt) =>
-                                        pq[`option_${opt}`] ? (
-                                          <div
-                                            key={opt}
-                                            className={`rounded-lg px-2.5 py-1.5 text-xs ${
-                                              pq.correct_answer?.toLowerCase() === opt
-                                                ? "border border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                                                : "border border-white/[0.05] bg-white/[0.02] text-slate-400"
-                                            }`}
-                                          >
-                                            <span className="font-semibold uppercase">{opt}.</span>{" "}
-                                            {pq[`option_${opt}`]}
-                                          </div>
-                                        ) : null
-                                      )}
-                                    </div>
-                                  )}
-                                  {pq.explanation && (
-                                    <p className="mt-2 text-xs text-slate-500 leading-5">
-                                      <span className="font-semibold text-slate-400">Explanation:</span>{" "}
-                                      {pq.explanation}
-                                    </p>
-                                  )}
-                                  {pq.topic_tag && (
-                                    <span className="mt-2 inline-block rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-400">
-                                      {pq.topic_tag}
-                                    </span>
-                                  )}
-                                </div>
-                              ))
-                            )}
+                        {reviewId === q.id && (
+                          <div className="mt-4" style={PANEL_THEME}>
+                            <QuestionReviewPanel paperId={q.id} />
                           </div>
                         )}
                       </div>
