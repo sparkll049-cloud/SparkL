@@ -18,6 +18,40 @@ import {
 import { createClient } from "@/utils/supabase/client";
 import { Button } from "@/components/ui/button";
 
+const inputClass =
+  "ml-3 min-w-0 w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none";
+
+const fieldBoxClass =
+  "flex h-12 items-center rounded-xl border border-slate-200 bg-white px-3.5 transition-all duration-200 focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10";
+
+/* Defined OUTSIDE SignupPage so inputs keep focus while typing */
+function Field({
+  label,
+  icon,
+  children,
+  hint,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  hint?: React.ReactNode;
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-semibold text-slate-700">
+        {label}
+      </label>
+
+      <div className={fieldBoxClass}>
+        {icon}
+        {children}
+      </div>
+
+      {hint}
+    </div>
+  );
+}
+
 export default function SignupPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -68,22 +102,10 @@ export default function SignupPage() {
 
   const strength =
     strengthScore <= 1
-      ? {
-          label: "Weak",
-          color: "bg-red-500",
-          width: "w-1/4",
-        }
+      ? { label: "Weak", color: "bg-red-500", width: "w-1/4" }
       : strengthScore <= 3
-      ? {
-          label: "Fair",
-          color: "bg-amber-400",
-          width: "w-2/4",
-        }
-      : {
-          label: "Strong",
-          color: "bg-emerald-500",
-          width: "w-full",
-        };
+      ? { label: "Fair", color: "bg-amber-400", width: "w-2/4" }
+      : { label: "Strong", color: "bg-emerald-500", width: "w-full" };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -134,39 +156,9 @@ export default function SignupPage() {
     }
   };
 
-  const Field = ({
-    label,
-    icon,
-    children,
-    hint,
-  }: {
-    label: string;
-    icon: React.ReactNode;
-    children: React.ReactNode;
-    hint?: React.ReactNode;
-  }) => (
-    <div>
-      <label className="mb-2 block text-sm font-semibold text-slate-700">
-        {label}
-      </label>
-
-      <div className="flex h-12 items-center rounded-xl border border-slate-200 bg-white px-3.5 transition-all duration-200 focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10">
-        {icon}
-
-        {children}
-      </div>
-
-      {hint}
-    </div>
-  );
-
-  const inputClass =
-    "ml-3 min-w-0 w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none";
-
   return (
     <main className="min-h-dvh bg-slate-50">
       <div className="grid min-h-dvh lg:h-dvh lg:grid-cols-[42%_58%]">
-
         {/* =========================================================
             LEFT BRAND PANEL
         ========================================================= */}
@@ -258,9 +250,7 @@ export default function SignupPage() {
         ========================================================= */}
         <section className="min-h-dvh overflow-y-auto bg-slate-50">
           <div className="mx-auto flex w-full max-w-xl px-5 py-8 sm:px-8 sm:py-10 lg:min-h-dvh lg:items-center lg:px-12 lg:py-8">
-
             <div className="w-full">
-
               {/* Mobile logo */}
               <div className="mb-7 flex items-center justify-between lg:hidden">
                 <Link
@@ -414,7 +404,7 @@ export default function SignupPage() {
                     Password
                   </label>
 
-                  <div className="flex h-12 items-center rounded-xl border border-slate-200 bg-white px-3.5 transition-all duration-200 focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10">
+                  <div className={fieldBoxClass}>
                     <Lock className="h-[18px] w-[18px] shrink-0 text-slate-400" />
 
                     <input
@@ -432,9 +422,7 @@ export default function SignupPage() {
                       onClick={() => setShowPassword((prev) => !prev)}
                       className="ml-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
                       aria-label={
-                        showPassword
-                          ? "Hide password"
-                          : "Show password"
+                        showPassword ? "Hide password" : "Show password"
                       }
                     >
                       {showPassword ? (
@@ -462,29 +450,15 @@ export default function SignupPage() {
 
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
                         {[
-                          {
-                            met: hasMinLength,
-                            label: "8+ characters",
-                          },
-                          {
-                            met: hasUpperCase,
-                            label: "Uppercase letter",
-                          },
-                          {
-                            met: hasNumber,
-                            label: "Number",
-                          },
-                          {
-                            met: hasSpecial,
-                            label: "Special character",
-                          },
+                          { met: hasMinLength, label: "8+ characters" },
+                          { met: hasUpperCase, label: "Uppercase letter" },
+                          { met: hasNumber, label: "Number" },
+                          { met: hasSpecial, label: "Special character" },
                         ].map(({ met, label }) => (
                           <div
                             key={label}
                             className={`flex items-center gap-1.5 text-xs ${
-                              met
-                                ? "text-emerald-600"
-                                : "text-slate-400"
+                              met ? "text-emerald-600" : "text-slate-400"
                             }`}
                           >
                             <Check
@@ -508,4 +482,98 @@ export default function SignupPage() {
                     Confirm password
                   </label>
 
-                  <div className="flex h-12 items-center rounded-xl border border-slate-200 bg-white px-
+                  <div className={fieldBoxClass}>
+                    <Lock className="h-[18px] w-[18px] shrink-0 text-slate-400" />
+
+                    <input
+                      type={showConfirmPassword ? "text" : "password"}
+                      name="confirm-password"
+                      autoComplete="new-password"
+                      placeholder="Repeat your password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className={inputClass}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword((prev) => !prev)}
+                      className="ml-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                      aria-label={
+                        showConfirmPassword ? "Hide password" : "Show password"
+                      }
+                    >
+                      {showConfirmPassword ? (
+                        <EyeOff className="h-[18px] w-[18px]" />
+                      ) : (
+                        <Eye className="h-[18px] w-[18px]" />
+                      )}
+                    </button>
+                  </div>
+
+                  {confirmPassword && !passwordsMatch && (
+                    <p className="mt-1.5 text-xs text-red-500">
+                      Passwords do not match.
+                    </p>
+                  )}
+                </div>
+
+                {/* Terms */}
+                <label className="flex items-start gap-3 text-sm text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={agreedToTerms}
+                    onChange={(e) => setAgreedToTerms(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+                  />
+                  <span>
+                    I agree to the{" "}
+                    <Link
+                      href="/terms"
+                      className="font-semibold text-blue-600 hover:underline"
+                    >
+                      Terms
+                    </Link>{" "}
+                    and{" "}
+                    <Link
+                      href="/privacy"
+                      className="font-semibold text-blue-600 hover:underline"
+                    >
+                      Privacy Policy
+                    </Link>
+                    .
+                  </span>
+                </label>
+
+                {errorMsg && (
+                  <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">
+                    {errorMsg}
+                  </p>
+                )}
+
+                <Button
+                  type="submit"
+                  disabled={!formValid || loading || googleLoading}
+                  className="h-12 w-full rounded-xl bg-blue-600 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {loading ? "Creating account..." : "Create account"}
+                  {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
+                </Button>
+              </form>
+
+              <p className="mt-6 text-center text-sm text-slate-500">
+                Already have an account?{" "}
+                <Link
+                  href="/auth/login"
+                  className="font-semibold text-blue-600 hover:underline"
+                >
+                  Log in
+                </Link>
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
