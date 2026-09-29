@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -11,7 +10,7 @@ import {
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
-import SecureViewer from "@/components/SecureViewer";
+import PaperViewerModal from "@/components/PaperViewerModal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -225,8 +224,9 @@ export default function QuestionDetailPage() {
     is_paid: true, read_mode_percent: 100, practice_mode_max: null,
   });
 
-  // Default tab is "view" — SecureViewer shown first
+  // Default tab is "view"
   const [tab, setTab] = useState<Tab>("view");
+  const [viewerOpen, setViewerOpen] = useState(false);
 
   useEffect(() => {
     if (!questionId) return;
@@ -399,16 +399,25 @@ export default function QuestionDetailPage() {
         {/* ── Tab content ── */}
         <div className="mt-4">
 
-          {/* VIEW tab — SecureViewer embedded inline */}
+          {/* VIEW tab — opens the page-by-page reader */}
           {tab === "view" && isPdf && (
-            <div className="rounded-2xl border overflow-hidden"
-              style={{ borderColor: "var(--sp-border)" }}>
-              <SecureViewer
-                questionId={questionId}
-                onClose={() => {}}   // no close — it's inline, not a modal
-                isPaid={limits.is_paid}
-                inline                // new prop — removes the fixed/fullscreen wrapper
-              />
+            <div className="rounded-2xl border p-8 text-center"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <FileText size={24} className="mx-auto mb-3 text-indigo-400" />
+              <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+                {data.title}
+              </p>
+              {!limits.is_paid && (
+                <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+                  Free accounts can read the first 2 pages.
+                </p>
+              )}
+              <button
+                onClick={() => setViewerOpen(true)}
+                className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
+              >
+                <Eye size={14} /> Open paper
+              </button>
             </div>
           )}
 
@@ -466,6 +475,13 @@ export default function QuestionDetailPage() {
 
         </div>
       </div>
+
+      <PaperViewerModal
+        questionId={questionId}
+        title={data.title}
+        open={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+      />
     </div>
   );
 }
