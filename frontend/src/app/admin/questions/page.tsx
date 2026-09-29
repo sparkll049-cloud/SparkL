@@ -18,6 +18,7 @@ import {
 import { createClient } from "@/utils/supabase/client";
 import ConfirmDialog from "../components/ConfirmDialog";
 import QuestionReviewPanel from "@/components/QuestionReviewPanel";
+import AdminWatermarkedPreview from "@/components/AdminWatermarkedPreview";
 
 interface Question {
   id: string;
@@ -26,7 +27,7 @@ interface Question {
   status: "pending" | "approved" | "rejected";
   processing_status?: "uploaded" | "extracting" | "ready" | "failed";
   created_at: string;
-  file_url: string | null;
+  mime_type: string | null;
   extracted_text: string | null;
   rejection_reason: string | null;
   extraction_quality: number | null;
@@ -111,6 +112,7 @@ export default function AdminQuestionsPage() {
   const [actioningId, setActioningId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [reviewId, setReviewId] = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
 
@@ -471,26 +473,14 @@ export default function AdminQuestionsPage() {
                             </div>
                           )}
 
-                          {/* File link */}
-                          {q.file_url && (
-                            <button
-                              onClick={async () => {
-                                const token = await getToken();
-                                if (!token) return;
-                                const res = await fetch(
-                                  `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${q.id}/file-url`,
-                                  { headers: { Authorization: `Bearer ${token}` } }
-                                );
-                                if (!res.ok) return;
-                                const { url } = await res.json();
-                                window.open(url, "_blank");
-                              }}
-                              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
-                            >
-                              View file
-                              <ExternalLink size={11} />
-                            </button>
-                          )}
+                          {/* Original file: admin-only, watermarked preview */}
+                          <button
+                            onClick={() => setPreviewId(q.id)}
+                            className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+                          >
+                            Preview watermarked file
+                            <ExternalLink size={11} />
+                          </button>
 
                           {/* Extracted text toggle */}
                           {q.extracted_text && editingId !== q.id && (
@@ -649,6 +639,15 @@ export default function AdminQuestionsPage() {
           )}
         </div>
       </div>
+
+      {previewId && (
+        <AdminWatermarkedPreview
+          questionId={previewId}
+          mimeType={questions.find((q) => q.id === previewId)?.mime_type}
+          open={true}
+          onClose={() => setPreviewId(null)}
+        />
+      )}
 
       {/* ── Dialogs ── */}
       <ConfirmDialog
