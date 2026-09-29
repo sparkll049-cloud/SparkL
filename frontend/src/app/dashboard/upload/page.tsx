@@ -5,14 +5,18 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Upload as UploadIcon, FileText, Loader2, CheckCircle2,
-  XCircle, Clock, AlertCircle, CloudUpload,
+  XCircle, Clock, AlertCircle, CloudUpload, RotateCcw,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
 interface Option { id: string; name: string; }
+
+type ProcessingStatus = "uploaded" | "extracting" | "ready" | "failed";
+
 interface MyUpload {
   id: string; title: string; year: string | null;
   status: "pending" | "approved" | "rejected";
+  processing_status?: ProcessingStatus;
   created_at: string; rejection_reason: string | null;
   extraction_quality: number | null;
   course: { name: string } | null;
@@ -23,6 +27,7 @@ const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png"];
 const MIN_YEAR = 1990;
 const LOW_QUALITY_THRESHOLD = 0.5;
+const POLL_INTERVAL_MS = 10_000;
 
 // ── Image compression ─────────────────────────────────────────────────────────
 
@@ -113,6 +118,42 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+function ProcessingRow({ status, retrying, onRetry }: {
+  status?: ProcessingStatus;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  if (!status || status === "ready") return null;
+
+  if (status === "failed") {
+    return (
+      <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5">
+        <p className="flex items-center gap-2 text-xs text-red-400">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+          We couldn&apos;t process this file.
+        </p>
+        <button
+          onClick={onRetry}
+          disabled={retrying}
+          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-red-500/30 px-2.5 py-1 text-[11px] font-semibold text-red-400 transition hover:bg-red-500/10 disabled:opacity-50"
+        >
+          {retrying
+            ? <Loader2 className="h-3 w-3 animate-spin" />
+            : <RotateCcw className="h-3 w-3" />}
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <p className="mt-3 flex items-center gap-2 text-xs" style={{ color: "var(--sp-text-3)" }}>
+      <Loader2 className="h-3 w-3 animate-spin text-blue-400" />
+      {status === "extracting" ? "Processing your paper…" : "Queued for processing"}
+    </p>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
@@ -149,6 +190,7 @@ export default function UploadPage() {
   const [error,              setError]              = useState("");
   const [success,            setSuccess]            = useState(false);
   const [fileError,          setFileError]          = useState("");
+  const [retryingId,         setRetryingId]         = useState<string | null>(null);
 
   const currentYear = new Date().getFullYear();
 
@@ -187,6 +229,19 @@ export default function UploadPage() {
       .then(({ data }) => { setCourses(data ?? []); setLoadingCourses(false); });
   }, [departmentId]);
 
+  // Poll while any upload is still being processed
+  useEffect(() => {
+    const active = myUploads.some(
+      (u) => u.processing_status === "uploaded" || u.processing_status === "extracting",
+    );
+    if (!active) return;
+    const timer = setInterval(async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) loadMyUploads(session.access_token);
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [myUploads]);
+
   async function loadMyUploads(token: string) {
     try {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/upload/mine`, {
@@ -195,6 +250,20 @@ export default function UploadPage() {
       if (res.status === 401) { router.push("/auth/login"); return; }
       if (res.ok) setMyUploads(await res.json());
     } catch { /* non-critical */ }
+  }
+
+  async function handleRetry(id: string) {
+    setRetryingId(id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { router.push("/auth/login"); return; }
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/upload/${id}/retry`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) await loadMyUploads(session.access_token);
+    } catch { /* non-critical */ }
+    finally { setRetryingId(null); }
   }
 
   function validateFile(selected: File): boolean {
@@ -254,6 +323,8 @@ export default function UploadPage() {
     if (year) formData.append("year", year);
     formData.append("course_id", courseId);
     if (semesterId) formData.append("semester_id", semesterId);
+    if (levelId) formData.append("level_id", levelId);
+    formData.append("declaration_accepted", "true");
     formData.append("file", compressedFile);
 
     try {
@@ -575,6 +646,14 @@ export default function UploadPage() {
                     </div>
                     <StatusPill status={u.status} />
                   </div>
+
+                  {u.status !== "rejected" && (
+                    <ProcessingRow
+                      status={u.processing_status}
+                      retrying={retryingId === u.id}
+                      onRetry={() => handleRetry(u.id)}
+                    />
+                  )}
 
                   {u.status === "rejected" && u.rejection_reason && (
                     <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5">
