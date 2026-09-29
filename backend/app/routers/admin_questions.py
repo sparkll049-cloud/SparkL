@@ -542,7 +542,23 @@ async def update_question_item(
     if not result.data:
         raise HTTPException(status_code=404, detail="Question not found.")
     return result.data[0]
+@router.post("/{question_id}/retry", summary="Admin: retry processing a failed paper")
+async def retry_question_processing(
+    question_id: str,
+    _admin: UUID = Depends(get_current_admin),   # your existing admin dep
+):
+    row = (
+        supabase.table("past_questions")
+        .select("id, processing_status")
+        .eq("id", question_id)
+        .maybe_single()
+        .execute()
+    )
+    if not row.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
 
+    await run_in_threadpool(reset_for_retry, question_id)
+    return {"ok": True, "message": "Paper queued for reprocessing."}
 
 @router.delete("/{question_id}/items/{item_id}")
 async def delete_question_item(
