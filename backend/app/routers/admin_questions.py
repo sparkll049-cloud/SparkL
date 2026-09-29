@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import math
+import os
 from datetime import datetime, timezone
 from typing import Literal, Optional
 from uuid import UUID
@@ -31,6 +32,8 @@ except ImportError:
 router = APIRouter(prefix="/api/admin/questions", tags=["admin-questions"])
 MAX_EXTRACTED_TEXT_LENGTH = 50_000
 PREVIEW_EXPIRY_SECONDS = 300
+
+B2_BUCKET = os.getenv("B2_BUCKET_NAME", "sparkl-questions")
 
 ITEM_COLUMNS = (
     "id, question_number, question_text, question_type, option_a, option_b, "
@@ -62,6 +65,28 @@ class QuestionItemUpdate(BaseModel):
     difficulty: Optional[Literal["easy", "medium", "hard"]] = None
     marks: Optional[int] = Field(None, ge=0, le=1000)
     is_verified: Optional[bool] = None
+
+
+def _to_key(file_url: str) -> str:
+    """
+    Normalise file_url to a plain B2 key.
+    Old uploads stored the full URL; new ones store just the key.
+
+    Full URL example:
+      https://f005.backblazeb2.com/file/sparkl-questions/past-questions/uid/file.pdf
+    Key example:
+      past-questions/uid/file.pdf
+    """
+    if not file_url or not file_url.startswith("http"):
+        return file_url
+    marker = f"/file/{B2_BUCKET}/"
+    idx = file_url.find(marker)
+    if idx != -1:
+        return file_url[idx + len(marker):]
+    parts = file_url.split(f"/{B2_BUCKET}/", 1)
+    if len(parts) == 2:
+        return parts[1]
+    return file_url
 
 
 def _check_uuid(value: str, label: str = "id") -> None:
@@ -101,7 +126,6 @@ def _apply_admin_watermark(img: "Image.Image", admin_id: str) -> "Image.Image":
     img = img.convert("RGBA")
     w, h = img.size
 
-    # Tiled diagonal text
     font_size = max(18, w // 35)
     font = _get_font(font_size)
     text = "SPARKL ADMIN"
@@ -125,7 +149,6 @@ def _apply_admin_watermark(img: "Image.Image", admin_id: str) -> "Image.Image":
     cropped = canvas.crop((ox, oy, ox + w, oy + h))
     img = Image.alpha_composite(img, cropped)
 
-    # Footer bar
     bar_h = max(32, h // 28)
     ffont = _get_font(max(11, w // 60))
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -147,7 +170,7 @@ def _page_count_sync(file_bytes: bytes, mime_type: str) -> int:
             return len(PdfReader(io.BytesIO(file_bytes)).pages)
         except Exception:
             return 1
-    return 1  # images are always 1 page
+    return 1
 
 
 def _render_page_sync(
@@ -165,7 +188,7 @@ def _render_page_sync(
         pages[0].save(buf, format="JPEG", quality=92)
         img_bytes = buf.getvalue()
     else:
-        img_bytes = file_bytes  # JPEG / PNG — single page
+        img_bytes = file_bytes
 
     if not _PILLOW_OK:
         return img_bytes
@@ -246,7 +269,8 @@ async def get_watermarked_preview_url(
     if not row or not row.get("file_url"):
         raise HTTPException(status_code=404, detail="Original upload not found.")
 
-    original = await run_in_threadpool(download_bytes, row["file_url"])
+    file_key = _to_key(row["file_url"])
+    original = await run_in_threadpool(download_bytes, file_key)
     preview_bytes, preview_mime = await run_in_threadpool(
         watermark_preview, original, row.get("mime_type", "application/pdf"), str(admin_id)
     )
@@ -266,7 +290,6 @@ async def get_admin_preview_page_count(
     question_id: str,
     admin_id: str = Depends(get_current_admin),
 ):
-    """Returns the total page count for the stored file."""
     _check_uuid(question_id, "question id")
     result = (
         supabase.table("past_questions")
@@ -279,7 +302,8 @@ async def get_admin_preview_page_count(
     if not row or not row.get("file_url"):
         raise HTTPException(status_code=404, detail="File not found.")
 
-    file_bytes = await run_in_threadpool(download_bytes, row["file_url"])
+    file_key = _to_key(row["file_url"])
+    file_bytes = await run_in_threadpool(download_bytes, file_key)
     count = await run_in_threadpool(
         _page_count_sync, file_bytes, row.get("mime_type", "application/pdf")
     )
@@ -292,7 +316,6 @@ async def get_admin_preview_page(
     page_num: int = Path(..., ge=1, le=500),
     admin_id: str = Depends(get_current_admin),
 ):
-    """Render one page of the stored file as a watermarked JPEG — never exposes the raw B2 key."""
     _check_uuid(question_id, "question id")
     result = (
         supabase.table("past_questions")
@@ -305,7 +328,8 @@ async def get_admin_preview_page(
     if not row or not row.get("file_url"):
         raise HTTPException(status_code=404, detail="File not found.")
 
-    file_bytes = await run_in_threadpool(download_bytes, row["file_url"])
+    file_key = _to_key(row["file_url"])
+    file_bytes = await run_in_threadpool(download_bytes, file_key)
     jpeg = await run_in_threadpool(
         _render_page_sync,
         file_bytes,
@@ -570,7 +594,7 @@ async def delete_question(
     )
     if not existing.data:
         raise HTTPException(status_code=404, detail="Question not found.")
-    file_key = existing.data.get("file_url")
+    file_key = _to_key(existing.data.get("file_url", ""))
     result = supabase.table("past_questions").delete().eq("id", question_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="Question not found.")
