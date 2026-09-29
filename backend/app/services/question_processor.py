@@ -1,8 +1,4 @@
-"""Gemini-only structured past-question processor.
-
-This replaces the current Gemini/Groq waterfall. It keeps the existing output
-shape used by the `questions` table and returns validated Python dictionaries.
-"""
+"""Gemini-only structured past-question processor."""
 from __future__ import annotations
 
 import json
@@ -21,6 +17,8 @@ _gemini_client: genai.Client | None = (
     genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 )
 
+# NOTE: filled with .replace(), NOT .format(), because the JSON example
+# below contains literal braces.
 PROCESS_PROMPT = """
 You are converting an academic past examination paper into structured practice questions.
 Return ONLY valid JSON: an array of objects. Do not use markdown or commentary.
@@ -34,6 +32,7 @@ Rules:
 - Do not invent missing questions, options, answers, marks, or explanations. Use null when the source does not support a field.
 - topic_tag must be a short phrase or null.
 - difficulty must be easy, medium, hard, or null.
+- marks must be a whole number or null.
 
 Required object shape:
 [
@@ -54,12 +53,12 @@ Required object shape:
   }
 ]
 
-Course: {course_name}
-Institution: {institution}
+Course: __COURSE__
+Institution: __INSTITUTION__
 
 Extracted paper text:
 ---
-{extracted_text}
+__TEXT__
 ---
 """
 
@@ -69,9 +68,19 @@ class ProcessingError(Exception):
 
 
 def _clean_raw_response(raw: str) -> str:
-    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
-    return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    return raw.strip()
+
+
+def _to_int_or_none(value):
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except (ValueError, TypeError):
+        return None
 
 
 def _validate_question(q: dict, index: int) -> dict:
@@ -89,16 +98,24 @@ def _validate_question(q: dict, index: int) -> dict:
     if not q["question_text"]:
         raise ProcessingError(f"Item {index} has empty question_text")
 
-    for field in ("option_a", "option_b", "option_c", "option_d", "correct_answer", "model_answer", "explanation", "topic_tag", "difficulty", "marks"):
+    for field in (
+        "option_a", "option_b", "option_c", "option_d", "correct_answer",
+        "model_answer", "explanation", "topic_tag", "difficulty", "marks",
+    ):
         q.setdefault(field, None)
+
     if q["question_type"] == "theory":
         for field in ("option_a", "option_b", "option_c", "option_d", "correct_answer"):
             q[field] = None
     elif q["correct_answer"] is not None:
         answer = str(q["correct_answer"]).strip().lower()
         q["correct_answer"] = answer if answer in {"a", "b", "c", "d"} else None
+
+    if q["difficulty"] is not None:
+        q["difficulty"] = str(q["difficulty"]).strip().lower()
     if q["difficulty"] not in {None, "easy", "medium", "hard"}:
         q["difficulty"] = None
+    q["marks"] = _to_int_or_none(q["marks"])
     return q
 
 
@@ -107,8 +124,15 @@ def _parse(raw: str) -> list[dict]:
         data = json.loads(_clean_raw_response(raw))
     except json.JSONDecodeError as exc:
         raise ProcessingError(f"Gemini returned invalid JSON: {exc}") from exc
+
+    # Some responses wrap the array: {"questions": [...]}
+    if isinstance(data, dict):
+        lists = [v for v in data.values() if isinstance(v, list)]
+        data = lists[0] if lists else []
+
     if not isinstance(data, list) or not data:
         raise ProcessingError("Gemini returned no questions")
+
     result = []
     for index, item in enumerate(data):
         try:
@@ -126,11 +150,14 @@ def process_questions(extracted_text: str, course_name: str = "", institution: s
     if not _gemini_client:
         raise ProcessingError("GEMINI_API_KEY is not configured")
 
-    prompt = PROCESS_PROMPT.format(
-        extracted_text=extracted_text.strip(),
-        course_name=course_name or "not specified",
-        institution=institution or "not specified",
+    # Text goes in LAST so braces inside the paper are never re-scanned.
+    prompt = (
+        PROCESS_PROMPT
+        .replace("__COURSE__", course_name or "not specified")
+        .replace("__INSTITUTION__", institution or "not specified")
+        .replace("__TEXT__", extracted_text.strip())
     )
+
     try:
         response = _gemini_client.models.generate_content(
             model=GEMINI_MODEL,
@@ -142,6 +169,12 @@ def process_questions(extracted_text: str, course_name: str = "", institution: s
             ),
         )
     except Exception as exc:
+        logger.exception("Gemini call failed")
         raise ProcessingError(f"Gemini question processing failed: {exc}") from exc
 
-    return _parse(response.text or "")
+    try:
+        return _parse(response.text or "")
+    except ProcessingError:
+        raise
+    except Exception as exc:
+        raise ProcessingError(f"Could not read Gemini response: {exc}") from exc
