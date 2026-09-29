@@ -3,8 +3,9 @@ answers.py
 ----------
 Student-facing answer submission routes.
 
-POST /api/answers/submit        — student submits solution (text + optional file)
-GET  /api/answers/{id}/file-url — admin gets a short-lived signed URL to view the file
+POST /api/answers/submit              — student submits solution (text + optional file)
+GET  /api/answers/my/{question_id}    — student gets their own submissions for a question
+GET  /api/answers/{id}/file-url       — admin gets a short-lived signed URL to view the file
 """
 from __future__ import annotations
 
@@ -21,8 +22,8 @@ from app.storage import upload_bytes, get_signed_url
 
 router = APIRouter(prefix="/api/answers", tags=["Answers"])
 
-SIGNED_URL_TTL   = 300          # 5 minutes — admin preview only
-MAX_FILE_SIZE    = 10 * 1024 * 1024  # 10 MB
+SIGNED_URL_TTL   = 300                # 5 minutes — admin preview only
+MAX_FILE_SIZE    = 10 * 1024 * 1024   # 10 MB
 ALLOWED_MIMES    = {
     "application/pdf",
     "image/jpeg",
@@ -119,7 +120,6 @@ def _try_extract_text(file_bytes: bytes, mime_type: str) -> tuple[str | None, fl
         if not full_text:
             return None, 0.0
 
-        # Rough quality: penalise very short or garbled text
         quality = min(1.0, len(full_text) / 500)
         return full_text, round(quality, 3)
 
@@ -131,9 +131,9 @@ def _try_extract_text(file_bytes: bytes, mime_type: str) -> tuple[str | None, fl
 
 @router.post("/submit", summary="Student submits a solution for a past question")
 async def submit_answer(
-    question_id:   str           = Form(...),
-    solution_text: Optional[str] = Form(None),
-    file:          Optional[UploadFile] = File(None),
+    question_id:   str                   = Form(...),
+    solution_text: Optional[str]         = Form(None),
+    file:          Optional[UploadFile]  = File(None),
     user_id: UUID = Depends(get_current_user_id),
 ):
     # Validate question exists and is approved
@@ -151,20 +151,18 @@ async def submit_answer(
 
     text = (solution_text or "").strip() or None
 
-    # Must have at least text or file
     if not text and not file:
         raise HTTPException(
             status_code=422, detail="Please provide a solution (text or file)."
         )
 
-    submission_id = str(uuid.uuid4())
-    file_url      = None
-    mime_type     = None
-    file_size     = None
-    extracted_text  = None
+    submission_id      = str(uuid.uuid4())
+    file_url           = None
+    mime_type          = None
+    file_size          = None
+    extracted_text     = None
     extraction_quality = None
 
-    # Handle file upload
     if file and file.filename:
         mime_type = file.content_type or "application/octet-stream"
         if mime_type not in ALLOWED_MIMES:
@@ -182,17 +180,14 @@ async def submit_answer(
                 detail="File too large. Maximum size is 10 MB.",
             )
 
-        # Upload to B2
         file_url = await run_in_threadpool(
             _upload_answer_file, file_bytes, mime_type, submission_id
         )
 
-        # OCR in background (best-effort, don't fail submission if it errors)
         extracted_text, extraction_quality = await run_in_threadpool(
             _try_extract_text, file_bytes, mime_type
         )
 
-    # Insert into Supabase
     row = {
         "id":                  submission_id,
         "question_id":         question_id,
@@ -212,6 +207,29 @@ async def submit_answer(
         raise HTTPException(status_code=500, detail="Failed to save submission.")
 
     return {"id": submission_id, "status": "pending"}
+
+
+@router.get(
+    "/my/{question_id}",
+    summary="Student: get their own submissions for a question",
+)
+async def get_my_submissions(
+    question_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    result = (
+        supabase.table("answer_submissions")
+        .select(
+            "id, status, feedback, extracted_text, "
+            "mime_type, file_size, created_at, reviewed_at"
+        )
+        .eq("question_id", question_id)
+        .eq("submitted_by", str(user_id))
+        .eq("is_hidden", False)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data or []
 
 
 @router.get(
@@ -236,26 +254,3 @@ async def get_answer_file_url(
         get_signed_url, row.data["file_url"], SIGNED_URL_TTL
     )
     return {"url": signed_url, "mime_type": row.data.get("mime_type")}
-
-
-@router.get(
-    "/my/{question_id}",
-    summary="Student: get their own submissions for a question",
-)
-async def get_my_submissions(
-    question_id: str,
-    user_id: UUID = Depends(get_current_user_id),
-):
-    result = (
-        supabase.table("answer_submissions")
-        .select(
-            "id, status, feedback, extracted_text, "
-            "mime_type, file_size, created_at, reviewed_at"
-        )
-        .eq("question_id", question_id)
-        .eq("submitted_by", str(user_id))
-        .eq("is_hidden", False)
-        .order("created_at", desc=True)
-        .execute()
-    )
-    return result.data or []
