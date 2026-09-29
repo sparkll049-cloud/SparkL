@@ -25,7 +25,6 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
   const [error, setError]             = useState("");
   const prevBlobRef                   = useRef<string | null>(null);
 
-  // ── Init: get token + page count ────────────────────────────────────
   useEffect(() => {
     if (!open) {
       setCurrentPage(1);
@@ -43,17 +42,16 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
 
       setCountLoading(true);
       try {
-        // ✅ Now hits viewer.py's shared route — admins get total_pages (no cap)
-        const res = await fetch(`${API}/api/questions/${questionId}/page-count`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        // ✅ Back to dedicated admin route — watermarked, correct auth
+        const res = await fetch(
+          `${API}/api/admin/questions/${questionId}/preview-page-count`,
+          { headers: { Authorization: `Bearer ${session.access_token}` } }
+        );
         if (res.ok) {
           const data = await res.json();
-          // viewer.py returns { total_pages, viewable_pages, is_paid }
-          // admins always get total_pages == viewable_pages
-          if (!cancelled) setPageCount(data.total_pages ?? 1);
+          if (!cancelled) setPageCount(data.page_count ?? 1);
         }
-      } catch { /* will show 0 but pages still load */ }
+      } catch { /* pages still load */ }
       finally { if (!cancelled) setCountLoading(false); }
     }
 
@@ -61,7 +59,6 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
     return () => { cancelled = true; };
   }, [open, questionId]);
 
-  // ── Load page image whenever currentPage or token changes ───────────
   useEffect(() => {
     if (!open || !token) return;
     let cancelled = false;
@@ -75,10 +72,11 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
     }
     setImgSrc(null);
 
-    // ✅ Now hits viewer.py's shared route — admins bypass free-tier cap
-    fetch(`${API}/api/questions/${questionId}/page/${currentPage}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
+    // ✅ Back to dedicated admin route — watermarked, correct auth
+    fetch(
+      `${API}/api/admin/questions/${questionId}/preview-page/${currentPage}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => null);
@@ -96,7 +94,6 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
     return () => { cancelled = true; };
   }, [open, token, questionId, currentPage]);
 
-  // ── Keyboard nav ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -108,7 +105,6 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
     return () => window.removeEventListener("keydown", handler);
   }, [open, currentPage, pageCount]);
 
-  // ── Touch swipe ──────────────────────────────────────────────────────
   const touchX = useRef<number | null>(null);
   function onTouchStart(e: React.TouchEvent) { touchX.current = e.touches[0].clientX; }
   function onTouchEnd(e: React.TouchEvent) {
@@ -131,14 +127,13 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
     >
-      {/* ── Header ── */}
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-[#0D1230] px-4 py-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <Eye size={16} className="shrink-0 text-blue-400" />
           <div className="min-w-0">
             <p className="text-sm font-semibold text-white">Admin review preview</p>
             <p className="text-[11px] text-slate-500">
-              Original file private · server-rendered pages
+              Watermarked · original file remains private
               {pageCount > 0 && ` · page ${currentPage} of ${pageCount}`}
             </p>
           </div>
@@ -152,9 +147,7 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
         </button>
       </header>
 
-      {/* ── Page area ── */}
       <div className="relative flex flex-1 items-center justify-center overflow-hidden select-none">
-
         {(loading || countLoading) && (
           <div className="flex flex-col items-center gap-3 text-slate-500">
             <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
@@ -169,10 +162,7 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
             <AlertCircle size={32} />
             <p className="text-sm">{error}</p>
             <button
-              onClick={() => {
-                setError("");
-                setLoading(true);
-              }}
+              onClick={() => { setError(""); setLoading(true); }}
               className="text-xs font-semibold text-blue-400 hover:underline"
             >
               Try again
@@ -182,7 +172,6 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
 
         {!loading && !error && imgSrc && (
           <>
-            {/* Capture-prevention overlay */}
             <div
               className="absolute inset-0 z-10"
               onContextMenu={(e) => e.preventDefault()}
@@ -198,7 +187,6 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
           </>
         )}
 
-        {/* Prev / Next arrows */}
         {pageCount > 1 && (
           <>
             <button
@@ -221,7 +209,6 @@ export default function AdminPaperViewer({ questionId, open, onClose }: Props) {
         )}
       </div>
 
-      {/* ── Footer nav ── */}
       {pageCount > 1 && (
         <footer className="flex shrink-0 items-center justify-between gap-4 border-t border-white/10 bg-[#0D1230] px-4 py-3">
           <button
