@@ -236,3 +236,26 @@ async def get_answer_file_url(
         get_signed_url, row.data["file_url"], SIGNED_URL_TTL
     )
     return {"url": signed_url, "mime_type": row.data.get("mime_type")}
+
+
+@router.get(
+    "/my/{question_id}",
+    summary="Student: get their own submissions for a question",
+)
+async def get_my_submissions(
+    question_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    result = (
+        supabase.table("answer_submissions")
+        .select(
+            "id, status, feedback, extracted_text, "
+            "mime_type, file_size, created_at, reviewed_at"
+        )
+        .eq("question_id", question_id)
+        .eq("submitted_by", str(user_id))
+        .eq("is_hidden", False)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data or []
