@@ -536,7 +536,7 @@ export default function SignupPage() {
                     </Link>{" "}
                     and{" "}
                     <Link
-                      href="/privacy"
+                      href="/privacy-policy"
                       className="font-semibold text-blue-600 hover:underline"
                     >
                       Privacy Policy
