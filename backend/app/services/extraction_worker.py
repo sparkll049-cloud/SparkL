@@ -34,7 +34,17 @@ from app.services.text_extractor import (
     UnsupportedFileTypeError,
 )
 
+from app.services.question_processor import process_questions, ProcessingError
+
 logger = logging.getLogger("extraction_worker")
+
+# Columns of the `questions` table that the LLM output maps onto
+QUESTION_COLUMNS = (
+    "question_number", "question_text", "question_type",
+    "option_a", "option_b", "option_c", "option_d",
+    "correct_answer", "model_answer", "explanation",
+    "topic_tag", "difficulty", "marks",
+)
 
 SECONDS_BETWEEN_CALLS = 7
 IDLE_POLL_SECONDS     = 5
@@ -163,13 +173,78 @@ def _retry_or_fail(record_id: str, attempts_used: int, error: str) -> None:
 
 # ── Question generation hook ──────────────────────────────────────────────────
 
+def _questions_exist(record_id: str) -> bool:
+    res = (
+        supabase.table("questions")
+        .select("id")
+        .eq("past_question_id", record_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(res and res.data)
+
+
+def _load_context(record_id: str) -> tuple[str, str]:
+    """Course and institution names give the LLM useful context."""
+    try:
+        res = (
+            supabase.table("past_questions")
+            .select(
+                "course:courses(name, "
+                "department:departments(institution:institutions(name)))"
+            )
+            .eq("id", record_id)
+            .limit(1)
+            .execute()
+        )
+        row = (res.data or [None])[0] or {}
+        course = row.get("course") or {}
+        dept = course.get("department") or {}
+        inst = dept.get("institution") or {}
+        return course.get("name") or "", inst.get("name") or ""
+    except Exception:
+        try:  # nested join not available — fall back to the course name only
+            res = (
+                supabase.table("past_questions")
+                .select("course:courses(name)")
+                .eq("id", record_id)
+                .limit(1)
+                .execute()
+            )
+            row = (res.data or [None])[0] or {}
+            return (row.get("course") or {}).get("name") or "", ""
+        except Exception:
+            return "", ""
+
+
+def _insert_questions(record_id: str, questions: list[dict]) -> None:
+    rows = [
+        {**{col: q.get(col) for col in QUESTION_COLUMNS}, "past_question_id": record_id}
+        for q in questions
+    ]
+    supabase.table("questions").insert(rows).execute()  # one batch = all or nothing
+
+
 async def _generate_questions(record_id: str, text: str) -> None:
     """
     Turn the extracted text into rows in the `questions` table.
-    Wire your existing question-parsing function in here. Raise on failure so
-    the paper is retried; do nothing if questions already exist for it.
+    Skips papers that already have questions (safe to retry). Raises on
+    failure so the paper is retried with backoff.
     """
-    return None
+    if await run_in_threadpool(_questions_exist, record_id):
+        return
+
+    course_name, institution = await run_in_threadpool(_load_context, record_id)
+
+    try:
+        questions = await run_in_threadpool(
+            process_questions, text, course_name, institution
+        )
+    except ProcessingError:
+        raise  # handled by the retry logic in _process_past_question
+
+    await run_in_threadpool(_insert_questions, record_id, questions)
+    logger.info("Saved %d questions for %s.", len(questions), record_id)
 
 
 # ── past_questions ────────────────────────────────────────────────────────────
