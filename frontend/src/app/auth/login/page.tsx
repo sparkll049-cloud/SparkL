@@ -13,6 +13,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
+import { getProfileStatus } from "@/utils/profile";
 import { Button } from "@/components/ui/button";
 
 export default function LoginPage() {
@@ -58,16 +59,14 @@ export default function LoginPage() {
     }
 
     if (data.user) {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("onboarding_completed")
-        .eq("id", data.user.id)
-        .single();
+      const status = await getProfileStatus(supabase, data.user.id);
 
       setLoading(false);
 
       router.push(
-        profile?.onboarding_completed
+        !status.complete
+          ? "/auth/complete-profile?next=/dashboard"
+          : status.onboardingCompleted
           ? "/dashboard"
           : "/onboarding"
       );
