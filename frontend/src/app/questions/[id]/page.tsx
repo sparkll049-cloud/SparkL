@@ -7,11 +7,10 @@ import {
   ArrowLeft, ArrowRight, FileText, Loader2, AlertCircle,
   BookOpen, Zap, Play, RotateCcw, Lock, Sparkles,
   ChevronDown, ChevronLeft, ChevronRight, Send, CheckCircle2,
-  Paperclip, X,
+  Paperclip, X, Clock,
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
-import PaperViewerModal from "@/components/PaperViewerModal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -51,12 +50,210 @@ interface QuestionLimits {
   practice_mode_max: number | null;
 }
 
+interface Submission {
+  id: string;
+  status: "pending" | "reviewed";
+  feedback: string | null;
+  extracted_text: string | null;
+  mime_type: string | null;
+  file_size: number | null;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
 const LOW_QUALITY_THRESHOLD = 0.5;
 const FREE_PRACTICE_CAP     = 5;
 
 type Tab = "view" | "practice" | "submit";
 
-// ── Practice: MCQ ─────────────────────────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── ANTI-CAPTURE HOOK ─────────────────────────────────────────────────────────
+// Blocks print, screenshot shortcuts, right-click, drag, devtools, tab-away.
+// Returns a ref to attach to the canvas watermark container.
+// ══════════════════════════════════════════════════════════════════════════════
+
+function useAntiCapture(active: boolean, userEmail: string | null) {
+  const watermarkRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!active) return;
+
+    // ── 1. Keyboard shortcut blocker ──────────────────────────────────────
+    const blockKeys = (e: KeyboardEvent) => {
+      const ctrl  = e.ctrlKey || e.metaKey;
+      const shift = e.shiftKey;
+      if (
+        e.key === "PrintScreen"                  ||  // Print Screen key
+        e.key === "F12"                          ||  // DevTools
+        (ctrl && e.key === "p")                  ||  // Print
+        (ctrl && e.key === "s")                  ||  // Save
+        (ctrl && shift && e.key === "s")         ||  // Save As
+        (ctrl && shift && e.key === "i")         ||  // DevTools
+        (ctrl && shift && e.key === "j")         ||  // DevTools console
+        (ctrl && shift && e.key === "c")         ||  // DevTools inspect
+        (ctrl && e.key === "u")                  ||  // View source
+        (ctrl && shift && e.key === "e")         ||  // Firefox devtools
+        (ctrl && shift && e.key === "k")         ||  // Firefox web console
+        // macOS screenshot combos
+        (e.metaKey && shift && e.key === "3")    ||
+        (e.metaKey && shift && e.key === "4")    ||
+        (e.metaKey && shift && e.key === "5")    ||
+        (e.metaKey && shift && e.key === "6")    ||
+        (ctrl && shift && e.key === "3")         ||
+        (ctrl && shift && e.key === "4")
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    // ── 2. Block right-click ──────────────────────────────────────────────
+    const blockContext = (e: MouseEvent) => e.preventDefault();
+
+    // ── 3. Block drag-to-save ─────────────────────────────────────────────
+    const blockDrag = (e: DragEvent) => e.preventDefault();
+
+    // ── 4. Blank image on tab away (prevents Alt+Tab+screenshot) ─────────
+    const handleVisibility = () => {
+      if (document.hidden && watermarkRef.current) {
+        // hide the entire viewer content while tab is not visible
+        const viewer = document.getElementById("__sparkl_viewer__");
+        if (viewer) viewer.style.visibility = "hidden";
+      } else {
+        const viewer = document.getElementById("__sparkl_viewer__");
+        if (viewer) viewer.style.visibility = "visible";
+      }
+    };
+
+    // ── 5. Intercept window.print() called by extensions ─────────────────
+    const origPrint = window.print;
+    window.print = () => {
+      console.warn("SparkL: printing is disabled.");
+    };
+
+    // ── 6. CSS: block print media entirely + global user-select off ───────
+    const style = document.createElement("style");
+    style.id = "__sparkl_noprint__";
+    style.innerHTML = `
+      @media print {
+        body > * { display: none !important; }
+        body::after {
+          content: "Printing SparkL content is not allowed.";
+          display: block;
+          text-align: center;
+          margin-top: 20vh;
+          font-size: 1.2rem;
+          color: #6366f1;
+        }
+      }
+      #__sparkl_viewer__ * {
+        -webkit-user-select: none !important;
+        -moz-user-select:    none !important;
+        user-select:         none !important;
+        -webkit-touch-callout: none !important;
+      }
+    `;
+    document.head.appendChild(style);
+
+    // ── 7. DevTools detection: resize heuristic ───────────────────────────
+    // When devtools opens it changes window dimensions significantly.
+    const devtoolsCheck = setInterval(() => {
+      const threshold = 160;
+      if (
+        window.outerWidth  - window.innerWidth  > threshold ||
+        window.outerHeight - window.innerHeight > threshold
+      ) {
+        const viewer = document.getElementById("__sparkl_viewer__");
+        if (viewer) viewer.style.visibility = "hidden";
+      } else {
+        const viewer = document.getElementById("__sparkl_viewer__");
+        if (viewer) viewer.style.visibility = "visible";
+      }
+    }, 1000);
+
+    document.addEventListener("keydown",         blockKeys,    { capture: true });
+    document.addEventListener("contextmenu",     blockContext, { capture: true });
+    document.addEventListener("dragstart",       blockDrag,    { capture: true });
+    document.addEventListener("visibilitychange",handleVisibility);
+
+    return () => {
+      document.removeEventListener("keydown",         blockKeys,    { capture: true });
+      document.removeEventListener("contextmenu",     blockContext, { capture: true });
+      document.removeEventListener("dragstart",       blockDrag,    { capture: true });
+      document.removeEventListener("visibilitychange",handleVisibility);
+      window.print = origPrint;
+      document.getElementById("__sparkl_noprint__")?.remove();
+      clearInterval(devtoolsCheck);
+      // Restore visibility
+      const viewer = document.getElementById("__sparkl_viewer__");
+      if (viewer) viewer.style.visibility = "visible";
+    };
+  }, [active]);
+
+  // ── 8. Canvas watermark painter ───────────────────────────────────────────
+  // Draws a tiled diagonal watermark (brand + user email) onto a canvas overlay.
+  // This is painted into the DOM so it appears over the exam image at all times.
+  useEffect(() => {
+    if (!active || !watermarkRef.current) return;
+
+    const container = watermarkRef.current;
+    const canvas    = document.createElement("canvas");
+    canvas.style.cssText = `
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+      opacity: 0.18;
+    `;
+
+    // Size canvas to match container
+    const { width, height } = container.getBoundingClientRect();
+    canvas.width  = Math.max(width,  600);
+    canvas.height = Math.max(height, 800);
+
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const line1 = "SparkL · sparkl.com.ng";
+    const line2 = userEmail ? userEmail.slice(0, 40) : "sparkl.com.ng";
+    const step  = 180;   // tile spacing
+
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(-Math.PI / 6);   // -30°
+    ctx.translate(-canvas.width / 2, -canvas.height / 2);
+
+    ctx.font      = "bold 13px system-ui, sans-serif";
+    ctx.fillStyle = "#6366f1";
+    ctx.textAlign = "center";
+
+    for (let x = -canvas.width; x < canvas.width * 2; x += step) {
+      for (let y = -canvas.height; y < canvas.height * 2; y += step) {
+        ctx.fillText(line1, x, y);
+        ctx.fillText(line2, x, y + 18);
+      }
+    }
+    ctx.restore();
+
+    container.style.position = "relative";
+    container.appendChild(canvas);
+
+    return () => {
+      canvas.remove();
+    };
+  }, [active, userEmail]);
+
+  return watermarkRef;
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Practice components ───────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
 function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -99,10 +296,14 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
           Submit answer
         </button>
       ) : (
-        <div className="rounded-xl border p-4 space-y-1.5 mt-1"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
+        <div
+          className="rounded-xl border p-4 space-y-1.5 mt-1"
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}
+        >
           <p className={`text-sm font-semibold ${selected === q.correct_answer ? "text-emerald-500" : "text-red-500"}`}>
-            {selected === q.correct_answer ? "✓ Correct!" : `✗ Incorrect — answer is ${q.correct_answer?.toUpperCase()}`}
+            {selected === q.correct_answer
+              ? "✓ Correct!"
+              : `✗ Incorrect — answer is ${q.correct_answer?.toUpperCase()}`}
           </p>
           {q.explanation && (
             <p className="text-sm leading-6" style={{ color: "var(--sp-text-3)" }}>{q.explanation}</p>
@@ -113,7 +314,6 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
   );
 }
 
-// ── Practice: Theory ─────────────────────────────────────────────────────────
 function PracticeTheory({ q }: { q: ProcessedQuestion }) {
   const [show, setShow] = useState(false);
   return (
@@ -138,11 +338,12 @@ function PracticeTheory({ q }: { q: ProcessedQuestion }) {
   );
 }
 
-// ── Practice: Question card ───────────────────────────────────────────────────
 function PracticeQuestion({ q, index }: { q: ProcessedQuestion; index: number }) {
   return (
-    <div className="rounded-2xl border p-5"
-      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+    <div
+      className="rounded-2xl border p-5"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+    >
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <span className="text-xs font-bold text-indigo-500">
           Question {q.question_number ?? index + 1}
@@ -173,7 +374,6 @@ function PracticeQuestion({ q, index }: { q: ProcessedQuestion; index: number })
   );
 }
 
-// ── Gate banner ───────────────────────────────────────────────────────────────
 function GateBanner({ hiddenCount }: { hiddenCount: number }) {
   return (
     <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-6 text-center">
@@ -200,13 +400,19 @@ function GateBanner({ hiddenCount }: { hiddenCount: number }) {
   );
 }
 
-// ── Inline Paper Viewer ───────────────────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── INLINE PAPER VIEWER (hardened) ───────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
 function InlinePaperViewer({
   questionId,
   isPaid,
+  userEmail,
 }: {
   questionId: string;
   isPaid: boolean;
+  userEmail: string | null;
 }) {
   const supabase = createClient();
 
@@ -221,14 +427,16 @@ function InlinePaperViewer({
   const [imgError, setImgError]       = useState("");
   const [isGated, setIsGated]         = useState(false);
 
-  // Get token
+  // Anti-capture: active whenever we're showing an actual page image
+  const isShowingContent = !!imgSrc && !isGated && !imgLoading;
+  const watermarkRef     = useAntiCapture(isShowingContent, userEmail);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setToken(session?.access_token ?? null);
     });
   }, []);
 
-  // Fetch page count
   useEffect(() => {
     if (!token) return;
     setMetaLoading(true);
@@ -241,7 +449,6 @@ function InlinePaperViewer({
       .finally(() => setMetaLoading(false));
   }, [token, questionId]);
 
-  // Fetch page image
   const loadPage = useCallback(async (page: number) => {
     if (!token) return;
     setImgLoading(true);
@@ -289,10 +496,11 @@ function InlinePaperViewer({
   );
 
   return (
-    <div className="flex flex-col items-center gap-4">
+    <div id="__sparkl_viewer__" className="flex flex-col items-center gap-4">
 
-      {/* Page image area */}
+      {/* Page image area — watermark ref wraps the image */}
       <div
+        ref={watermarkRef}
         className="w-full flex items-center justify-center rounded-2xl overflow-hidden"
         style={{ background: "var(--sp-bg)", minHeight: "420px" }}
       >
@@ -342,13 +550,16 @@ function InlinePaperViewer({
             draggable={false}
             onContextMenu={(e) => e.preventDefault()}
             onDragStart={(e) => e.preventDefault()}
+            onMouseDown={(e) => e.preventDefault()}
             className="w-full rounded-2xl"
             style={{
               maxHeight: "70vh",
               objectFit: "contain",
               userSelect: "none",
               WebkitUserSelect: "none",
-              pointerEvents: "none",
+              pointerEvents: "none",   // blocks extension click-to-save hooks
+              // Disable CSS filters / mix-blend tricks extensions use
+              isolation: "isolate",
             }}
           />
         ) : null}
@@ -413,22 +624,47 @@ function InlinePaperViewer({
   );
 }
 
-// ── Solution Submit Section ───────────────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── SUBMIT SOLUTION SECTION (with history) ────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
 function SubmitSolutionSection({ questionId }: { questionId: string }) {
   const supabase = createClient();
   const router   = useRouter();
 
-  const [text, setText]         = useState("");
-  const [file, setFile]         = useState<File | null>(null);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [subsLoading, setSubsLoading] = useState(true);
+
+  const [text, setText]             = useState("");
+  const [file, setFile]             = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted]   = useState(false);
-  const [error, setError]           = useState("");
+  const [submitError, setSubmitError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Load past submissions on mount
+  useEffect(() => {
+    async function load() {
+      setSubsLoading(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/answers/my/${questionId}`,
+          { headers: { Authorization: `Bearer ${session.access_token}` } }
+        );
+        if (res.ok) setSubmissions(await res.json());
+      } finally {
+        setSubsLoading(false);
+      }
+    }
+    load();
+  }, [questionId]);
 
   async function handleSubmit() {
     if (!text.trim() && !file) return;
     setSubmitting(true);
-    setError("");
+    setSubmitError("");
 
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { router.push("/auth/login"); return; }
@@ -453,108 +689,200 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         throw new Error(d.detail || "Failed to submit. Please try again.");
       }
 
-      setSubmitted(true);
+      const newSub = await res.json();
+
+      // Optimistically prepend to history
+      setSubmissions((prev) => [{
+        id: newSub.id,
+        status: "pending",
+        feedback: null,
+        extracted_text: text.trim() || null,
+        mime_type: file?.type ?? null,
+        file_size: file?.size ?? null,
+        created_at: new Date().toISOString(),
+        reviewed_at: null,
+      }, ...prev]);
+
+      // Reset form
+      setText("");
+      setFile(null);
+
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
+      setSubmitError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
       setSubmitting(false);
     }
   }
 
-  if (submitted) return (
-    <div className="flex flex-col items-center gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-8 text-center">
-      <CheckCircle2 className="h-8 w-8 text-emerald-500" />
-      <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-        Solution submitted!
-      </p>
-      <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>
-        Your solution has been sent for review. You'll be notified when feedback is ready.
-      </p>
-    </div>
-  );
-
   return (
-    <div className="rounded-2xl border p-5 space-y-4"
-      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+    <div className="space-y-4">
 
-      <div>
-        <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-          Submit your solution
-        </p>
-        <p className="mt-0.5 text-xs" style={{ color: "var(--sp-text-3)" }}>
-          Have answers or worked solutions? Share them here for feedback.
-        </p>
-      </div>
+      {/* ── Past submissions ── */}
+      {subsLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
+        </div>
+      ) : submissions.length > 0 && (
+        <div className="space-y-3">
+          <p className="text-xs font-semibold px-1" style={{ color: "var(--sp-text-3)" }}>
+            Your submissions ({submissions.length})
+          </p>
 
-      {/* Text input */}
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="Type your solution or answers here…"
-        rows={5}
-        className="w-full rounded-xl border px-4 py-3 text-sm outline-none transition resize-none"
-        style={{
-          borderColor: "var(--sp-border)",
-          background: "var(--sp-bg-muted)",
-          color: "var(--sp-text)",
-        }}
-      />
+          {submissions.map((sub) => (
+            <div
+              key={sub.id}
+              className="rounded-2xl border p-4 space-y-3"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+            >
+              {/* Header row */}
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-xs" style={{ color: "var(--sp-text-3)" }}>
+                  {new Date(sub.created_at).toLocaleDateString("en-NG", {
+                    day: "numeric", month: "short", year: "numeric",
+                  })}
+                </span>
 
-      {/* File attach */}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => fileRef.current?.click()}
-          className="flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
-        >
-          <Paperclip size={13} />
-          {file ? "Change file" : "Attach file"}
-        </button>
+                {sub.status === "reviewed" ? (
+                  <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-[10px] font-semibold text-emerald-500">
+                    <CheckCircle2 size={10} /> Reviewed
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 rounded-full bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 text-[10px] font-semibold text-amber-500">
+                    <Clock size={10} /> Pending review
+                  </span>
+                )}
+              </div>
 
-        {file && (
-          <div className="flex items-center gap-2 rounded-xl border px-3 py-1.5"
-            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
-            <span className="text-xs truncate max-w-[160px]" style={{ color: "var(--sp-text-2)" }}>
-              {file.name}
-            </span>
-            <button onClick={() => setFile(null)}>
-              <X size={12} style={{ color: "var(--sp-text-3)" }} />
-            </button>
-          </div>
-        )}
+              {/* What they submitted */}
+              {sub.extracted_text && (
+                <div
+                  className="rounded-xl p-3 text-sm leading-relaxed whitespace-pre-wrap"
+                  style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+                >
+                  {sub.extracted_text.length > 400
+                    ? sub.extracted_text.slice(0, 400) + "…"
+                    : sub.extracted_text}
+                </div>
+              )}
 
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*,application/pdf"
-          className="hidden"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        />
-      </div>
+              {sub.mime_type && !sub.extracted_text && (
+                <div
+                  className="flex items-center gap-2 rounded-xl p-3 text-xs"
+                  style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}
+                >
+                  <Paperclip size={12} />
+                  File attached ({sub.mime_type.split("/")[1].toUpperCase()}
+                  {sub.file_size ? ` · ${(sub.file_size / 1024).toFixed(0)} KB` : ""})
+                </div>
+              )}
 
-      {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2.5">
-          <AlertCircle size={13} className="mt-0.5 shrink-0 text-red-400" />
-          <p className="text-xs text-red-400">{error}</p>
+              {/* Admin feedback */}
+              {sub.status === "reviewed" && sub.feedback && (
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1">
+                  <p className="text-[10px] font-semibold text-emerald-500">
+                    Feedback from SparkL
+                  </p>
+                  <p className="text-sm leading-6 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
+                    {sub.feedback}
+                  </p>
+                </div>
+              )}
+
+              {sub.status === "pending" && (
+                <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+                  Your submission is being reviewed. Check back soon.
+                </p>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
-      <button
-        onClick={handleSubmit}
-        disabled={(!text.trim() && !file) || submitting}
-        className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
+      {/* ── New submission form ── */}
+      <div
+        className="rounded-2xl border p-5 space-y-4"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
       >
-        {submitting
-          ? <Loader2 size={14} className="animate-spin" />
-          : <Send size={14} />
-        }
-        {submitting ? "Submitting…" : "Submit solution"}
-      </button>
+        <div>
+          <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+            {submissions.length > 0 ? "Submit another solution" : "Submit your solution"}
+          </p>
+          <p className="mt-0.5 text-xs" style={{ color: "var(--sp-text-3)" }}>
+            Have answers or worked solutions? Share them here for feedback.
+          </p>
+        </div>
+
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Type your solution or answers here…"
+          rows={5}
+          className="w-full rounded-xl border px-4 py-3 text-sm outline-none transition resize-none"
+          style={{
+            borderColor: "var(--sp-border)",
+            background: "var(--sp-bg-muted)",
+            color: "var(--sp-text)",
+          }}
+        />
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition"
+            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+          >
+            <Paperclip size={13} />
+            {file ? "Change file" : "Attach file"}
+          </button>
+
+          {file && (
+            <div
+              className="flex items-center gap-2 rounded-xl border px-3 py-1.5"
+              style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}
+            >
+              <span className="text-xs truncate max-w-[160px]" style={{ color: "var(--sp-text-2)" }}>
+                {file.name}
+              </span>
+              <button onClick={() => setFile(null)}>
+                <X size={12} style={{ color: "var(--sp-text-3)" }} />
+              </button>
+            </div>
+          )}
+
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*,application/pdf"
+            className="hidden"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+        </div>
+
+        {submitError && (
+          <div className="flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2.5">
+            <AlertCircle size={13} className="mt-0.5 shrink-0 text-red-400" />
+            <p className="text-xs text-red-400">{submitError}</p>
+          </div>
+        )}
+
+        <button
+          onClick={handleSubmit}
+          disabled={(!text.trim() && !file) || submitting}
+          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {submitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+          {submitting ? "Submitting…" : "Submit solution"}
+        </button>
+      </div>
     </div>
   );
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── MAIN PAGE ─────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
 export default function QuestionDetailPage() {
   const supabase   = createClient();
   const router     = useRouter();
@@ -564,6 +892,9 @@ export default function QuestionDetailPage() {
   const [data, setData]       = useState<QuestionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState("");
+
+  // Track logged-in user email for watermark
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   const [processedQuestions, setProcessedQuestions] = useState<ProcessedQuestion[]>([]);
   const [questionsLoading, setQuestionsLoading]     = useState(false);
@@ -581,6 +912,10 @@ export default function QuestionDetailPage() {
       setError("");
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.push("/auth/login"); return; }
+
+      // Capture email for watermark
+      setUserEmail(session.user?.email ?? null);
+
       try {
         const [detailRes, limitsRes] = await Promise.all([
           fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}`,
@@ -655,9 +990,11 @@ export default function QuestionDetailPage() {
           <ArrowLeft size={15} /> Back
         </Link>
 
-        {/* Header */}
-        <div className="mt-4 rounded-2xl border p-5"
-          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+        {/* Header card */}
+        <div
+          className="mt-4 rounded-2xl border p-5"
+          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+        >
           <div className="flex items-start gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-500/10">
               <FileText size={20} className="text-indigo-500" />
@@ -684,9 +1021,10 @@ export default function QuestionDetailPage() {
           )}
 
           {/* Tabs */}
-          <div className="mt-5 flex items-center gap-1 border-t pt-4"
-            style={{ borderColor: "var(--sp-border)" }}>
-
+          <div
+            className="mt-5 flex items-center gap-1 border-t pt-4"
+            style={{ borderColor: "var(--sp-border)" }}
+          >
             {isPdf && (
               <button
                 onClick={() => setTab("view")}
@@ -721,7 +1059,6 @@ export default function QuestionDetailPage() {
               </button>
             ) : null}
 
-            {/* Submit tab */}
             <button
               onClick={() => setTab("submit")}
               className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
@@ -752,17 +1089,25 @@ export default function QuestionDetailPage() {
         {/* Tab content */}
         <div className="mt-4 space-y-4">
 
-          {/* VIEW — inline paper, no popup */}
+          {/* VIEW */}
           {tab === "view" && isPdf && (
-            <div className="rounded-2xl border p-5"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <InlinePaperViewer questionId={questionId} isPaid={limits.is_paid} />
+            <div
+              className="rounded-2xl border p-5"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+            >
+              <InlinePaperViewer
+                questionId={questionId}
+                isPaid={limits.is_paid}
+                userEmail={userEmail}
+              />
             </div>
           )}
 
           {tab === "view" && !isPdf && (
-            <div className="rounded-2xl border p-8 text-center"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+            <div
+              className="rounded-2xl border p-8 text-center"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+            >
               <FileText size={24} className="mx-auto mb-3 text-indigo-400" />
               <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
                 No viewer for this file type
@@ -797,8 +1142,10 @@ export default function QuestionDetailPage() {
                   {isGated && <GateBanner hiddenCount={hiddenCount} />}
                 </>
               ) : (
-                <div className="rounded-2xl border p-10 text-center"
-                  style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+                <div
+                  className="rounded-2xl border p-10 text-center"
+                  style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+                >
                   <Sparkles size={24} className="mx-auto mb-3 text-violet-400" />
                   <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
                     Practice questions not ready yet
