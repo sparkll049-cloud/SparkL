@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, ArrowRight, FileText, Loader2, AlertCircle,
   BookOpen, Zap, Play, RotateCcw, Lock, Sparkles,
-  ChevronDown, Eye,
+  ChevronDown, ChevronLeft, ChevronRight, Send, CheckCircle2,
+  Paperclip, X,
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
@@ -53,8 +54,7 @@ interface QuestionLimits {
 const LOW_QUALITY_THRESHOLD = 0.5;
 const FREE_PRACTICE_CAP     = 5;
 
-// ── Tab type ──────────────────────────────────────────────────────────────────
-type Tab = "view" | "practice";
+type Tab = "view" | "practice" | "submit";
 
 // ── Practice: MCQ ─────────────────────────────────────────────────────────────
 function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
@@ -90,7 +90,6 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
           </button>
         );
       })}
-
       {!revealed ? (
         <button
           onClick={() => setRevealed(true)}
@@ -103,9 +102,7 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
         <div className="rounded-xl border p-4 space-y-1.5 mt-1"
           style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
           <p className={`text-sm font-semibold ${selected === q.correct_answer ? "text-emerald-500" : "text-red-500"}`}>
-            {selected === q.correct_answer
-              ? "✓ Correct!"
-              : `✗ Incorrect — answer is ${q.correct_answer?.toUpperCase()}`}
+            {selected === q.correct_answer ? "✓ Correct!" : `✗ Incorrect — answer is ${q.correct_answer?.toUpperCase()}`}
           </p>
           {q.explanation && (
             <p className="text-sm leading-6" style={{ color: "var(--sp-text-3)" }}>{q.explanation}</p>
@@ -116,7 +113,7 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
   );
 }
 
-// ── Practice: Theory ──────────────────────────────────────────────────────────
+// ── Practice: Theory ─────────────────────────────────────────────────────────
 function PracticeTheory({ q }: { q: ProcessedQuestion }) {
   const [show, setShow] = useState(false);
   return (
@@ -141,7 +138,7 @@ function PracticeTheory({ q }: { q: ProcessedQuestion }) {
   );
 }
 
-// ── Practice: Question card ────────────────────────────────────────────────────
+// ── Practice: Question card ───────────────────────────────────────────────────
 function PracticeQuestion({ q, index }: { q: ProcessedQuestion; index: number }) {
   return (
     <div className="rounded-2xl border p-5"
@@ -171,10 +168,7 @@ function PracticeQuestion({ q, index }: { q: ProcessedQuestion; index: number })
       <p className="text-sm leading-7 whitespace-pre-wrap mb-4" style={{ color: "var(--sp-text)" }}>
         {q.question_text}
       </p>
-      {q.question_type === "mcq"
-        ? <PracticeMCQ q={q} />
-        : <PracticeTheory q={q} />
-      }
+      {q.question_type === "mcq" ? <PracticeMCQ q={q} /> : <PracticeTheory q={q} />}
     </div>
   );
 }
@@ -206,6 +200,360 @@ function GateBanner({ hiddenCount }: { hiddenCount: number }) {
   );
 }
 
+// ── Inline Paper Viewer ───────────────────────────────────────────────────────
+function InlinePaperViewer({
+  questionId,
+  isPaid,
+}: {
+  questionId: string;
+  isPaid: boolean;
+}) {
+  const supabase = createClient();
+
+  const [token, setToken]             = useState<string | null>(null);
+  const [meta, setMeta]               = useState<{ total_pages: number; viewable_pages: number } | null>(null);
+  const [metaLoading, setMetaLoading] = useState(true);
+  const [metaError, setMetaError]     = useState("");
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [imgSrc, setImgSrc]           = useState<string | null>(null);
+  const [imgLoading, setImgLoading]   = useState(false);
+  const [imgError, setImgError]       = useState("");
+  const [isGated, setIsGated]         = useState(false);
+
+  // Get token
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setToken(session?.access_token ?? null);
+    });
+  }, []);
+
+  // Fetch page count
+  useEffect(() => {
+    if (!token) return;
+    setMetaLoading(true);
+    fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}/page-count`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => { if (!r.ok) throw new Error("Could not load paper."); return r.json(); })
+      .then(setMeta)
+      .catch((e) => setMetaError(e.message))
+      .finally(() => setMetaLoading(false));
+  }, [token, questionId]);
+
+  // Fetch page image
+  const loadPage = useCallback(async (page: number) => {
+    if (!token) return;
+    setImgLoading(true);
+    setImgError("");
+    setIsGated(false);
+    setImgSrc((prev) => {
+      if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+      return null;
+    });
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}/page/${page}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.status === 403) { setIsGated(true); return; }
+      if (!res.ok) throw new Error("Could not load this page.");
+      const blob = await res.blob();
+      setImgSrc(URL.createObjectURL(blob));
+    } catch (e) {
+      setImgError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setImgLoading(false);
+    }
+  }, [token, questionId]);
+
+  useEffect(() => {
+    if (meta) loadPage(currentPage);
+  }, [meta, currentPage]);
+
+  const canGoPrev   = currentPage > 1;
+  const canGoNext   = meta ? currentPage < meta.viewable_pages : false;
+  const lockedCount = meta ? meta.total_pages - meta.viewable_pages : 0;
+
+  if (metaLoading) return (
+    <div className="flex items-center justify-center py-16">
+      <Loader2 className="h-7 w-7 animate-spin text-indigo-500" />
+    </div>
+  );
+
+  if (metaError) return (
+    <div className="flex flex-col items-center gap-2 py-12 text-center">
+      <AlertCircle className="h-6 w-6 text-red-400" />
+      <p className="text-sm text-red-400">{metaError}</p>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col items-center gap-4">
+
+      {/* Page image area */}
+      <div
+        className="w-full flex items-center justify-center rounded-2xl overflow-hidden"
+        style={{ background: "var(--sp-bg)", minHeight: "420px" }}
+      >
+        {imgLoading ? (
+          <div className="flex flex-col items-center gap-3 py-16">
+            <Loader2 className="h-7 w-7 animate-spin text-indigo-500" />
+            <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>
+              Loading page {currentPage}…
+            </p>
+          </div>
+        ) : isGated ? (
+          <div className="flex flex-col items-center gap-4 p-8 text-center max-w-sm">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-500/15">
+              <Lock className="h-5 w-5 text-indigo-500" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+                {lockedCount} page{lockedCount !== 1 ? "s" : ""} locked
+              </p>
+              <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+                Free accounts can read the first 2 pages.
+              </p>
+            </div>
+            <Link
+              href="/dashboard/subscribe"
+              className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
+            >
+              <Sparkles className="h-3.5 w-3.5" /> Unlock all pages
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        ) : imgError ? (
+          <div className="flex flex-col items-center gap-3 py-12 text-center">
+            <AlertCircle className="h-6 w-6 text-red-400" />
+            <p className="text-sm text-red-400">{imgError}</p>
+            <button
+              onClick={() => loadPage(currentPage)}
+              className="text-xs font-semibold text-indigo-400 hover:underline"
+            >
+              Try again
+            </button>
+          </div>
+        ) : imgSrc ? (
+          <img
+            src={imgSrc}
+            alt={`Page ${currentPage}`}
+            draggable={false}
+            onContextMenu={(e) => e.preventDefault()}
+            onDragStart={(e) => e.preventDefault()}
+            className="w-full rounded-2xl"
+            style={{
+              maxHeight: "70vh",
+              objectFit: "contain",
+              userSelect: "none",
+              WebkitUserSelect: "none",
+              pointerEvents: "none",
+            }}
+          />
+        ) : null}
+      </div>
+
+      {/* Navigation */}
+      {meta && !isGated && (
+        <div className="flex w-full items-center justify-between">
+          <button
+            onClick={() => setCurrentPage((p) => p - 1)}
+            disabled={!canGoPrev || imgLoading}
+            className="flex items-center gap-1.5 rounded-xl border px-4 py-2 text-xs font-semibold transition disabled:opacity-30"
+            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+          >
+            <ChevronLeft size={14} /> Previous
+          </button>
+
+          <div className="flex items-center gap-1.5">
+            {Array.from({ length: Math.min(meta.viewable_pages, 7) }, (_, i) => {
+              const page = i + 1;
+              return (
+                <button
+                  key={page}
+                  onClick={() => setCurrentPage(page)}
+                  className="h-2 w-2 rounded-full transition-all"
+                  style={{
+                    background: page === currentPage ? "#6366f1" : "var(--sp-border)",
+                    transform: page === currentPage ? "scale(1.4)" : "scale(1)",
+                  }}
+                />
+              );
+            })}
+            {meta.viewable_pages > 7 && (
+              <span className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+                …{meta.viewable_pages - 7} more
+              </span>
+            )}
+          </div>
+
+          <button
+            onClick={() => setCurrentPage((p) => p + 1)}
+            disabled={!canGoNext || imgLoading}
+            className="flex items-center gap-1.5 rounded-xl border px-4 py-2 text-xs font-semibold transition disabled:opacity-30"
+            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+          >
+            Next <ChevronRight size={14} />
+          </button>
+        </div>
+      )}
+
+      {meta && (
+        <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+          Page {currentPage} of {meta.viewable_pages}
+          {!isPaid && meta.total_pages > meta.viewable_pages && (
+            <span className="ml-1.5 text-indigo-400">
+              · {meta.total_pages - meta.viewable_pages} pages locked
+            </span>
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Solution Submit Section ───────────────────────────────────────────────────
+function SubmitSolutionSection({ questionId }: { questionId: string }) {
+  const supabase = createClient();
+  const router   = useRouter();
+
+  const [text, setText]         = useState("");
+  const [file, setFile]         = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted]   = useState(false);
+  const [error, setError]           = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function handleSubmit() {
+    if (!text.trim() && !file) return;
+    setSubmitting(true);
+    setError("");
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) { router.push("/auth/login"); return; }
+
+    try {
+      const formData = new FormData();
+      formData.append("question_id", questionId);
+      if (text.trim()) formData.append("solution_text", text.trim());
+      if (file) formData.append("file", file);
+
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/answers/submit`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${session.access_token}` },
+          body: formData,
+        }
+      );
+
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || "Failed to submit. Please try again.");
+      }
+
+      setSubmitted(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (submitted) return (
+    <div className="flex flex-col items-center gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-8 text-center">
+      <CheckCircle2 className="h-8 w-8 text-emerald-500" />
+      <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+        Solution submitted!
+      </p>
+      <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>
+        Your solution has been sent for review. You'll be notified when feedback is ready.
+      </p>
+    </div>
+  );
+
+  return (
+    <div className="rounded-2xl border p-5 space-y-4"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+
+      <div>
+        <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+          Submit your solution
+        </p>
+        <p className="mt-0.5 text-xs" style={{ color: "var(--sp-text-3)" }}>
+          Have answers or worked solutions? Share them here for feedback.
+        </p>
+      </div>
+
+      {/* Text input */}
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Type your solution or answers here…"
+        rows={5}
+        className="w-full rounded-xl border px-4 py-3 text-sm outline-none transition resize-none"
+        style={{
+          borderColor: "var(--sp-border)",
+          background: "var(--sp-bg-muted)",
+          color: "var(--sp-text)",
+        }}
+      />
+
+      {/* File attach */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition"
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+        >
+          <Paperclip size={13} />
+          {file ? "Change file" : "Attach file"}
+        </button>
+
+        {file && (
+          <div className="flex items-center gap-2 rounded-xl border px-3 py-1.5"
+            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
+            <span className="text-xs truncate max-w-[160px]" style={{ color: "var(--sp-text-2)" }}>
+              {file.name}
+            </span>
+            <button onClick={() => setFile(null)}>
+              <X size={12} style={{ color: "var(--sp-text-3)" }} />
+            </button>
+          </div>
+        )}
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*,application/pdf"
+          className="hidden"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2.5">
+          <AlertCircle size={13} className="mt-0.5 shrink-0 text-red-400" />
+          <p className="text-xs text-red-400">{error}</p>
+        </div>
+      )}
+
+      <button
+        onClick={handleSubmit}
+        disabled={(!text.trim() && !file) || submitting}
+        className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {submitting
+          ? <Loader2 size={14} className="animate-spin" />
+          : <Send size={14} />
+        }
+        {submitting ? "Submitting…" : "Submit solution"}
+      </button>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function QuestionDetailPage() {
   const supabase   = createClient();
@@ -224,9 +572,7 @@ export default function QuestionDetailPage() {
     is_paid: true, read_mode_percent: 100, practice_mode_max: null,
   });
 
-  // Default tab is "view"
   const [tab, setTab] = useState<Tab>("view");
-  const [viewerOpen, setViewerOpen] = useState(false);
 
   useEffect(() => {
     if (!questionId) return;
@@ -253,7 +599,6 @@ export default function QuestionDetailPage() {
             practice_mode_max: d.practice_mode_max ?? null,
           });
         }
-        // Load practice questions in background
         setQuestionsLoading(true);
         fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}/processed`,
           { headers: { Authorization: `Bearer ${session.access_token}` } })
@@ -285,11 +630,11 @@ export default function QuestionDetailPage() {
     </div>
   );
 
-  const isPdf         = data.mime_type?.startsWith("application/pdf");
-  const isLowQuality  = data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
-  const hasProcessed  = processedQuestions.length > 0;
-  const mcqCount      = processedQuestions.filter(q => q.question_type === "mcq").length;
-  const theoryCount   = processedQuestions.filter(q => q.question_type === "theory").length;
+  const isPdf        = data.mime_type?.startsWith("application/pdf");
+  const isLowQuality = data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
+  const hasProcessed = processedQuestions.length > 0;
+  const mcqCount     = processedQuestions.filter(q => q.question_type === "mcq").length;
+  const theoryCount  = processedQuestions.filter(q => q.question_type === "theory").length;
 
   const visibleQuestions = !limits.is_paid
     ? processedQuestions.slice(0, FREE_PRACTICE_CAP)
@@ -338,11 +683,10 @@ export default function QuestionDetailPage() {
             </div>
           )}
 
-          {/* ── Tabs ── */}
+          {/* Tabs */}
           <div className="mt-5 flex items-center gap-1 border-t pt-4"
             style={{ borderColor: "var(--sp-border)" }}>
 
-            {/* View tab — always shown for PDFs */}
             {isPdf && (
               <button
                 onClick={() => setTab("view")}
@@ -351,15 +695,14 @@ export default function QuestionDetailPage() {
                 }`}
                 style={tab !== "view" ? { color: "var(--sp-text-3)", background: "var(--sp-bg-muted)" } : {}}
               >
-                <Eye size={12} /> View paper
+                <FileText size={12} /> View paper
               </button>
             )}
 
-            {/* Practice tab — shown only when AI has processed the paper */}
             {questionsLoading ? (
               <div className="flex items-center gap-1.5 px-3.5 py-2">
                 <Loader2 size={12} className="animate-spin text-indigo-400" />
-                <span className="text-xs" style={{ color: "var(--sp-text-3)" }}>Loading practice…</span>
+                <span className="text-xs" style={{ color: "var(--sp-text-3)" }}>Loading…</span>
               </div>
             ) : hasProcessed ? (
               <button
@@ -378,7 +721,17 @@ export default function QuestionDetailPage() {
               </button>
             ) : null}
 
-            {/* Stats */}
+            {/* Submit tab */}
+            <button
+              onClick={() => setTab("submit")}
+              className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+                tab === "submit" ? "bg-indigo-600 text-white" : ""
+              }`}
+              style={tab !== "submit" ? { color: "var(--sp-text-3)", background: "var(--sp-bg-muted)" } : {}}
+            >
+              <Send size={12} /> Submit solution
+            </button>
+
             {hasProcessed && (
               <div className="ml-auto flex items-center gap-3">
                 {mcqCount > 0 && (
@@ -396,38 +749,23 @@ export default function QuestionDetailPage() {
           </div>
         </div>
 
-        {/* ── Tab content ── */}
-        <div className="mt-4">
+        {/* Tab content */}
+        <div className="mt-4 space-y-4">
 
-          {/* VIEW tab — opens the page-by-page reader */}
+          {/* VIEW — inline paper, no popup */}
           {tab === "view" && isPdf && (
-            <div className="rounded-2xl border p-8 text-center"
+            <div className="rounded-2xl border p-5"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <FileText size={24} className="mx-auto mb-3 text-indigo-400" />
-              <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-                {data.title}
-              </p>
-              {!limits.is_paid && (
-                <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                  Free accounts can read the first 2 pages.
-                </p>
-              )}
-              <button
-                onClick={() => setViewerOpen(true)}
-                className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
-              >
-                <Eye size={14} /> Open paper
-              </button>
+              <InlinePaperViewer questionId={questionId} isPaid={limits.is_paid} />
             </div>
           )}
 
-          {/* No PDF fallback */}
           {tab === "view" && !isPdf && (
             <div className="rounded-2xl border p-8 text-center"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               <FileText size={24} className="mx-auto mb-3 text-indigo-400" />
               <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-                No PDF viewer for this file type
+                No viewer for this file type
               </p>
               <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
                 Switch to Practice to interact with extracted questions.
@@ -435,7 +773,7 @@ export default function QuestionDetailPage() {
             </div>
           )}
 
-          {/* PRACTICE tab */}
+          {/* PRACTICE */}
           {tab === "practice" && (
             <div className="space-y-4">
               {hasProcessed ? (
@@ -473,15 +811,13 @@ export default function QuestionDetailPage() {
             </div>
           )}
 
+          {/* SUBMIT SOLUTION */}
+          {tab === "submit" && (
+            <SubmitSolutionSection questionId={questionId} />
+          )}
+
         </div>
       </div>
-
-      <PaperViewerModal
-        questionId={questionId}
-        title={data.title}
-        open={viewerOpen}
-        onClose={() => setViewerOpen(false)}
-      />
     </div>
   );
 }
