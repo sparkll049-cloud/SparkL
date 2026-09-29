@@ -1,224 +1,238 @@
 """
 answers.py
 ----------
-Student-facing answer submission for past questions. Students upload a
-photo/scan of their handwritten answer to a specific question; text is
-extracted asynchronously by the same background worker used for
-past_questions (see extraction_worker.py). Admins review submissions
-and leave written feedback — no scoring, just review.
- 
-Endpoints:
-    POST /api/answers                     submit an answer for a question
-    GET  /api/answers/mine/{question_id}   the logged-in student's own
-                                            submissions for one question
-    GET  /api/admin/answers                admin: list submissions (any status)
-    POST /api/admin/answers/{id}/review    admin: leave feedback, mark reviewed
-"""
+Student-facing answer submission routes.
 
+POST /api/answers/submit        — student submits solution (text + optional file)
+GET  /api/answers/{id}/file-url — admin gets a short-lived signed URL to view the file
+"""
 from __future__ import annotations
 
+import io
 import uuid
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 
 from app.supabase_client import supabase
-from app.routers.uploads import get_current_user_id, detect_file_type
-from app.admin_auth import get_current_admin
+from app.storage import upload_bytes, get_signed_url
 
-router = APIRouter(tags=["Answers"])
+router = APIRouter(prefix="/api/answers", tags=["Answers"])
 
-TABLE_NAME = "answer_submissions"
-STORAGE_BUCKET = "answer-submissions"
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB, matches past-questions limit
+SIGNED_URL_TTL   = 300          # 5 minutes — admin preview only
+MAX_FILE_SIZE    = 10 * 1024 * 1024  # 10 MB
+ALLOWED_MIMES    = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+}
+ANSWER_FOLDER    = "answer-submissions"   # B2 folder prefix
 
 
-@router.post(
-    "/api/answers",
-    status_code=status.HTTP_201_CREATED,
-    summary="Submit a photo/scan answer for a past question",
-)
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+
+async def get_current_user_id(
+    authorization: Optional[str] = Header(None),
+) -> UUID:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        resp = supabase.auth.get_user(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
+    user = getattr(resp, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
+    return UUID(user.id)
+
+
+async def get_current_admin(
+    authorization: Optional[str] = Header(None),
+) -> UUID:
+    user_id = await get_current_user_id(authorization)
+    result = (
+        supabase.table("profiles")
+        .select("is_admin, admin_role")
+        .eq("id", str(user_id))
+        .single()
+        .execute()
+    )
+    is_admin = bool(
+        result.data and (result.data.get("is_admin") or result.data.get("admin_role"))
+    )
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return user_id
+
+
+# ── Upload helper ─────────────────────────────────────────────────────────────
+
+def _upload_answer_file(file_bytes: bytes, mime_type: str, submission_id: str) -> str:
+    """Upload to B2 and return the storage key."""
+    ext = {
+        "application/pdf": "pdf",
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+        "image/heic": "heic",
+    }.get(mime_type, "bin")
+
+    key = f"{ANSWER_FOLDER}/{submission_id}.{ext}"
+    upload_bytes(key, file_bytes, content_type=mime_type)
+    return key
+
+
+# ── OCR helper (best-effort) ──────────────────────────────────────────────────
+
+def _try_extract_text(file_bytes: bytes, mime_type: str) -> tuple[str | None, float | None]:
+    """
+    Run OCR on the uploaded file. Returns (text, quality) or (None, None) on failure.
+    Quality is a rough 0-1 confidence estimate based on character count.
+    """
+    try:
+        if mime_type == "application/pdf":
+            import pypdfium2 as pdfium
+            from PIL import Image
+            import pytesseract
+
+            pdf   = pdfium.PdfDocument(file_bytes)
+            texts = []
+            for i in range(len(pdf)):
+                page   = pdf[i]
+                bitmap = page.render(scale=2.0)
+                img    = bitmap.to_pil()
+                texts.append(pytesseract.image_to_string(img))
+            full_text = "\n\n".join(texts).strip()
+
+        else:
+            from PIL import Image
+            import pytesseract
+
+            img       = Image.open(io.BytesIO(file_bytes))
+            full_text = pytesseract.image_to_string(img).strip()
+
+        if not full_text:
+            return None, 0.0
+
+        # Rough quality: penalise very short or garbled text
+        quality = min(1.0, len(full_text) / 500)
+        return full_text, round(quality, 3)
+
+    except Exception:
+        return None, None
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@router.post("/submit", summary="Student submits a solution for a past question")
 async def submit_answer(
-    question_id: str = Form(...),
-    file: UploadFile = File(...),
+    question_id:   str           = Form(...),
+    solution_text: Optional[str] = Form(None),
+    file:          Optional[UploadFile] = File(None),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    try:
-        UUID(question_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid question_id.")
-
-    # Confirm the question exists and is actually visible to this student
-    # (approved, or their own upload) before accepting an answer for it.
-    question_res = (
+    # Validate question exists and is approved
+    q = (
         supabase.table("past_questions")
-        .select("id, status, uploaded_by")
+        .select("id, status")
         .eq("id", question_id)
         .maybe_single()
         .execute()
     )
-    question = question_res.data
-    if not question:
+    if not q.data:
         raise HTTPException(status_code=404, detail="Question not found.")
-    if question["status"] != "approved" and question["uploaded_by"] != str(user_id):
+    if q.data.get("status") != "approved":
         raise HTTPException(status_code=404, detail="Question not found.")
 
-    file_bytes = await file.read()
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    if len(file_bytes) > MAX_UPLOAD_BYTES:
+    text = (solution_text or "").strip() or None
+
+    # Must have at least text or file
+    if not text and not file:
         raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Max size is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB.",
+            status_code=422, detail="Please provide a solution (text or file)."
         )
 
-    mime_type, ext = detect_file_type(file_bytes)
+    submission_id = str(uuid.uuid4())
+    file_url      = None
+    mime_type     = None
+    file_size     = None
+    extracted_text  = None
+    extraction_quality = None
 
-    storage_path = f"{user_id}/{uuid.uuid4()}.{ext}"
+    # Handle file upload
+    if file and file.filename:
+        mime_type = file.content_type or "application/octet-stream"
+        if mime_type not in ALLOWED_MIMES:
+            raise HTTPException(
+                status_code=415,
+                detail="Only PDF, JPEG, PNG, WEBP, and HEIC files are accepted.",
+            )
 
-    try:
-        supabase.storage.from_(STORAGE_BUCKET).upload(
-            storage_path, file_bytes, {"content-type": mime_type}
+        file_bytes = await file.read()
+        file_size  = len(file_bytes)
+
+        if file_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail="File too large. Maximum size is 10 MB.",
+            )
+
+        # Upload to B2
+        file_url = await run_in_threadpool(
+            _upload_answer_file, file_bytes, mime_type, submission_id
         )
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to store file.")
 
-    record = {
-        "question_id": question_id,
-        "submitted_by": str(user_id),
-        "file_url": storage_path,
-        "mime_type": mime_type,
-        "file_size": len(file_bytes),
-        "extracted_text": None,
-        "extraction_quality": None,
-        "status": "pending",
+        # OCR in background (best-effort, don't fail submission if it errors)
+        extracted_text, extraction_quality = await run_in_threadpool(
+            _try_extract_text, file_bytes, mime_type
+        )
+
+    # Insert into Supabase
+    row = {
+        "id":                  submission_id,
+        "question_id":         question_id,
+        "submitted_by":        str(user_id),
+        "status":              "pending",
+        "feedback":            None,
+        "file_url":            file_url,
+        "mime_type":           mime_type,
+        "file_size":           file_size,
+        "extracted_text":      extracted_text or text,   # prefer OCR, fall back to typed text
+        "extraction_quality":  extraction_quality,
+        "is_hidden":           False,
     }
 
-    try:
-        response = supabase.table(TABLE_NAME).insert(record).execute()
-    except Exception:
-        supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
-        raise HTTPException(status_code=500, detail="Failed to save answer.")
+    result = supabase.table("answer_submissions").insert(row).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to save submission.")
 
-    if not response.data:
-        supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
-        raise HTTPException(status_code=500, detail="Failed to save answer.")
-
-    return response.data[0]
+    return {"id": submission_id, "status": "pending"}
 
 
 @router.get(
-    "/api/answers/mine/{question_id}",
-    summary="The logged-in student's own submissions for one question",
+    "/{answer_id}/file-url",
+    summary="Admin: get a short-lived signed URL to view the submitted file",
 )
-async def list_my_answers_for_question(
-    question_id: str, user_id: UUID = Depends(get_current_user_id)
-):
-    response = (
-        supabase.table(TABLE_NAME)
-        .select("id, status, feedback, created_at, reviewed_at, extraction_quality")
-        .eq("question_id", question_id)
-        .eq("submitted_by", str(user_id))
-        .order("created_at", desc=True)
-        .execute()
-    )
-    return response.data or []
-
-
-@router.get(
-    "/api/admin/answers",
-    summary="Admin: list answer submissions, optionally filtered by status",
-)
-async def admin_list_answers(
-    status_filter: Optional[str] = None,
-    admin_id: str = Depends(get_current_admin),
-):
-    query = (
-        supabase.table(TABLE_NAME)
-        .select(
-            "id, question_id, submitted_by, status, feedback, created_at, "
-            "reviewed_at, extracted_text, extraction_quality, mime_type, "
-            "question:past_questions(title), "
-            "student:profiles!answer_submissions_submitted_by_fkey(full_name)"
-        )
-        .order("created_at", desc=True)
-    )
-    if status_filter:
-        query = query.eq("status", status_filter)
-
-    response = query.execute()
-    return response.data or []
-
-
-class ReviewPayload(BaseModel):
-    feedback: str
-
-
-@router.post(
-    "/api/admin/answers/{answer_id}/review",
-    summary="Admin: leave feedback and mark a submission as reviewed",
-)
-async def review_answer(
+async def get_answer_file_url(
     answer_id: str,
-    payload: ReviewPayload,
-    admin_id: str = Depends(get_current_admin),
+    _admin: UUID = Depends(get_current_admin),
 ):
-    try:
-        UUID(answer_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid answer id.")
-
-    response = (
-        supabase.table(TABLE_NAME)
-        .update(
-            {
-                "feedback": payload.feedback.strip(),
-                "status": "reviewed",
-                "reviewed_at": "now()",
-            }
-        )
-        .eq("id", answer_id)
-        .execute()
-    )
-
-    if not response.data:
-        raise HTTPException(status_code=404, detail="Submission not found.")
-
-    return response.data[0]
-
-
-@router.get(
-    "/api/answers/{answer_id}/file-url",
-    summary="Get a short-lived signed URL for an answer file",
-)
-async def get_answer_file_url(answer_id: str, user_id: UUID = Depends(get_current_user_id)):
-    response = (
-        supabase.table(TABLE_NAME)
-        .select("file_url, submitted_by")
+    row = (
+        supabase.table("answer_submissions")
+        .select("file_url, mime_type")
         .eq("id", answer_id)
         .maybe_single()
         .execute()
     )
-    row = response.data
-    if not row:
-        raise HTTPException(status_code=404, detail="Submission not found.")
+    if not row.data or not row.data.get("file_url"):
+        raise HTTPException(status_code=404, detail="No file attached to this submission.")
 
-    is_owner = row["submitted_by"] == str(user_id)
-    is_admin = False
-    if not is_owner:
-        profile_res = (
-            supabase.table("profiles").select("is_admin").eq("id", str(user_id)).maybe_single().execute()
-        )
-        is_admin = bool(profile_res.data and profile_res.data.get("is_admin"))
-
-    if not is_owner and not is_admin:
-        raise HTTPException(status_code=404, detail="Submission not found.")
-
-    try:
-        signed = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(row["file_url"], 90)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to generate file link.")
-
-    return {"url": signed["signedURL"], "expires_in": 90}
+    signed_url = await run_in_threadpool(
+        get_signed_url, row.data["file_url"], SIGNED_URL_TTL
+    )
+    return {"url": signed_url, "mime_type": row.data.get("mime_type")}
