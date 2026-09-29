@@ -20,6 +20,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createClient } from "@/utils/supabase/client";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import ProfileGuard from "@/components/ProfileGuard";
 
 const navItems = [
   { href: "/dashboard",         label: "Dashboard",  icon: LayoutDashboard },
@@ -67,7 +68,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         .eq("id", session.user.id)
         .single();
 
-      setUserInfo((prev) => ({ ...prev, name: profile?.full_name ?? null }));
+      // Fall back to the name Google / signup saved on the auth user
+      const meta = (session.user.user_metadata ?? {}) as Record<string, string | undefined>;
+      const displayName =
+        (profile?.full_name && profile.full_name.trim() !== "" ? profile.full_name : null) ??
+        meta.full_name ??
+        meta.name ??
+        null;
+
+      setUserInfo((prev) => ({ ...prev, name: displayName }));
       setUserPlan(profile?.subscription_plan ?? "free");
 
       // Avatar from B2
@@ -283,7 +292,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               sidebarExpanded ? "lg:ml-52" : "lg:ml-14"
             }`}
           >
-            <main className="flex-1">{children}</main>
+            <main className="flex-1">
+              <ProfileGuard>{children}</ProfileGuard>
+            </main>
           </div>
 
         </div>
