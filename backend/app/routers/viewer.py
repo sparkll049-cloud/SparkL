@@ -283,7 +283,6 @@ async def get_page_count(
     }
 
 
-
 @router.get(
     "/{question_id}/admin-url",
     summary="Short-lived signed URL for admin preview only",
@@ -303,4 +302,4 @@ async def get_admin_signed_url(
         "url": signed_url,
         "expires_in": SIGNED_URL_TTL,
         "warning": "Admin only. Do not expose to students.",
-    } 
+    }
