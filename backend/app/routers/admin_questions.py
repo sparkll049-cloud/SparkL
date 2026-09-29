@@ -18,12 +18,6 @@ from app.storage import delete_file, download_bytes, get_signed_url, upload_byte
 from app.supabase_client import supabase
 
 try:
-    from pdf2image import convert_from_bytes
-    _PDF2IMAGE_OK = True
-except ImportError:
-    _PDF2IMAGE_OK = False
-
-try:
     from PIL import Image, ImageDraw, ImageFont
     _PILLOW_OK = True
 except ImportError:
@@ -105,6 +99,20 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def reset_for_retry(question_id: str) -> None:
+    """
+    Put a paper back in the queue for reprocessing.
+
+    NOTE: if you already have a reset_for_retry defined elsewhere (e.g. in a
+    services module), delete this one and import yours instead. The "pending"
+    value below is an assumption: use whatever value your processing worker
+    looks for.
+    """
+    supabase.table("past_questions").update(
+        {"processing_status": "pending", "processing_error": None}
+    ).eq("id", question_id).execute()
+
+
 # ── Page-preview helpers (sync — run in threadpool) ───────────────────────────
 
 def _get_font(size: int):
@@ -177,15 +185,16 @@ def _render_page_sync(
     file_bytes: bytes, mime_type: str, page_num: int, admin_id: str
 ) -> bytes:
     if mime_type == "application/pdf":
-        if not _PDF2IMAGE_OK:
-            raise HTTPException(status_code=500, detail="pdf2image is not installed.")
-        pages = convert_from_bytes(
-            file_bytes, dpi=150, first_page=page_num, last_page=page_num, fmt="jpeg"
-        )
-        if not pages:
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:
+            raise HTTPException(status_code=500, detail="pypdfium2 is not installed.")
+        pdf = pdfium.PdfDocument(file_bytes)
+        if page_num > len(pdf):
             raise HTTPException(status_code=404, detail=f"Page {page_num} does not exist.")
+        pil_img = pdf[page_num - 1].render(scale=150 / 72).to_pil().convert("RGB")
         buf = io.BytesIO()
-        pages[0].save(buf, format="JPEG", quality=92)
+        pil_img.save(buf, format="JPEG", quality=92)
         img_bytes = buf.getvalue()
     else:
         img_bytes = file_bytes
@@ -542,11 +551,14 @@ async def update_question_item(
     if not result.data:
         raise HTTPException(status_code=404, detail="Question not found.")
     return result.data[0]
+
+
 @router.post("/{question_id}/retry", summary="Admin: retry processing a failed paper")
 async def retry_question_processing(
     question_id: str,
-    _admin: UUID = Depends(get_current_admin),   # your existing admin dep
+    admin_id: str = Depends(get_current_admin),
 ):
+    _check_uuid(question_id, "question id")
     row = (
         supabase.table("past_questions")
         .select("id, processing_status")
@@ -559,6 +571,7 @@ async def retry_question_processing(
 
     await run_in_threadpool(reset_for_retry, question_id)
     return {"ok": True, "message": "Paper queued for reprocessing."}
+
 
 @router.delete("/{question_id}/items/{item_id}")
 async def delete_question_item(
