@@ -24,15 +24,90 @@ interface PageMeta {
 export default function PaperViewerModal({ questionId, title, open, onClose }: Props) {
   const supabase = createClient();
 
-  const [token, setToken]         = useState<string | null>(null);
-  const [meta, setMeta]           = useState<PageMeta | null>(null);
+  const [token, setToken]             = useState<string | null>(null);
+  const [meta, setMeta]               = useState<PageMeta | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
-  const [metaError, setMetaError] = useState("");
+  const [metaError, setMetaError]     = useState("");
 
   const [currentPage, setCurrentPage] = useState(1);
   const [imgSrc, setImgSrc]           = useState<string | null>(null);
   const [imgLoading, setImgLoading]   = useState(false);
   const [imgError, setImgError]       = useState("");
+
+  // ── Block every capturable action while modal is open ────────────────────
+  useEffect(() => {
+    if (!open) return;
+
+    // 1. Keyboard shortcuts — PrintScreen, Ctrl+P, Ctrl+S, Snipping Tool combos
+    const blockKeys = (e: KeyboardEvent) => {
+      const ctrl  = e.ctrlKey || e.metaKey;
+      const shift = e.shiftKey;
+
+      if (
+        e.key === "PrintScreen" ||                        // Print screen
+        (ctrl && e.key === "p") ||                        // Ctrl+P (print)
+        (ctrl && e.key === "s") ||                        // Ctrl+S (save)
+        (ctrl && shift && e.key === "s") ||               // Ctrl+Shift+S
+        (ctrl && shift && e.key === "i") ||               // DevTools
+        (ctrl && shift && e.key === "j") ||               // DevTools console
+        (ctrl && shift && e.key === "c") ||               // DevTools inspect
+        (ctrl && e.key === "u") ||                        // View source
+        (e.key === "F12") ||                              // DevTools
+        (ctrl && shift && e.key === "4") ||               // macOS screenshot
+        (ctrl && shift && e.key === "3") ||               // macOS full screenshot
+        (e.metaKey && shift && e.key === "4") ||          // macOS screenshot
+        (e.metaKey && shift && e.key === "5")             // macOS screenshot toolbar
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    // 2. Block right-click context menu on the whole document while open
+    const blockContext = (e: MouseEvent) => e.preventDefault();
+
+    // 3. Block drag (drag image out of browser)
+    const blockDrag = (e: DragEvent) => e.preventDefault();
+
+    // 4. Visibility change — blank the image when user tabs away
+    //    (prevents Alt+Tab + screenshot combos)
+    const handleVisibility = () => {
+      if (document.hidden) setImgSrc(null);
+    };
+
+    // 5. Block print via window.print() called by extensions
+    const origPrint = window.print;
+    window.print = () => {};
+
+    // 6. CSS injected into <head> to block print at stylesheet level
+    const style = document.createElement("style");
+    style.id = "__sparkl_noprint__";
+    style.innerHTML = `
+      @media print {
+        body * { visibility: hidden !important; display: none !important; }
+      }
+      * {
+        -webkit-user-select: none !important;
+        -moz-user-select: none !important;
+        user-select: none !important;
+      }
+    `;
+    document.head.appendChild(style);
+
+    document.addEventListener("keydown", blockKeys, true);
+    document.addEventListener("contextmenu", blockContext, true);
+    document.addEventListener("dragstart", blockDrag, true);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      document.removeEventListener("keydown", blockKeys, true);
+      document.removeEventListener("contextmenu", blockContext, true);
+      document.removeEventListener("dragstart", blockDrag, true);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.print = origPrint;
+      document.getElementById("__sparkl_noprint__")?.remove();
+    };
+  }, [open]);
 
   // ── Get auth token once ───────────────────────────────────────────────────
   useEffect(() => {
@@ -69,7 +144,6 @@ export default function PaperViewerModal({ questionId, title, open, onClose }: P
       setImgLoading(true);
       setImgError("");
 
-      // Revoke previous blob URL to free memory
       setImgSrc((prev) => {
         if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
         return null;
@@ -82,7 +156,6 @@ export default function PaperViewerModal({ questionId, title, open, onClose }: P
         );
 
         if (res.status === 403) {
-          // Hit the free-tier wall — show gate instead of error
           setImgSrc("__gated__");
           return;
         }
@@ -120,9 +193,9 @@ export default function PaperViewerModal({ questionId, title, open, onClose }: P
 
   if (!open) return null;
 
-  const canGoPrev = currentPage > 1;
-  const canGoNext = meta ? currentPage < meta.viewable_pages : false;
-  const isGated   = imgSrc === "__gated__";
+  const canGoPrev   = currentPage > 1;
+  const canGoNext   = meta ? currentPage < meta.viewable_pages : false;
+  const isGated     = imgSrc === "__gated__";
   const lockedCount = meta ? meta.total_pages - meta.viewable_pages : 0;
 
   return (
@@ -183,7 +256,6 @@ export default function PaperViewerModal({ questionId, title, open, onClose }: P
               <p className="text-sm text-red-400">{metaError}</p>
             </div>
           ) : isGated ? (
-            /* ── Free-tier gate ── */
             <div className="flex flex-col items-center gap-4 rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-8 text-center max-w-sm">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-500/15">
                 <Lock className="h-5 w-5 text-indigo-500" />
@@ -193,7 +265,7 @@ export default function PaperViewerModal({ questionId, title, open, onClose }: P
                   {lockedCount} page{lockedCount !== 1 ? "s" : ""} locked
                 </p>
                 <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                  Free accounts can read the first {2} pages.
+                  Free accounts can read the first 2 pages.
                 </p>
               </div>
               <Link
@@ -222,15 +294,24 @@ export default function PaperViewerModal({ questionId, title, open, onClose }: P
               </button>
             </div>
           ) : imgSrc ? (
-            /* ── The page image — right-click is UX friction, not real protection ── */
-            /* Real protection: the server never sends the original file */
             <img
               src={imgSrc}
               alt={`Page ${currentPage}`}
               draggable={false}
               onContextMenu={(e) => e.preventDefault()}
-              className="max-w-full rounded-lg shadow-xl select-none"
-              style={{ maxHeight: "65vh", objectFit: "contain" }}
+              onDragStart={(e) => e.preventDefault()}
+              // Pointer events blocked on the image itself so
+              // extensions can't easily hook into it
+              style={{
+                maxHeight: "65vh",
+                objectFit: "contain",
+                maxWidth: "100%",
+                borderRadius: "0.5rem",
+                boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
+                userSelect: "none",
+                WebkitUserSelect: "none",
+                pointerEvents: "none",  // blocks extension click-to-save hooks
+              }}
             />
           ) : null}
         </div>
@@ -254,7 +335,6 @@ export default function PaperViewerModal({ questionId, title, open, onClose }: P
               <ChevronLeft size={14} /> Previous
             </button>
 
-            {/* Page dots — max 7 shown */}
             <div className="flex items-center gap-1.5">
               {Array.from({ length: Math.min(meta.viewable_pages, 7) }, (_, i) => {
                 const page = i + 1;
@@ -264,10 +344,7 @@ export default function PaperViewerModal({ questionId, title, open, onClose }: P
                     onClick={() => setCurrentPage(page)}
                     className="h-2 w-2 rounded-full transition-all"
                     style={{
-                      background:
-                        page === currentPage
-                          ? "var(--sp-indigo, #6366f1)"
-                          : "var(--sp-border)",
+                      background: page === currentPage ? "var(--sp-indigo, #6366f1)" : "var(--sp-border)",
                       transform: page === currentPage ? "scale(1.4)" : "scale(1)",
                     }}
                   />
