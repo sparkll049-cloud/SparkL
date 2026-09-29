@@ -10,6 +10,7 @@ Students never receive:
 
 What they DO receive:
   - server-rendered page images (watermarked with their email)
+  - server-rendered page tiles (crops of the same watermarked page)
   - structured question data (for practice mode — already handled in questions.py)
 """
 from __future__ import annotations
@@ -19,7 +20,7 @@ import time
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Path
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
@@ -30,6 +31,12 @@ router = APIRouter(prefix="/api/questions", tags=["Viewer"])
 
 SIGNED_URL_TTL = 300
 FREE_PAGE_LIMIT = 2
+
+# Tiles: each page is cut into a TILE_GRID x TILE_GRID grid.
+# The frontend requests /page/{n}/tile/{row}/{col}, both 0-based.
+TILE_GRID = 3
+
+_IMG_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 
 # ── In-memory page cache ──────────────────────────────────────────────────────
 # Key: (question_id, page_number, user_email) — per-user so watermark is correct
@@ -225,18 +232,11 @@ def _render_all_pages(
         return 1
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
-
-@router.get(
-    "/{question_id}/page/{page_number}",
-    summary="Stream a single rendered page image",
-    response_class=Response,
-)
-async def get_page_image(
-    question_id: str,
-    page_number: int,
-    user: dict = Depends(get_current_user),
-):
+async def _get_page_jpeg(question_id: str, page_number: int, user: dict) -> bytes:
+    """
+    Shared by the full-page and tile routes: access checks, cache lookup,
+    render on miss. Returns the watermarked page as JPEG bytes.
+    """
     if page_number < 1:
         raise HTTPException(status_code=400, detail="Page number must be 1 or greater.")
 
@@ -255,14 +255,9 @@ async def get_page_image(
 
     user_email = user["email"]
 
-    # Check cache first
     cached = _cache_get(question_id, page_number, user_email)
     if cached:
-        return Response(
-            content=cached,
-            media_type="image/jpeg",
-            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
-        )
+        return cached
 
     # Not cached — download, watermark, and cache all pages
     file_key = _to_key(record["file_url"])
@@ -275,12 +270,59 @@ async def get_page_image(
     jpeg_bytes = _cache_get(question_id, page_number, user_email)
     if not jpeg_bytes:
         raise HTTPException(status_code=404, detail=f"Page {page_number} not found.")
+    return jpeg_bytes
 
-    return Response(
-        content=jpeg_bytes,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
-    )
+
+def _crop_tile(jpeg_bytes: bytes, row: int, col: int) -> bytes:
+    """Cut one cell out of the TILE_GRID x TILE_GRID grid of a page image."""
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(jpeg_bytes))
+    w, h = img.size
+    # Integer edges computed from the grid lines so neighbouring tiles
+    # meet exactly with no gaps or overlaps, even when w/h don't divide evenly.
+    left = (col * w) // TILE_GRID
+    right = ((col + 1) * w) // TILE_GRID
+    top = (row * h) // TILE_GRID
+    bottom = ((row + 1) * h) // TILE_GRID
+
+    tile = img.crop((left, top, right, bottom))
+    out = io.BytesIO()
+    tile.save(out, format="JPEG", quality=82, optimize=True)
+    return out.getvalue()
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/{question_id}/page/{page_number}",
+    summary="Stream a single rendered page image",
+    response_class=Response,
+)
+async def get_page_image(
+    question_id: str,
+    page_number: int,
+    user: dict = Depends(get_current_user),
+):
+    jpeg_bytes = await _get_page_jpeg(question_id, page_number, user)
+    return Response(content=jpeg_bytes, media_type="image/jpeg", headers=_IMG_HEADERS)
+
+
+@router.get(
+    "/{question_id}/page/{page_number}/tile/{row}/{col}",
+    summary="Stream one tile (crop) of a rendered page image",
+    response_class=Response,
+)
+async def get_page_tile(
+    question_id: str,
+    page_number: int,
+    row: int = Path(..., ge=0, lt=TILE_GRID),
+    col: int = Path(..., ge=0, lt=TILE_GRID),
+    user: dict = Depends(get_current_user),
+):
+    jpeg_bytes = await _get_page_jpeg(question_id, page_number, user)
+    tile_bytes = await run_in_threadpool(_crop_tile, jpeg_bytes, row, col)
+    return Response(content=tile_bytes, media_type="image/jpeg", headers=_IMG_HEADERS)
 
 
 @router.get(
