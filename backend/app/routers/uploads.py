@@ -1,7 +1,5 @@
-"""
-uploads.py
-----------
-Student-facing past-question upload feature.
+# uploads.py
+"""Student-facing past-question upload feature.
 Files are stored in Backblaze B2 (private bucket).
 Signed URLs are generated on demand for viewing — no permanent public URLs.
 
@@ -14,7 +12,8 @@ Flow:
     6. Upload to Backblaze B2 under past-questions/{user_id}/{uuid}.ext
     7. Save record (processing_status = 'uploaded'); extracted_text is already
        populated, or None if Gemini was rate-limited — worker retries later
-    8. Stays invisible until admin approves via /api/admin/questions
+    8. Render pages to Backblaze at upload time — no rendering at view time
+    9. Stays invisible until admin approves via /api/admin/questions
 """
 
 from __future__ import annotations
@@ -47,12 +46,11 @@ from app.services.text_extractor import (
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
 
 TABLE_NAME       = "past_questions"
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
 MAX_TITLE_LENGTH = 150
 MIN_YEAR         = 1990
-CONSENT_VERSION  = "2026-09"  # bump when the upload declaration text changes
+CONSENT_VERSION  = "2026-09"
 
-# Magic-byte signatures — never trust client Content-Type
 FILE_SIGNATURES = {
     b"%PDF-":               ("application/pdf", "pdf"),
     b"\xff\xd8\xff":       ("image/jpeg",       "jpg"),
@@ -60,7 +58,7 @@ FILE_SIGNATURES = {
 }
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def detect_file_type(file_bytes: bytes) -> tuple[str, str]:
     for signature, (mime_type, ext) in FILE_SIGNATURES.items():
@@ -144,7 +142,7 @@ async def get_current_user_id(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    summary="Upload a past question — dedupes, pre-extracts text, rejects unreadable files",
+    summary="Upload a past question — dedupes, pre-extracts text, renders pages",
 )
 async def upload_past_question(
     title: str = Form(...),
@@ -175,7 +173,7 @@ async def upload_past_question(
 
     year = validate_year(year)
 
-    # ── Validate ids ──────────────────────────────────────────────────
+    # ── Validate IDs ──────────────────────────────────────────────────
     validate_uuid(course_id, "course_id")
     if semester_id:
         validate_uuid(semester_id, "semester_id")
@@ -205,31 +203,27 @@ async def upload_past_question(
     # ── Detect real file type from magic bytes ────────────────────────
     mime_type, ext = detect_file_type(file_bytes)
 
-    # ── Duplicate check (before any paid extraction calls) ────────────
+    # ── Duplicate check ───────────────────────────────────────────────
     file_hash = hashlib.sha256(file_bytes).hexdigest()
     duplicate = await run_in_threadpool(_find_duplicate, file_hash)
     if duplicate:
         raise HTTPException(
             status_code=409,
             detail=(
-                "This file has already been uploaded"
+                f"This file has already been uploaded"
                 f" (\"{duplicate['title']}\"). Thanks for contributing!"
             ),
         )
 
-    # ── Pre-extraction check ──────────────────────────────────────────
-    # Reject completely unreadable files immediately with a clear message
-    # so the student can fix it rather than wasting admin review time.
+    # ── Pre-extraction ────────────────────────────────────────────────
     pre_extract_text    = None
     pre_extract_quality = None
-
-    fake_filename = f"file.{ext}"
+    fake_filename       = f"file.{ext}"
 
     try:
         pre_result          = await run_in_threadpool(extract_text, fake_filename, file_bytes)
         pre_extract_text    = pre_result.text
         pre_extract_quality = pre_result.quality
-
     except EmptyExtractionError as e:
         raise HTTPException(
             status_code=422,
@@ -238,17 +232,14 @@ async def upload_past_question(
                 "Please upload a clearer scan or a text-based PDF."
             ),
         )
-
     except UnsupportedFileTypeError as e:
         raise HTTPException(status_code=415, detail=str(e))
-
     except Exception:
-        # Gemini may be rate-limited or unavailable — don't block the upload.
-        # The background worker will retry extraction later.
+        # Gemini rate-limited or unavailable — don't block the upload
         pre_extract_text    = None
         pre_extract_quality = None
 
-    # ── Upload to Backblaze B2 ────────────────────────────────────────
+    # ── Upload original file to Backblaze ─────────────────────────────
     storage_key = await run_in_threadpool(
         lambda: upload_file(
             file_bytes=file_bytes,
@@ -259,9 +250,6 @@ async def upload_past_question(
     )
 
     # ── Save record to Supabase ───────────────────────────────────────
-    # Store B2 key as file_url — never a permanent public URL.
-    # Actual file access always goes through a short-lived signed URL
-    # generated on demand via /api/questions/{id}/file-url.
     record = {
         "title":              title,
         "year":               year,
@@ -289,7 +277,6 @@ async def upload_past_question(
         # Clean up orphaned B2 file if DB insert fails
         await run_in_threadpool(delete_file, storage_key)
         if _is_duplicate_error(exc):
-            # Two identical uploads raced past the check above
             raise HTTPException(
                 status_code=409,
                 detail="This file has already been uploaded.",
@@ -299,6 +286,18 @@ async def upload_past_question(
     if not response.data:
         await run_in_threadpool(delete_file, storage_key)
         raise HTTPException(status_code=500, detail="Failed to save upload.")
+
+    # ── Render pages to Backblaze ─────────────────────────────────────
+    # Done at upload time so viewer.py never has to render PDFs.
+    # Failures are non-critical — admin can re-trigger if needed.
+    question_id = response.data[0]["id"]
+    try:
+        from app.services.page_renderer import render_and_store_pages
+        await run_in_threadpool(
+            render_and_store_pages, question_id, file_bytes, mime_type
+        )
+    except Exception:
+        pass
 
     return response.data[0]
 
