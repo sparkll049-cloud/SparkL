@@ -1,9 +1,5 @@
-"""Private Backblaze B2 storage helpers for SparkL.
-
-B2 keys are private object identifiers, not public URLs. Never return a raw
-original-file key to a student. Admin previews must use a watermarked
- derivative and a short-lived signed URL.
-"""
+# storage.py
+"""Private Backblaze B2 storage helpers for SparkL."""
 from __future__ import annotations
 
 import os
@@ -51,7 +47,6 @@ def upload_bytes(file_bytes: bytes, key: str, mime_type: str) -> str:
 
 
 def download_bytes(key: str) -> bytes:
-    """Read a private object server-side; never expose this key to the client."""
     try:
         response = _client().get_object(Bucket=B2_BUCKET, Key=key)
         return response["Body"].read()
@@ -60,7 +55,6 @@ def download_bytes(key: str) -> bytes:
 
 
 def get_signed_url(key: str, expires_in: int = 300) -> str:
-    """Use only for a narrowly authorized, short-lived derived preview."""
     expires_in = max(1, min(int(expires_in), 600))
     try:
         return _client().generate_presigned_url(
@@ -73,10 +67,22 @@ def get_signed_url(key: str, expires_in: int = 300) -> str:
 
 
 def delete_file(key: str) -> None:
-    """Delete a B2 object; cleanup is best effort."""
     if not key:
         return
     try:
         _client().delete_object(Bucket=B2_BUCKET, Key=key)
     except Exception:
-      pass
+        pass
+
+
+def list_keys_with_prefix(prefix: str) -> list[str]:
+    """List all B2 keys under a given prefix."""
+    try:
+        paginator = _client().get_paginator("list_objects_v2")
+        keys = []
+        for page in paginator.paginate(Bucket=B2_BUCKET, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                keys.append(obj["Key"])
+        return keys
+    except Exception:
+        return []
