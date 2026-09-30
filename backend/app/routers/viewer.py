@@ -9,6 +9,7 @@ it never renders twice).
 from __future__ import annotations
 
 import io
+import os
 from typing import Optional
 from uuid import UUID
 
@@ -28,6 +29,8 @@ TILE_GRID       = 3
 FALLBACK_SCALE   = 100 / 72   # ~100 DPI
 FALLBACK_QUALITY = 75
 MAX_IMG_WIDTH    = 1200
+
+B2_BUCKET = os.getenv("B2_BUCKET_NAME", "sparkl-questions")
 
 _IMG_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 
@@ -68,6 +71,29 @@ async def get_current_user(
     }
 
 
+# ── Key helpers ───────────────────────────────────────────────────────────────
+
+def _to_key(file_url: str) -> str:
+    """
+    Normalise file_url to a plain B2 key.
+    Old uploads stored the full URL; new ones store just the key.
+    """
+    if not file_url or not file_url.startswith("http"):
+        return file_url
+    marker = f"/file/{B2_BUCKET}/"
+    idx = file_url.find(marker)
+    if idx != -1:
+        return file_url[idx + len(marker):]
+    parts = file_url.split(f"/{B2_BUCKET}/", 1)
+    if len(parts) == 2:
+        return parts[1]
+    return file_url
+
+
+def _page_key(question_id: str, page_number: int) -> str:
+    return f"page-images/{question_id}/page-{page_number}.jpg"
+
+
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def _get_question_record(question_id: str) -> dict:
@@ -97,6 +123,47 @@ def _get_subscription(user_id: str) -> dict:
     return {"is_paid": False}
 
 
+# ── Page count (lazy fill for rows where page_count is NULL) ─────────────────
+
+def _count_pages(file_bytes: bytes, mime_type: str) -> int:
+    if mime_type == "application/pdf":
+        try:
+            import pypdfium2 as pdfium
+            pdf = pdfium.PdfDocument(file_bytes)
+            try:
+                return max(1, len(pdf))
+            finally:
+                pdf.close()
+        except Exception:
+            try:
+                from pypdf import PdfReader
+                return max(1, len(PdfReader(io.BytesIO(file_bytes)).pages))
+            except Exception:
+                return 1
+    return 1
+
+
+def _save_page_count(question_id: str, total: int) -> None:
+    try:
+        supabase.table("past_questions").update(
+            {"page_count": total}
+        ).eq("id", question_id).execute()
+    except Exception:
+        pass  # non-critical — it will be recomputed next time
+
+
+def _ensure_page_count(record: dict) -> int:
+    """Return page_count, computing and saving it if the row has none yet."""
+    existing = record.get("page_count")
+    if existing:
+        return int(existing)
+
+    file_bytes = download_bytes(_to_key(record["file_url"]))
+    total = _count_pages(file_bytes, record.get("mime_type") or "application/pdf")
+    _save_page_count(record["id"], total)
+    return total
+
+
 # ── Watermark ─────────────────────────────────────────────────────────────────
 
 def _add_watermark(img, text: str):
@@ -108,12 +175,6 @@ def _add_watermark(img, text: str):
             draw.text((x, y), text, fill=(140, 140, 140, 55))
     watermarked = Image.alpha_composite(img.convert("RGBA"), overlay)
     return watermarked.convert("RGB")
-
-
-# ── Key helpers ───────────────────────────────────────────────────────────────
-
-def _page_key(question_id: str, page_number: int) -> str:
-    return f"page-images/{question_id}/page-{page_number}.jpg"
 
 
 # ── Fallback: render one page from the original file ─────────────────────────
@@ -134,6 +195,7 @@ def _render_page_to_jpeg(file_bytes: bytes, mime_type: str, page_number: int) ->
 
         pdf = pdfium.PdfDocument(file_bytes)
         if page_number > len(pdf):
+            pdf.close()
             raise HTTPException(status_code=404, detail=f"Page {page_number} does not exist.")
 
         bitmap  = pdf[page_number - 1].render(scale=FALLBACK_SCALE)
@@ -176,7 +238,7 @@ def _fetch_rendered_page(
         pass  # pre-rendered image not found — fall through to render
 
     # Download original and render just this one page
-    original_bytes = download_bytes(file_url)
+    original_bytes = download_bytes(_to_key(file_url))
     jpeg_bytes     = _render_page_to_jpeg(original_bytes, mime_type, page_number)
 
     # Store it so future requests skip rendering entirely
@@ -289,7 +351,7 @@ async def get_page_count(
     if not user["is_admin"] and record["status"] != "approved":
         raise HTTPException(status_code=404, detail="Question not found.")
 
-    total = int(record.get("page_count") or 1)
+    total = await run_in_threadpool(_ensure_page_count, record)
 
     sub = {"is_paid": True} if user["is_admin"] else await run_in_threadpool(
         _get_subscription, str(user["id"])
@@ -318,13 +380,15 @@ async def trigger_page_render(
     from app.services.page_renderer import render_and_store_pages
 
     record = await run_in_threadpool(_get_question_record, question_id)
-    file_bytes = await run_in_threadpool(download_bytes, record["file_url"])
+    file_bytes = await run_in_threadpool(download_bytes, _to_key(record["file_url"]))
     total = await run_in_threadpool(
         render_and_store_pages,
         question_id,
         file_bytes,
         record["mime_type"],
     )
+    if isinstance(total, int) and total > 0:
+        await run_in_threadpool(_save_page_count, question_id, total)
     return {"rendered": True, "pages": total}
 
 
@@ -336,5 +400,7 @@ async def get_admin_signed_url(
     if not user["is_admin"]:
         raise HTTPException(status_code=403, detail="Admin access required.")
     record     = await run_in_threadpool(_get_question_record, question_id)
-    signed_url = await run_in_threadpool(get_signed_url, record["file_url"], SIGNED_URL_TTL)
+    signed_url = await run_in_threadpool(
+        get_signed_url, _to_key(record["file_url"]), SIGNED_URL_TTL
+    )
     return {"url": signed_url, "expires_in": SIGNED_URL_TTL, "warning": "Admin only."}
