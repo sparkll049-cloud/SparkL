@@ -1,11 +1,10 @@
-
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Loader2, FileText, CheckCircle2, XCircle, Trash2,
   ExternalLink, ChevronDown, Pencil, Sparkles, Clock,
-  AlertCircle, RefreshCw,
+  AlertCircle, RefreshCw, Play,
 } from "lucide-react";
 
 import { createClient } from "@/utils/supabase/client";
@@ -50,9 +49,9 @@ const PANEL_THEME = {
 // ── Status pill ───────────────────────────────────────────────────────────────
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { bg: string; label: string; icon: React.ReactNode }> = {
-    pending:  { bg: "bg-amber-500/10 text-amber-400 border border-amber-500/20",   label: "Pending",  icon: <Clock       className="h-3 w-3" /> },
+    pending:  { bg: "bg-amber-500/10 text-amber-400 border border-amber-500/20",       label: "Pending",  icon: <Clock       className="h-3 w-3" /> },
     approved: { bg: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20", label: "Approved", icon: <CheckCircle2 className="h-3 w-3" /> },
-    rejected: { bg: "bg-red-500/10 text-red-400 border border-red-500/20",         label: "Rejected", icon: <XCircle     className="h-3 w-3" /> },
+    rejected: { bg: "bg-red-500/10 text-red-400 border border-red-500/20",             label: "Rejected", icon: <XCircle     className="h-3 w-3" /> },
   };
   const s = map[status] ?? map.pending;
   return (
@@ -62,15 +61,21 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
-// ── Processing badge + retry button ──────────────────────────────────────────
+// ── Processing badge ──────────────────────────────────────────────────────────
 function ProcessingBadge({
-  s, errorMsg, onRetry, retrying,
+  s,
+  errorMsg,
+  retryError,
+  onProcess,
+  processing,
 }: {
   s?: string;
   errorMsg?: string | null;
-  onRetry: () => void;
-  retrying: boolean;
+  retryError?: string | null;
+  onProcess: () => void;
+  processing: boolean;
 }) {
+  // "ready" → show nothing (all good)
   if (!s || s === "ready") return null;
 
   if (s === "failed") return (
@@ -79,16 +84,22 @@ function ProcessingBadge({
         <AlertCircle className="h-3.5 w-3.5 shrink-0" />
         Processing failed{errorMsg ? `: ${errorMsg}` : ""}
       </p>
+      {retryError && (
+        <p className="flex items-center gap-1.5 text-xs text-red-300">
+          <AlertCircle className="h-3 w-3 shrink-0" />
+          {retryError}
+        </p>
+      )}
       <button
-        onClick={onRetry}
-        disabled={retrying}
+        onClick={onProcess}
+        disabled={processing}
         className="flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-400 transition hover:bg-blue-500/20 disabled:opacity-50"
       >
-        {retrying
+        {processing
           ? <Loader2 size={12} className="animate-spin" />
-          : <RefreshCw size={12} />
+          : <Play size={12} />
         }
-        {retrying ? "Queuing…" : "Retry processing"}
+        {processing ? "Processing…" : "Process now"}
       </button>
     </div>
   );
@@ -100,6 +111,7 @@ function ProcessingBadge({
     </p>
   );
 
+  // "uploaded" = queued / in-progress
   return (
     <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
       <Loader2 className="h-3 w-3 animate-spin" />
@@ -122,7 +134,12 @@ export default function AdminQuestionsPage() {
   const [previewId,    setPreviewId]    = useState<string | null>(null);
   const [selected,     setSelected]     = useState<Set<string>>(new Set());
   const [bulkLoading,  setBulkLoading]  = useState(false);
-  const [retryingId,   setRetryingId]   = useState<string | null>(null);
+
+  // Per-question processing state: id → { processing, error }
+  const [processingMap, setProcessingMap] = useState<Record<string, { active: boolean; error: string | null }>>({});
+
+  // Polling timers: id → intervalId
+  const pollRefs = useRef<Record<string, ReturnType<typeof setInterval>>>({});
 
   const [deleteTarget,     setDeleteTarget]     = useState<Question | null>(null);
   const [bulkConfirmOpen,  setBulkConfirmOpen]  = useState(false);
@@ -133,6 +150,13 @@ export default function AdminQuestionsPage() {
   const [editText,     setEditText]     = useState("");
   const [savingTextId, setSavingTextId] = useState<string | null>(null);
   const [textError,    setTextError]    = useState("");
+
+  // Clear all polls on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(pollRefs.current).forEach(clearInterval);
+    };
+  }, []);
 
   async function getToken() {
     const { data: { session } } = await supabase.auth.getSession();
@@ -158,7 +182,15 @@ export default function AdminQuestionsPage() {
       if (activeTab) url.searchParams.set("status", activeTab);
       const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error("Failed to load past questions.");
-      setQuestions(await res.json());
+      const data: Question[] = await res.json();
+      setQuestions(data);
+
+      // Auto-start polling for anything already in-progress
+      for (const q of data) {
+        if (q.processing_status === "uploaded" || q.processing_status === "extracting") {
+          startPolling(q.id);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -168,29 +200,91 @@ export default function AdminQuestionsPage() {
 
   useEffect(() => { loadQuestions(); }, [activeTab]);
 
-  // ── Retry failed processing ───────────────────────────────────────────────
-  async function retryProcessing(id: string) {
-    setRetryingId(id);
+  // ── Poll a single question's processing status ────────────────────────────
+  function startPolling(id: string) {
+    if (pollRefs.current[id]) return; // already polling
+
+    const interval = setInterval(async () => {
+      const token = await getToken();
+      if (!token) { stopPolling(id); return; }
+
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (!res.ok) return;
+        const updated: Question = await res.json();
+
+        setQuestions(prev =>
+          prev.map(q => q.id === id ? { ...updated } : q)
+        );
+
+        if (updated.processing_status === "ready" || updated.processing_status === "failed") {
+          stopPolling(id);
+          setProcessingMap(prev => ({
+            ...prev,
+            [id]: { active: false, error: updated.processing_status === "failed" ? (updated.processing_error ?? "Unknown error") : null },
+          }));
+        }
+      } catch {
+        // swallow network errors during polling — will retry on next tick
+      }
+    }, 3000);
+
+    pollRefs.current[id] = interval;
+  }
+
+  function stopPolling(id: string) {
+    if (pollRefs.current[id]) {
+      clearInterval(pollRefs.current[id]);
+      delete pollRefs.current[id];
+    }
+  }
+
+  // ── Trigger processing manually ───────────────────────────────────────────
+  async function triggerProcessing(id: string) {
+    // Clear previous error for this id
+    setProcessingMap(prev => ({ ...prev, [id]: { active: true, error: null } }));
+
     const token = await getToken();
-    if (!token) { setRetryingId(null); return; }
+    if (!token) {
+      setProcessingMap(prev => ({ ...prev, [id]: { active: false, error: "Session expired." } }));
+      return;
+    }
 
     try {
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/retry`,
         { method: "POST", headers: { Authorization: `Bearer ${token}` } }
       );
-      if (!res.ok) throw new Error("Could not queue retry.");
-      // Update local state so badge flips to "uploading"
+
+      if (!res.ok) {
+        // Read the actual backend error message
+        let msg = "Could not start processing.";
+        try {
+          const body = await res.json();
+          msg = body.detail ?? body.message ?? body.error ?? msg;
+        } catch {
+          try { msg = await res.text() || msg; } catch { /* ignore */ }
+        }
+        setProcessingMap(prev => ({ ...prev, [id]: { active: false, error: msg } }));
+        return;
+      }
+
+      // Flip local status to "uploaded" (queued) and start polling
       setQuestions(prev =>
         prev.map(q => q.id === id
           ? { ...q, processing_status: "uploaded", processing_error: null }
           : q
         )
       );
+      // Keep active:true so button stays disabled while polling
+      setProcessingMap(prev => ({ ...prev, [id]: { active: true, error: null } }));
+      startPolling(id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Retry failed.");
-    } finally {
-      setRetryingId(null);
+      const msg = err instanceof Error ? err.message : "Unexpected error.";
+      setProcessingMap(prev => ({ ...prev, [id]: { active: false, error: msg } }));
     }
   }
 
@@ -259,6 +353,7 @@ export default function AdminQuestionsPage() {
 
   async function performDelete(id: string) {
     setActioningId(id);
+    stopPolling(id); // stop polling a deleted item
     const token = await getToken();
     if (!token) { setActioningId(null); setDeleteTarget(null); return; }
 
@@ -424,6 +519,10 @@ export default function AdminQuestionsPage() {
           <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
             <p className="text-sm text-red-400">{error}</p>
+            <button
+              onClick={() => setError("")}
+              className="ml-auto text-slate-500 hover:text-slate-300 text-xs"
+            >✕</button>
           </div>
         )}
 
@@ -456,195 +555,219 @@ export default function AdminQuestionsPage() {
               </div>
 
               <div className="divide-y divide-white/[0.05]">
-                {questions.map(q => (
-                  <div key={q.id} className="p-5">
+                {questions.map(q => {
+                  const pState = processingMap[q.id];
+                  const isProcessingActive = pState?.active === true || q.processing_status === "extracting" || q.processing_status === "uploaded";
+                  const retryError = pState?.error ?? null;
 
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div className="flex items-start gap-3">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(q.id)}
-                          onChange={() => toggleSelected(q.id)}
-                          className="mt-1 h-4 w-4 shrink-0 rounded border-white/20 bg-white/5 accent-blue-500"
-                        />
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10">
-                          <FileText className="h-4.5 w-4.5 text-blue-400" size={18} />
-                        </div>
-                        <div>
-                          <p className="font-semibold text-white">{q.title}</p>
-                          <p className="mt-0.5 text-sm text-slate-500">
-                            {q.course?.name ?? "No course"}
-                            {q.semester?.name ? ` · ${q.semester.name}` : ""}
-                            {q.year ? ` · ${q.year}` : ""}
-                            {" · "}{q.uploader?.full_name ?? "Unknown"}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-600">
-                            {new Date(q.created_at).toLocaleDateString("en-GB", {
-                              day: "numeric", month: "short", year: "numeric",
-                            })}
-                          </p>
+                  return (
+                    <div key={q.id} className="p-5">
 
-                          {/* Processing badge with working retry button */}
-                          <ProcessingBadge
-                            s={q.processing_status}
-                            errorMsg={q.processing_error}
-                            onRetry={() => retryProcessing(q.id)}
-                            retrying={retryingId === q.id}
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={selected.has(q.id)}
+                            onChange={() => toggleSelected(q.id)}
+                            className="mt-1 h-4 w-4 shrink-0 rounded border-white/20 bg-white/5 accent-blue-500"
                           />
-
-                          {q.extraction_quality !== null && q.extraction_quality < 0.5 && (
-                            <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
-                              <AlertCircle className="h-3.5 w-3.5" />
-                              Low extraction quality — review text before approving
-                            </div>
-                          )}
-
-                          <button
-                            onClick={() => setPreviewId(q.id)}
-                            className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
-                          >
-                            Preview watermarked file <ExternalLink size={11} />
-                          </button>
-
-                          {q.extracted_text && editingId !== q.id && (
-                            <div className="mt-2 flex items-center gap-3">
-                              <button
-                                onClick={() => setExpandedId(expandedId === q.id ? null : q.id)}
-                                className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-300 transition-colors"
-                              >
-                                <ChevronDown
-                                  size={13}
-                                  className={`transition-transform ${expandedId === q.id ? "rotate-180" : ""}`}
-                                />
-                                {expandedId === q.id ? "Hide text" : "Preview text"}
-                              </button>
-                              <button
-                                onClick={() => startEditing(q)}
-                                className="flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
-                              >
-                                <Pencil size={11} /> Edit
-                              </button>
-                            </div>
-                          )}
-
-                          {q.status === "rejected" && q.rejection_reason && (
-                            <div className="mt-2 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
-                              <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
-                              <p className="text-xs text-red-400">
-                                <span className="font-semibold">Rejected:</span> {q.rejection_reason}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <StatusPill status={q.status} />
-                    </div>
-
-                    {expandedId === q.id && q.extracted_text && editingId !== q.id && (
-                      <div className="mt-4 max-h-48 overflow-y-auto rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm leading-7 text-slate-400">
-                        {q.extracted_text}
-                      </div>
-                    )}
-
-                    {editingId === q.id && (
-                      <div className="mt-4">
-                        <textarea
-                          value={editText}
-                          onChange={e => setEditText(e.target.value)}
-                          rows={10}
-                          className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                        />
-                        {textError && <p className="mt-1.5 text-xs text-red-400">{textError}</p>}
-                        <p className="mt-1.5 text-[11px] text-slate-600">
-                          After changing the text, use Retry processing to rebuild questions from it.
-                        </p>
-                        <div className="mt-2 flex gap-2">
-                          <button
-                            onClick={() => saveExtractedText(q.id)}
-                            disabled={savingTextId === q.id}
-                            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-500 disabled:opacity-60"
-                          >
-                            {savingTextId === q.id && <Loader2 size={13} className="animate-spin" />}
-                            Save changes
-                          </button>
-                          <button
-                            onClick={cancelEditing}
-                            disabled={savingTextId === q.id}
-                            className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.08] disabled:opacity-60"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Action buttons */}
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {q.status !== "approved" && (
-                        <button
-                          onClick={() => updateStatus(q.id, "approved")}
-                          disabled={actioningId === q.id}
-                          className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                        >
-                          <CheckCircle2 size={13} /> Approve
-                        </button>
-                      )}
-                      {q.status !== "rejected" && (
-                        <button
-                          onClick={() => { setRejectTarget(q); setRejectReason(""); }}
-                          disabled={actioningId === q.id}
-                          className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-400 transition hover:bg-amber-500/20 disabled:opacity-50"
-                        >
-                          <XCircle size={13} /> Reject
-                        </button>
-                      )}
-                      {q.status !== "pending" && (
-                        <button
-                          onClick={() => updateStatus(q.id, "pending")}
-                          disabled={actioningId === q.id}
-                          className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.08] disabled:opacity-50"
-                        >
-                          Reset to Pending
-                        </button>
-                      )}
-                      <button
-                        onClick={() => setDeleteTarget(q)}
-                        disabled={actioningId === q.id}
-                        className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-400 transition hover:bg-red-500/20 disabled:opacity-50"
-                      >
-                        <Trash2 size={13} /> Delete
-                      </button>
-                    </div>
-
-                    {/* Review questions panel */}
-                    {q.status !== "rejected" && (
-                      <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-                        <button
-                          onClick={() => setReviewId(reviewId === q.id ? null : q.id)}
-                          className="flex w-full items-center justify-between gap-3 text-left"
-                        >
-                          <span className="flex items-center gap-2 text-xs font-semibold text-slate-300">
-                            <Sparkles className="h-4 w-4 text-violet-400" />
-                            Review questions
-                          </span>
-                          <span className="flex items-center gap-2 text-xs text-slate-500">
-                            {q.ai_processed ? "AI drafts ready" : "No questions yet"}
-                            <ChevronDown
-                              size={14}
-                              className={`transition-transform ${reviewId === q.id ? "rotate-180" : ""}`}
-                            />
-                          </span>
-                        </button>
-
-                        {reviewId === q.id && (
-                          <div className="mt-4" style={PANEL_THEME}>
-                            <QuestionReviewPanel paperId={q.id} />
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10">
+                            <FileText className="h-4.5 w-4.5 text-blue-400" size={18} />
                           </div>
-                        )}
+                          <div>
+                            <p className="font-semibold text-white">{q.title}</p>
+                            <p className="mt-0.5 text-sm text-slate-500">
+                              {q.course?.name ?? "No course"}
+                              {q.semester?.name ? ` · ${q.semester.name}` : ""}
+                              {q.year ? ` · ${q.year}` : ""}
+                              {" · "}{q.uploader?.full_name ?? "Unknown"}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-600">
+                              {new Date(q.created_at).toLocaleDateString("en-GB", {
+                                day: "numeric", month: "short", year: "numeric",
+                              })}
+                            </p>
+
+                            {/* Processing badge with real error surfacing */}
+                            <ProcessingBadge
+                              s={q.processing_status}
+                              errorMsg={q.processing_error}
+                              retryError={retryError}
+                              onProcess={() => triggerProcessing(q.id)}
+                              processing={isProcessingActive}
+                            />
+
+                            {/* Also show Process button when ready but ai_processed is false */}
+                            {q.processing_status === "ready" && !q.ai_processed && (
+                              <div className="mt-2">
+                                <button
+                                  onClick={() => triggerProcessing(q.id)}
+                                  disabled={isProcessingActive}
+                                  className="flex items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-400 transition hover:bg-violet-500/20 disabled:opacity-50"
+                                >
+                                  {isProcessingActive
+                                    ? <Loader2 size={12} className="animate-spin" />
+                                    : <Sparkles size={12} />
+                                  }
+                                  {isProcessingActive ? "Generating…" : "Generate questions"}
+                                </button>
+                              </div>
+                            )}
+
+                            {q.extraction_quality !== null && q.extraction_quality < 0.5 && (
+                              <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
+                                <AlertCircle className="h-3.5 w-3.5" />
+                                Low extraction quality — review text before approving
+                              </div>
+                            )}
+
+                            <button
+                              onClick={() => setPreviewId(q.id)}
+                              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+                            >
+                              Preview watermarked file <ExternalLink size={11} />
+                            </button>
+
+                            {q.extracted_text && editingId !== q.id && (
+                              <div className="mt-2 flex items-center gap-3">
+                                <button
+                                  onClick={() => setExpandedId(expandedId === q.id ? null : q.id)}
+                                  className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-300 transition-colors"
+                                >
+                                  <ChevronDown
+                                    size={13}
+                                    className={`transition-transform ${expandedId === q.id ? "rotate-180" : ""}`}
+                                  />
+                                  {expandedId === q.id ? "Hide text" : "Preview text"}
+                                </button>
+                                <button
+                                  onClick={() => startEditing(q)}
+                                  className="flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+                                >
+                                  <Pencil size={11} /> Edit
+                                </button>
+                              </div>
+                            )}
+
+                            {q.status === "rejected" && q.rejection_reason && (
+                              <div className="mt-2 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
+                                <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
+                                <p className="text-xs text-red-400">
+                                  <span className="font-semibold">Rejected:</span> {q.rejection_reason}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <StatusPill status={q.status} />
                       </div>
-                    )}
-                  </div>
-                ))}
+
+                      {expandedId === q.id && q.extracted_text && editingId !== q.id && (
+                        <div className="mt-4 max-h-48 overflow-y-auto rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm leading-7 text-slate-400">
+                          {q.extracted_text}
+                        </div>
+                      )}
+
+                      {editingId === q.id && (
+                        <div className="mt-4">
+                          <textarea
+                            value={editText}
+                            onChange={e => setEditText(e.target.value)}
+                            rows={10}
+                            className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                          />
+                          {textError && <p className="mt-1.5 text-xs text-red-400">{textError}</p>}
+                          <p className="mt-1.5 text-[11px] text-slate-600">
+                            After changing the text, tap &quot;Process now&quot; to rebuild questions from it.
+                          </p>
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              onClick={() => saveExtractedText(q.id)}
+                              disabled={savingTextId === q.id}
+                              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-500 disabled:opacity-60"
+                            >
+                              {savingTextId === q.id && <Loader2 size={13} className="animate-spin" />}
+                              Save changes
+                            </button>
+                            <button
+                              onClick={cancelEditing}
+                              disabled={savingTextId === q.id}
+                              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.08] disabled:opacity-60"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Action buttons */}
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {q.status !== "approved" && (
+                          <button
+                            onClick={() => updateStatus(q.id, "approved")}
+                            disabled={actioningId === q.id}
+                            className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                          >
+                            <CheckCircle2 size={13} /> Approve
+                          </button>
+                        )}
+                        {q.status !== "rejected" && (
+                          <button
+                            onClick={() => { setRejectTarget(q); setRejectReason(""); }}
+                            disabled={actioningId === q.id}
+                            className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-400 transition hover:bg-amber-500/20 disabled:opacity-50"
+                          >
+                            <XCircle size={13} /> Reject
+                          </button>
+                        )}
+                        {q.status !== "pending" && (
+                          <button
+                            onClick={() => updateStatus(q.id, "pending")}
+                            disabled={actioningId === q.id}
+                            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.08] disabled:opacity-50"
+                          >
+                            Reset to Pending
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setDeleteTarget(q)}
+                          disabled={actioningId === q.id}
+                          className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-400 transition hover:bg-red-500/20 disabled:opacity-50"
+                        >
+                          <Trash2 size={13} /> Delete
+                        </button>
+                      </div>
+
+                      {/* Review questions panel */}
+                      {q.status !== "rejected" && (
+                        <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+                          <button
+                            onClick={() => setReviewId(reviewId === q.id ? null : q.id)}
+                            className="flex w-full items-center justify-between gap-3 text-left"
+                          >
+                            <span className="flex items-center gap-2 text-xs font-semibold text-slate-300">
+                              <Sparkles className="h-4 w-4 text-violet-400" />
+                              Review questions
+                            </span>
+                            <span className="flex items-center gap-2 text-xs text-slate-500">
+                              {q.ai_processed ? "AI drafts ready" : "No questions yet"}
+                              <ChevronDown
+                                size={14}
+                                className={`transition-transform ${reviewId === q.id ? "rotate-180" : ""}`}
+                              />
+                            </span>
+                          </button>
+
+                          {reviewId === q.id && (
+                            <div className="mt-4" style={PANEL_THEME}>
+                              <QuestionReviewPanel paperId={q.id} />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </>
           )}
