@@ -2,7 +2,9 @@
 """
 Serves protected past-question content.
 Pages are pre-rendered at upload time and stored in Backblaze.
-This router only fetches + watermarks stored JPEGs — no PDF rendering.
+For questions uploaded before the pre-render system existed, falls back
+to rendering from the original PDF on demand (and stores the result so
+it never renders twice).
 """
 from __future__ import annotations
 
@@ -15,13 +17,17 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
 from app.supabase_client import supabase
-from app.storage import download_bytes, get_signed_url, list_keys_with_prefix
+from app.storage import download_bytes, get_signed_url, list_keys_with_prefix, upload_bytes
 
 router = APIRouter(prefix="/api/questions", tags=["Viewer"])
 
-SIGNED_URL_TTL = 300
+SIGNED_URL_TTL  = 300
 FREE_PAGE_LIMIT = 2
-TILE_GRID = 3
+TILE_GRID       = 3
+# Fallback render quality — lower than upload-time render to save memory
+FALLBACK_SCALE   = 100 / 72   # ~100 DPI
+FALLBACK_QUALITY = 75
+MAX_IMG_WIDTH    = 1200
 
 _IMG_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 
@@ -96,7 +102,7 @@ def _get_subscription(user_id: str) -> dict:
 def _add_watermark(img, text: str):
     from PIL import Image, ImageDraw
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
+    draw    = ImageDraw.Draw(overlay)
     for y in range(-img.height, img.height * 2, 160):
         for x in range(-img.width, img.width * 2, 320):
             draw.text((x, y), text, fill=(140, 140, 140, 55))
@@ -104,26 +110,94 @@ def _add_watermark(img, text: str):
     return watermarked.convert("RGB")
 
 
-# ── Core: fetch stored page and watermark ─────────────────────────────────────
+# ── Key helpers ───────────────────────────────────────────────────────────────
 
-def _get_page_key(question_id: str, page_number: int) -> str:
+def _page_key(question_id: str, page_number: int) -> str:
     return f"page-images/{question_id}/page-{page_number}.jpg"
+
+
+# ── Fallback: render one page from the original file ─────────────────────────
+
+def _render_page_to_jpeg(file_bytes: bytes, mime_type: str, page_number: int) -> bytes:
+    """
+    Render a single page from the original PDF/image to JPEG bytes.
+    Used only when the pre-rendered JPEG is missing (old uploads).
+    Low DPI + capped width to keep memory use small.
+    """
+    from PIL import Image
+
+    if mime_type == "application/pdf":
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:
+            raise HTTPException(status_code=500, detail="pypdfium2 not installed.")
+
+        pdf = pdfium.PdfDocument(file_bytes)
+        if page_number > len(pdf):
+            raise HTTPException(status_code=404, detail=f"Page {page_number} does not exist.")
+
+        bitmap  = pdf[page_number - 1].render(scale=FALLBACK_SCALE)
+        pil_img = bitmap.to_pil().convert("RGB")
+        # Free the pdf object immediately — don't hold all pages in memory
+        pdf.close()
+    else:
+        pil_img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+
+    # Cap width to limit memory and storage
+    if pil_img.width > MAX_IMG_WIDTH:
+        ratio   = MAX_IMG_WIDTH / pil_img.width
+        pil_img = pil_img.resize(
+            (MAX_IMG_WIDTH, int(pil_img.height * ratio)),
+            Image.LANCZOS,
+        )
+
+    buf = io.BytesIO()
+    pil_img.save(buf, format="JPEG", quality=FALLBACK_QUALITY, optimize=True)
+    return buf.getvalue()
+
+
+def _fetch_rendered_page(
+    question_id: str,
+    page_number: int,
+    file_url: str,
+    mime_type: str,
+) -> bytes:
+    """
+    Return JPEG bytes for a page.
+    1. Try pre-rendered image from Backblaze (fast, zero rendering).
+    2. If missing (old upload), render from original PDF, then store the
+       result so this path is never hit again for the same page.
+    """
+    key = _page_key(question_id, page_number)
+
+    try:
+        return download_bytes(key)
+    except HTTPException:
+        pass  # pre-rendered image not found — fall through to render
+
+    # Download original and render just this one page
+    original_bytes = download_bytes(file_url)
+    jpeg_bytes     = _render_page_to_jpeg(original_bytes, mime_type, page_number)
+
+    # Store it so future requests skip rendering entirely
+    try:
+        upload_bytes(jpeg_bytes, key, "image/jpeg")
+    except Exception:
+        pass  # non-critical — serve the bytes anyway
+
+    return jpeg_bytes
 
 
 def _fetch_and_watermark_page(
     question_id: str,
     page_number: int,
     user_email: str,
+    file_url: str,
+    mime_type: str,
 ) -> bytes:
-    """
-    Download the pre-rendered page JPEG from Backblaze,
-    burn in the watermark, return JPEG bytes.
-    No PDF rendering — just image processing.
-    """
     from PIL import Image
 
-    key = _get_page_key(question_id, page_number)
-    raw_bytes = download_bytes(key)
+    raw_bytes = _fetch_rendered_page(question_id, page_number, file_url, mime_type)
 
     img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
     img = _add_watermark(img, f"SparkL · {user_email}")
@@ -132,6 +206,8 @@ def _fetch_and_watermark_page(
     img.save(buf, format="JPEG", quality=82, optimize=True)
     return buf.getvalue()
 
+
+# ── Core page getter (auth + gating) ─────────────────────────────────────────
 
 async def _get_page_jpeg(
     question_id: str,
@@ -154,25 +230,26 @@ async def _get_page_jpeg(
                 detail=f"Free accounts can view the first {FREE_PAGE_LIMIT} pages only.",
             )
 
-    jpeg_bytes = await run_in_threadpool(
+    return await run_in_threadpool(
         _fetch_and_watermark_page,
         question_id,
         page_number,
         user["email"],
+        record["file_url"],
+        record["mime_type"],
     )
-    return jpeg_bytes
 
 
 def _crop_tile(jpeg_bytes: bytes, row: int, col: int) -> bytes:
     from PIL import Image
-    img = Image.open(io.BytesIO(jpeg_bytes))
-    w, h = img.size
-    left   = (col * w) // TILE_GRID
-    right  = ((col + 1) * w) // TILE_GRID
-    top    = (row * h) // TILE_GRID
-    bottom = ((row + 1) * h) // TILE_GRID
-    tile = img.crop((left, top, right, bottom))
-    out = io.BytesIO()
+    img            = Image.open(io.BytesIO(jpeg_bytes))
+    w, h           = img.size
+    left           = (col * w) // TILE_GRID
+    right          = ((col + 1) * w) // TILE_GRID
+    top            = (row * h) // TILE_GRID
+    bottom         = ((row + 1) * h) // TILE_GRID
+    tile           = img.crop((left, top, right, bottom))
+    out            = io.BytesIO()
     tile.save(out, format="JPEG", quality=82, optimize=True)
     return out.getvalue()
 
@@ -225,6 +302,32 @@ async def get_page_count(
     }
 
 
+@router.post("/{question_id}/render-pages")
+async def trigger_page_render(
+    question_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Admin-only: pre-render all pages for a question uploaded before the
+    render-on-upload system was deployed. Safe to call multiple times —
+    page_renderer skips pages that already exist.
+    """
+    if not user["is_admin"]:
+        raise HTTPException(status_code=403, detail="Admin only.")
+
+    from app.services.page_renderer import render_and_store_pages
+
+    record = await run_in_threadpool(_get_question_record, question_id)
+    file_bytes = await run_in_threadpool(download_bytes, record["file_url"])
+    total = await run_in_threadpool(
+        render_and_store_pages,
+        question_id,
+        file_bytes,
+        record["mime_type"],
+    )
+    return {"rendered": True, "pages": total}
+
+
 @router.get("/{question_id}/admin-url")
 async def get_admin_signed_url(
     question_id: str,
@@ -232,6 +335,6 @@ async def get_admin_signed_url(
 ):
     if not user["is_admin"]:
         raise HTTPException(status_code=403, detail="Admin access required.")
-    record = await run_in_threadpool(_get_question_record, question_id)
+    record     = await run_in_threadpool(_get_question_record, question_id)
     signed_url = await run_in_threadpool(get_signed_url, record["file_url"], SIGNED_URL_TTL)
     return {"url": signed_url, "expires_in": SIGNED_URL_TTL, "warning": "Admin only."}
