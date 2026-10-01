@@ -635,7 +635,6 @@ function StatCard({
     <Link
       href={href}
       className={`${interactivePanel} group relative block overflow-hidden p-4`}
-group relative block overflow-hidden p-4`}
     >
       <div
         className="absolute inset-y-0 left-0 w-0.5 rounded-l-xl"
