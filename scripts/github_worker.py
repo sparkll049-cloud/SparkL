@@ -9,8 +9,10 @@ import io
 import json
 import logging
 import os
+import random
 import re
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -18,7 +20,7 @@ import boto3
 import httpx
 from botocore.client import Config
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 from pypdf import PdfReader
 from supabase import create_client, Client
 
@@ -33,9 +35,12 @@ MIME_TYPE    = os.environ["MIME_TYPE"]
 COURSE_NAME  = os.environ.get("COURSE_NAME", "")
 INSTITUTION  = os.environ.get("INSTITUTION", "")
 
-GEMINI_API_KEY     = os.environ["GEMINI_API_KEY"]
-GEMINI_VISION_MODEL = os.environ.get("GEMINI_VISION_MODEL", "gemini-2.0-flash")
-GEMINI_TEXT_MODEL   = os.environ.get("GEMINI_TEXT_MODEL",   "gemini-2.0-flash")
+GEMINI_API_KEY      = os.environ["GEMINI_API_KEY"]
+GEMINI_VISION_MODEL = os.environ.get("GEMINI_VISION_MODEL", "gemini-3.5-flash")
+GEMINI_TEXT_MODEL   = os.environ.get("GEMINI_TEXT_MODEL",   "gemini-3.5-flash")
+# Used if the primary model keeps failing or returns 404. Verify the exact name
+# with gemini.models.list() before relying on it.
+FALLBACK_MODEL      = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
 
 B2_ENDPOINT   = os.environ["B2_ENDPOINT"]
 B2_KEY_ID     = os.environ["B2_KEY_ID"]
@@ -61,6 +66,39 @@ def _supabase() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 gemini = genai.Client(api_key=GEMINI_API_KEY)
+
+# ── Gemini retry helper ───────────────────────────────────────────────────────
+
+def generate_with_retry(primary_model, contents, config, attempts: int = 4):
+    """Call Gemini with exponential backoff on 429/5xx, then fall back to
+    FALLBACK_MODEL. A 404 (model missing/retired) skips straight to the next model."""
+    models = [primary_model]
+    if FALLBACK_MODEL and FALLBACK_MODEL != primary_model:
+        models.append(FALLBACK_MODEL)
+
+    last_err = None
+    for model in models:
+        for i in range(attempts):
+            try:
+                return gemini.models.generate_content(
+                    model=model, contents=contents, config=config
+                )
+            except errors.APIError as e:
+                code = getattr(e, "code", None)
+                last_err = e
+                if code == 404:
+                    logger.warning("%s not available (404), trying next model", model)
+                    break
+                if code in (429, 500, 503, 504):
+                    wait = min(60, 3 * 2 ** i) + random.random()
+                    logger.warning(
+                        "%s got %s, retry %d/%d in %.0fs",
+                        model, code, i + 1, attempts, wait,
+                    )
+                    time.sleep(wait)
+                    continue
+                raise  # other errors (e.g. 400) won't fix themselves
+    raise last_err
 
 # ── B2 helpers ────────────────────────────────────────────────────────────────
 
@@ -114,8 +152,8 @@ def _extract_pdf_native(file_bytes: bytes) -> str:
         return ""
 
 def _gemini_vision(file_bytes: bytes, mime_type: str) -> str:
-    response = gemini.models.generate_content(
-        model=GEMINI_VISION_MODEL,
+    response = generate_with_retry(
+        GEMINI_VISION_MODEL,
         contents=[
             types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
             (
@@ -229,8 +267,8 @@ def process_questions(text: str, course_name: str, institution: str) -> list[dic
         .replace("__INSTITUTION__", institution or "not specified")
         .replace("__TEXT__", text.strip())
     )
-    response = gemini.models.generate_content(
-        model=GEMINI_TEXT_MODEL,
+    response = generate_with_retry(
+        GEMINI_TEXT_MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
