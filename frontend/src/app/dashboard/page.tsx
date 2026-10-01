@@ -1040,52 +1040,10 @@ export default function DashboardHomePage() {
               </p>
               <QuickAction href="/dashboard/upload"  label="Upload paper"   sub="Earn 50 XP per upload"  icon={<Upload className="h-4 w-4" />}       color="#6366F1" />
               <QuickAction href="/dashboard/courses" label="Browse courses" sub="Find past questions"     icon={<BookOpen className="h-4 w-4" />}      color="#0EA5E9" />
-              <QuickAction href="/dashboard/profile" label="My profile"     sub="Account & settings"      icon={<GraduationCap className="h-4 w-4" />} color="#8B5CF6" />
-            </div>
-          </aside>
 
           {/* ── MAIN ── */}
           <main className="space-y-5 lg:col-span-2 min-w-0">
-
-            {/* Greeting */}
-            <div
-              className="anim-1 relative overflow-hidden rounded-2xl border p-5"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-            >
-              <div
-                className="pointer-events-none absolute right-0 top-0 h-32 w-32 opacity-10"
-                style={{ background: "radial-gradient(circle, #6366F1 0%, transparent 70%)" }}
-              />
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <Calendar className="h-3.5 w-3.5" style={{ color: "var(--sp-text-3)" }} />
-                    <span className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>{today}</span>
-                  </div>
-                  <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>{greeting},</p>
-                  <h1 className="text-2xl font-black tracking-tight mt-0.5" style={{ color: "var(--sp-text)" }}>
-                    {firstName} 👋
-                  </h1>
-                  {data.profile.department?.name && (
-                    <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                      {data.profile.department.name} · {data.profile.institution?.name}
-                    </p>
-                  )}
-                </div>
-                {!tier.isPaid && (
-                  <Link
-                    href="/dashboard/subscribe"
-                    className="shrink-0 flex items-center gap-1.5 rounded-full bg-indigo-600 px-3.5 py-2 text-[11px] font-black text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5"
-                  >
-                    <Crown className="h-3 w-3 text-yellow-300" fill="currentColor" />
-                    Upgrade
-                  </Link>
-                )}
-              </div>
-            </div>
-
             {/* Stats (4 tiles — the last one is the clickable plan tile) */}
-            <div className="anim-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <StatCard icon={<BookOpen className="h-4 w-4" />} label="My courses"  value={courses.length}             accent="#6366F1" />
               <StatCard icon={<FileText className="h-4 w-4" />} label="Past papers" value={stats.questions_in_courses} accent="#8B5CF6" />
               <StatCard icon={<Trophy className="h-4 w-4" />}   label="Uploads"     value={stats.my_uploads}           accent="#10B981"
