@@ -1,10 +1,10 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
 import {
   Loader2, FileText, CheckCircle2, XCircle, ChevronDown,
-  AlertCircle, Sparkles, Clock, BookOpen, Eye,
+  AlertCircle, Sparkles, Clock, BookOpen, Eye, Trash2,
+  ShieldCheck, MoreVertical, RefreshCw,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { useRouter } from "next/navigation";
@@ -39,7 +39,9 @@ const API = process.env.NEXT_PUBLIC_API_URL;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtBytes(b: number) {
-  return b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
+  return b < 1024 * 1024
+    ? `${(b / 1024).toFixed(0)} KB`
+    : `${(b / 1024 / 1024).toFixed(1)} MB`;
 }
 
 async function getToken(supabase: ReturnType<typeof createClient>) {
@@ -47,32 +49,101 @@ async function getToken(supabase: ReturnType<typeof createClient>) {
   return session?.access_token ?? null;
 }
 
+// ── Confirm dialog ────────────────────────────────────────────────────────────
+
+function ConfirmDialog({
+  title, body, confirmLabel = "Confirm", danger = false,
+  loading = false, onConfirm, onCancel,
+}: {
+  title: string; body: string; confirmLabel?: string;
+  danger?: boolean; loading?: boolean;
+  onConfirm: () => void; onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
+      <div
+        className="w-full max-w-sm overflow-hidden rounded-2xl border p-6 shadow-2xl"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+      >
+        <div className="mb-1 flex items-center gap-3">
+          <div
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+            style={{ background: danger ? "rgba(239,68,68,0.12)" : "rgba(99,102,241,0.12)" }}
+          >
+            {danger
+              ? <Trash2 className="h-4 w-4 text-red-400" />
+              : <ShieldCheck className="h-4 w-4 text-indigo-400" />
+            }
+          </div>
+          <h2 className="text-sm font-black" style={{ color: "var(--sp-text)" }}>{title}</h2>
+        </div>
+        <p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--sp-text-3)" }}>{body}</p>
+        <div className="mt-5 flex gap-2.5">
+          <button
+            onClick={onCancel}
+            disabled={loading}
+            className="flex-1 rounded-xl border py-2.5 text-xs font-bold transition hover:opacity-80 disabled:opacity-50"
+            style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)", background: "var(--sp-input-bg)" }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-black text-white transition hover:opacity-90 disabled:opacity-50"
+            style={{ background: danger ? "#EF4444" : "#6366F1" }}
+          >
+            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Status pills ──────────────────────────────────────────────────────────────
 
 function DocStatusPill({ status }: { status: string }) {
-  const map: Record<string, { cls: string; label: string; icon: React.ReactNode }> = {
-    approved: { cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20", icon: <CheckCircle2 className="h-3 w-3" />, label: "Approved" },
-    rejected: { cls: "bg-red-500/10 text-red-400 border-red-500/20",             icon: <XCircle className="h-3 w-3" />,       label: "Rejected" },
-    pending:  { cls: "bg-amber-500/10 text-amber-400 border-amber-500/20",        icon: <Clock className="h-3 w-3" />,          label: "Pending"  },
+  const map: Record<string, { bg: string; color: string; border: string; icon: React.ReactNode; label: string }> = {
+    approved: {
+      bg: "rgba(16,185,129,0.10)", color: "#10B981", border: "rgba(16,185,129,0.25)",
+      icon: <CheckCircle2 className="h-3 w-3" />, label: "Approved",
+    },
+    rejected: {
+      bg: "rgba(239,68,68,0.10)", color: "#EF4444", border: "rgba(239,68,68,0.25)",
+      icon: <XCircle className="h-3 w-3" />, label: "Rejected",
+    },
+    pending: {
+      bg: "rgba(245,158,11,0.10)", color: "#F59E0B", border: "rgba(245,158,11,0.25)",
+      icon: <Clock className="h-3 w-3" />, label: "Pending",
+    },
   };
   const s = map[status] ?? map.pending;
   return (
-    <span className={`flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${s.cls}`}>
+    <span
+      className="flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold"
+      style={{ background: s.bg, color: s.color, borderColor: s.border }}
+    >
       {s.icon}{s.label}
     </span>
   );
 }
 
 function SectionStatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    ready:    "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    approved: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-    failed:   "bg-red-500/10 text-red-400 border-red-500/20",
-    pending:  "bg-slate-500/10 text-slate-400 border-slate-500/20",
-    rejected: "bg-red-500/10 text-red-400 border-red-500/20",
+  const map: Record<string, { bg: string; color: string; border: string }> = {
+    ready:    { bg: "rgba(16,185,129,0.10)",  color: "#10B981", border: "rgba(16,185,129,0.25)"  },
+    approved: { bg: "rgba(14,165,233,0.10)",  color: "#0EA5E9", border: "rgba(14,165,233,0.25)"  },
+    failed:   { bg: "rgba(239,68,68,0.10)",   color: "#EF4444", border: "rgba(239,68,68,0.25)"   },
+    pending:  { bg: "rgba(100,116,139,0.10)", color: "#94A3B8", border: "rgba(100,116,139,0.25)" },
+    rejected: { bg: "rgba(239,68,68,0.10)",   color: "#EF4444", border: "rgba(239,68,68,0.25)"   },
   };
+  const s = map[status] ?? map.pending;
   return (
-    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${map[status] ?? map.pending}`}>
+    <span
+      className="rounded-full border px-2 py-0.5 text-[10px] font-bold"
+      style={{ background: s.bg, color: s.color, borderColor: s.border }}
+    >
       {status}
     </span>
   );
@@ -82,12 +153,13 @@ function SectionStatusBadge({ status }: { status: string }) {
 
 function SectionRow({
   sec, docId, token,
-  onApprove, onReject, onProcess, actioning,
+  onApprove, onReject, onProcess, onDelete, actioning,
 }: {
   sec: Section; docId: string; token: string;
   onApprove: (id: string) => void;
   onReject:  (id: string) => void;
   onProcess: (id: string) => void;
+  onDelete:  (id: string) => void;
   actioning: string | null;
 }) {
   const [expanded,    setExpanded]    = useState(false);
@@ -128,62 +200,80 @@ function SectionRow({
     finally { setPreviewLoading(false); }
   }
 
-  return (
-    <div className="rounded-xl border p-4 space-y-3"
-      style={{ background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.08)" }}>
+  const busy = actioning === sec.id;
 
+  return (
+    <div
+      className="rounded-2xl border p-4 space-y-3 transition-all"
+      style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)" }}
+    >
       {/* Section header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <BookOpen className="h-4 w-4 text-blue-400 shrink-0" />
-            <p className="text-sm font-semibold text-white">
+            <BookOpen className="h-4 w-4 shrink-0" style={{ color: "#0EA5E9" }} />
+            <p className="text-sm font-bold" style={{ color: "var(--sp-text)" }}>
               {sec.course?.name ?? "Unknown course"}
             </p>
             <SectionStatusBadge status={sec.processing_status} />
           </div>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-[11px]" style={{ color: "var(--sp-text-3)" }}>
             Pages {sec.start_page}–{sec.end_page}
             {sec.extraction_quality !== null
               ? ` · Quality: ${(sec.extraction_quality * 100).toFixed(0)}%`
               : ""}
           </p>
           {sec.processing_status === "failed" && sec.processing_error && (
-            <p className="mt-1 flex items-center gap-1.5 text-xs text-red-400">
+            <p className="mt-1 flex items-center gap-1.5 text-[11px]" style={{ color: "#EF4444" }}>
               <AlertCircle className="h-3 w-3 shrink-0" />{sec.processing_error}
             </p>
           )}
         </div>
 
-        {/* Preview first page */}
-        <button
-          onClick={() => loadPreview(sec.start_page)}
-          className="flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-2.5 py-1.5 text-xs font-semibold text-blue-400 transition hover:bg-blue-500/20"
-        >
-          <Eye className="h-3.5 w-3.5" /> Preview
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => loadPreview(sec.start_page)}
+            className="flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] font-bold transition hover:opacity-80"
+            style={{ background: "rgba(14,165,233,0.10)", borderColor: "rgba(14,165,233,0.25)", color: "#0EA5E9" }}
+          >
+            <Eye className="h-3.5 w-3.5" /> Preview
+          </button>
+          <button
+            onClick={() => onDelete(sec.id)}
+            disabled={busy}
+            className="flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] font-bold transition hover:opacity-80 disabled:opacity-40"
+            style={{ background: "rgba(239,68,68,0.08)", borderColor: "rgba(239,68,68,0.20)", color: "#EF4444" }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Page preview */}
       {previewPage && (
         <div className="flex flex-col items-center gap-2">
-          <p className="text-xs text-slate-500">Page {previewPage}</p>
+          <p className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>Page {previewPage}</p>
           {previewLoading
-            ? <Loader2 className="h-5 w-5 animate-spin text-blue-400" />
+            ? <Loader2 className="h-5 w-5 animate-spin" style={{ color: "#0EA5E9" }} />
             : previewUrl
               ? <img src={previewUrl} alt={`Page ${previewPage}`}
-                  className="max-h-64 w-auto rounded-lg object-contain shadow-lg" />
-              : <p className="text-xs text-red-400">Couldn&apos;t load preview.</p>
+                  className="max-h-64 w-auto rounded-xl object-contain shadow-lg" />
+              : <p className="text-[11px]" style={{ color: "#EF4444" }}>Couldn&apos;t load preview.</p>
           }
-          {/* Navigate pages within section */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             {previewPage > sec.start_page && (
-              <button onClick={() => loadPreview(previewPage - 1)}
-                className="text-xs text-blue-400 hover:text-blue-300">← Prev</button>
+              <button
+                onClick={() => loadPreview(previewPage - 1)}
+                className="text-[11px] font-bold transition hover:opacity-70"
+                style={{ color: "#0EA5E9" }}
+              >← Prev</button>
             )}
             {previewPage < sec.end_page && (
-              <button onClick={() => loadPreview(previewPage + 1)}
-                className="text-xs text-blue-400 hover:text-blue-300">Next →</button>
+              <button
+                onClick={() => loadPreview(previewPage + 1)}
+                className="text-[11px] font-bold transition hover:opacity-70"
+                style={{ color: "#0EA5E9" }}
+              >Next →</button>
             )}
           </div>
         </div>
@@ -194,19 +284,24 @@ function SectionRow({
         <div>
           <button
             onClick={() => setExpanded(v => !v)}
-            className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-300 transition"
+            className="flex items-center gap-1 text-[11px] font-bold transition hover:opacity-70"
+            style={{ color: "var(--sp-text-3)" }}
           >
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
             {expanded ? "Hide text" : "Preview extracted text"}
           </button>
           {expanded && (
-            <div className="mt-2 max-h-40 overflow-y-auto rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 text-xs leading-6 text-slate-400">
+            <div
+              className="mt-2 max-h-40 overflow-y-auto rounded-xl border p-3 text-[11px] leading-6"
+              style={{ background: "var(--sp-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text-2)" }}
+            >
               {sec.extracted_text}
             </div>
           )}
           <button
             onClick={() => { setEditVal(sec.extracted_text ?? ""); setEditingText(true); setExpanded(true); }}
-            className="mt-2 text-xs font-medium text-blue-400 hover:text-blue-300 transition"
+            className="mt-2 text-[11px] font-bold transition hover:opacity-70"
+            style={{ color: "#6366F1" }}
           >
             Edit text
           </button>
@@ -218,16 +313,26 @@ function SectionRow({
         <div className="space-y-2">
           <textarea
             value={editVal} onChange={e => setEditVal(e.target.value)} rows={8}
-            className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            className="w-full rounded-xl border px-4 py-3 text-sm outline-none transition"
+            style={{
+              background: "var(--sp-bg)", borderColor: "var(--sp-border)",
+              color: "var(--sp-text)",
+            }}
           />
-          {saveErr && <p className="text-xs text-red-400">{saveErr}</p>}
+          {saveErr && <p className="text-[11px]" style={{ color: "#EF4444" }}>{saveErr}</p>}
           <div className="flex gap-2">
-            <button onClick={saveText} disabled={saving}
-              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-500 disabled:opacity-60">
+            <button
+              onClick={saveText} disabled={saving}
+              className="flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-[11px] font-bold text-white transition hover:opacity-90 disabled:opacity-60"
+              style={{ background: "#6366F1" }}
+            >
               {saving && <Loader2 className="h-3 w-3 animate-spin" />} Save
             </button>
-            <button onClick={() => setEditingText(false)} disabled={saving}
-              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.08] disabled:opacity-60">
+            <button
+              onClick={() => setEditingText(false)} disabled={saving}
+              className="rounded-xl border px-3.5 py-2 text-[11px] font-bold transition hover:opacity-70 disabled:opacity-60"
+              style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)", background: "var(--sp-input-bg)" }}
+            >
               Cancel
             </button>
           </div>
@@ -236,9 +341,14 @@ function SectionRow({
 
       {/* Low quality warning */}
       {sec.extraction_quality !== null && sec.extraction_quality < 0.5 && (
-        <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+        <div
+          className="flex items-center gap-2 rounded-xl border px-3 py-2"
+          style={{ background: "rgba(245,158,11,0.07)", borderColor: "rgba(245,158,11,0.22)" }}
+        >
           <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-          <p className="text-xs text-amber-400">Low extraction quality — review before approving.</p>
+          <p className="text-[11px] font-medium text-amber-400">
+            Low extraction quality — review before approving.
+          </p>
         </div>
       )}
 
@@ -246,10 +356,11 @@ function SectionRow({
       <div className="flex flex-wrap gap-2 pt-1">
         <button
           onClick={() => onProcess(sec.id)}
-          disabled={actioning === sec.id || !sec.extracted_text}
-          className="flex items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-400 transition hover:bg-violet-500/20 disabled:opacity-50"
+          disabled={busy || !sec.extracted_text}
+          className="flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[11px] font-bold transition hover:opacity-80 disabled:opacity-40"
+          style={{ background: "rgba(139,92,246,0.10)", borderColor: "rgba(139,92,246,0.25)", color: "#8B5CF6" }}
         >
-          {actioning === sec.id
+          {busy
             ? <Loader2 className="h-3 w-3 animate-spin" />
             : <Sparkles className="h-3 w-3" />
           }
@@ -259,8 +370,9 @@ function SectionRow({
         {sec.processing_status !== "approved" && (
           <button
             onClick={() => onApprove(sec.id)}
-            disabled={actioning === sec.id}
-            className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20 disabled:opacity-50"
+            disabled={busy}
+            className="flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[11px] font-bold transition hover:opacity-80 disabled:opacity-40"
+            style={{ background: "rgba(16,185,129,0.10)", borderColor: "rgba(16,185,129,0.25)", color: "#10B981" }}
           >
             <CheckCircle2 className="h-3 w-3" /> Approve
           </button>
@@ -269,8 +381,9 @@ function SectionRow({
         {sec.processing_status !== "rejected" && (
           <button
             onClick={() => onReject(sec.id)}
-            disabled={actioning === sec.id}
-            className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-400 transition hover:bg-red-500/20 disabled:opacity-50"
+            disabled={busy}
+            className="flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[11px] font-bold transition hover:opacity-80 disabled:opacity-40"
+            style={{ background: "rgba(239,68,68,0.08)", borderColor: "rgba(239,68,68,0.20)", color: "#EF4444" }}
           >
             <XCircle className="h-3 w-3" /> Reject
           </button>
@@ -292,8 +405,13 @@ export default function AdminSourceDocumentsPage() {
   const [expanded,  setExpanded]  = useState<Set<string>>(new Set());
   const [actioning, setActioning] = useState<string | null>(null);
   const [token,     setToken]     = useState("");
+
+  // Reject section modal state
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+
+  // Delete confirm state  — "doc:<id>" | "sec:<id>"
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -320,12 +438,7 @@ export default function AdminSourceDocumentsPage() {
 
   async function toggleExpand(docId: string) {
     const next = new Set(expanded);
-    if (next.has(docId)) {
-      next.delete(docId);
-      setExpanded(next);
-      return;
-    }
-    // Load sections if not already loaded
+    if (next.has(docId)) { next.delete(docId); setExpanded(next); return; }
     const doc = docs.find(d => d.id === docId);
     if (!doc?.sections) {
       try {
@@ -353,6 +466,43 @@ export default function AdminSourceDocumentsPage() {
       setDocs(prev => prev.map(d => d.id === docId ? { ...d, status: "approved" } : d));
     } catch { /* non-critical */ }
     finally { setActioning(null); }
+  }
+
+  // ── Delete document ─────────────────────────────────────────────────────────
+  async function deleteDoc(docId: string) {
+    setActioning(docId);
+    try {
+      const res = await fetch(`${API}/api/admin/source-documents/${docId}`, {
+        method:  "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Delete failed.");
+      setDocs(prev => prev.filter(d => d.id !== docId));
+      setExpanded(prev => { const n = new Set(prev); n.delete(docId); return n; });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed.");
+    } finally { setActioning(null); setDeleteTarget(null); }
+  }
+
+  // ── Delete section ──────────────────────────────────────────────────────────
+  async function deleteSection(sectionId: string) {
+    setActioning(sectionId);
+    try {
+      const res = await fetch(`${API}/api/admin/sections/${sectionId}`, {
+        method:  "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Delete failed.");
+      setDocs(prev => prev.map(d => ({
+        ...d,
+        sections: d.sections?.filter(s => s.id !== sectionId),
+        section_count: d.sections
+          ? d.sections.filter(s => s.id !== sectionId).length
+          : d.section_count,
+      })));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Section delete failed.");
+    } finally { setActioning(null); setDeleteTarget(null); }
   }
 
   async function approveSection(sectionId: string) {
@@ -410,60 +560,120 @@ export default function AdminSourceDocumentsPage() {
     } finally { setActioning(null); }
   }
 
+  // ── Derived ─────────────────────────────────────────────────────────────────
+  const counts = {
+    total:    docs.length,
+    approved: docs.filter(d => d.status === "approved").length,
+    pending:  docs.filter(d => d.status === "pending").length,
+  };
+
   if (loading) return (
-    <div className="flex min-h-[60vh] items-center justify-center bg-[#07091A]">
-      <Loader2 className="h-7 w-7 animate-spin text-blue-500" />
+    <div className="flex min-h-[60vh] items-center justify-center" style={{ background: "var(--sp-bg)" }}>
+      <Loader2 className="h-7 w-7 animate-spin" style={{ color: "#6366F1" }} />
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-[#07091A] px-4 py-8 sm:px-6 lg:px-10">
+    <div className="min-h-screen px-4 py-8 sm:px-6 lg:px-10" style={{ background: "var(--sp-bg)" }}>
       <div className="mx-auto max-w-5xl">
 
-        {/* Header */}
+        {/* ── Header ── */}
         <div className="mb-8">
-          <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">Admin</p>
-          <h1 className="text-3xl font-extrabold text-white">Multi-Course Documents</h1>
-          <p className="mt-2 text-sm text-slate-500">
-            PDFs uploaded with multiple courses. Review sections, correct text, then approve.
+          <p className="mb-2 text-[11px] font-black uppercase tracking-widest" style={{ color: "#6366F1" }}>
+            Admin
           </p>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-black tracking-tight" style={{ color: "var(--sp-text)" }}>
+                Multi-Course Documents
+              </h1>
+              <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+                PDFs uploaded with multiple courses. Review sections, correct text, then approve.
+              </p>
+            </div>
+            <button
+              onClick={() => fetchDocs(token)}
+              className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] font-bold transition hover:opacity-80"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            </button>
+          </div>
         </div>
 
+        {/* ── Summary stat tiles ── */}
+        <div className="mb-6 grid grid-cols-3 gap-3">
+          {[
+            { label: "Total docs",  value: counts.total,    color: "#6366F1" },
+            { label: "Approved",    value: counts.approved, color: "#10B981" },
+            { label: "Pending",     value: counts.pending,  color: "#F59E0B" },
+          ].map(s => (
+            <div
+              key={s.label}
+              className="rounded-2xl border p-4"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+            >
+              <p className="text-2xl font-black tabular-nums" style={{ color: s.color }}>{s.value}</p>
+              <p className="mt-0.5 text-[11px]" style={{ color: "var(--sp-text-3)" }}>{s.label}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Error banner ── */}
         {error && (
-          <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
+          <div
+            className="mb-5 flex items-start gap-2.5 rounded-2xl border px-4 py-3"
+            style={{ background: "rgba(239,68,68,0.07)", borderColor: "rgba(239,68,68,0.22)" }}
+          >
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
             <p className="text-sm text-red-400">{error}</p>
-            <button onClick={() => setError("")} className="ml-auto text-slate-500 hover:text-slate-300 text-xs">✕</button>
+            <button
+              onClick={() => setError("")}
+              className="ml-auto text-xs transition hover:opacity-70"
+              style={{ color: "var(--sp-text-3)" }}
+            >✕</button>
           </div>
         )}
 
-        <div className="rounded-2xl border border-white/[0.06] bg-[#0D1230] overflow-hidden">
+        {/* ── Documents list ── */}
+        <div
+          className="overflow-hidden rounded-2xl border"
+          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+        >
           {docs.length === 0 ? (
             <div className="flex flex-col items-center py-20 text-center">
-              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500/10">
-                <FileText className="h-5 w-5 text-blue-400" />
+              <div
+                className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl"
+                style={{ background: "rgba(99,102,241,0.10)" }}
+              >
+                <FileText className="h-5 w-5" style={{ color: "#6366F1" }} />
               </div>
-              <p className="text-sm font-semibold text-slate-400">No multi-course documents yet.</p>
+              <p className="text-sm font-bold" style={{ color: "var(--sp-text-2)" }}>
+                No multi-course documents yet.
+              </p>
             </div>
           ) : (
-            <div className="divide-y divide-white/[0.05]">
+            <div style={{ borderColor: "var(--sp-border)" }} className="divide-y">
               {docs.map(doc => (
                 <div key={doc.id} className="p-5">
 
-                  {/* Document header */}
+                  {/* ── Document header ── */}
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div className="flex items-start gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10">
-                        <FileText className="h-4.5 w-4.5 text-blue-400" size={18} />
+                      <div
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl"
+                        style={{ background: "rgba(99,102,241,0.12)" }}
+                      >
+                        <FileText className="h-4.5 w-4.5" style={{ color: "#6366F1" }} size={18} />
                       </div>
                       <div>
-                        <p className="font-semibold text-white">
+                        <p className="font-black" style={{ color: "var(--sp-text)" }}>
                           {doc.uploader?.full_name ?? "Unknown uploader"}
                         </p>
-                        <p className="mt-0.5 text-sm text-slate-500">
+                        <p className="mt-0.5 text-xs" style={{ color: "var(--sp-text-3)" }}>
                           {doc.page_count ?? "?"} pages · {fmtBytes(doc.file_size)} · {doc.section_count} course{doc.section_count !== 1 ? "s" : ""}
                         </p>
-                        <p className="mt-1 text-xs text-slate-600">
+                        <p className="mt-0.5 text-[11px]" style={{ color: "var(--sp-text-3)" }}>
                           {new Date(doc.created_at).toLocaleDateString("en-GB", {
                             day: "numeric", month: "short", year: "numeric",
                           })}
@@ -473,13 +683,14 @@ export default function AdminSourceDocumentsPage() {
                     <DocStatusPill status={doc.status} />
                   </div>
 
-                  {/* Document-level actions */}
+                  {/* ── Document-level actions ── */}
                   <div className="mt-4 flex flex-wrap gap-2">
                     {doc.status !== "approved" && (
                       <button
                         onClick={() => approveDoc(doc.id)}
                         disabled={actioning === doc.id}
-                        className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                        className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] font-bold transition hover:opacity-80 disabled:opacity-50"
+                        style={{ background: "rgba(16,185,129,0.10)", borderColor: "rgba(16,185,129,0.25)", color: "#10B981" }}
                       >
                         {actioning === doc.id
                           ? <Loader2 className="h-3 w-3 animate-spin" />
@@ -488,24 +699,36 @@ export default function AdminSourceDocumentsPage() {
                         Approve document
                       </button>
                     )}
+
                     <button
                       onClick={() => toggleExpand(doc.id)}
-                      className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.08]"
+                      className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] font-bold transition hover:opacity-80"
+                      style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
                     >
                       <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded.has(doc.id) ? "rotate-180" : ""}`} />
                       {expanded.has(doc.id) ? "Hide sections" : "Review sections"}
                     </button>
+
+                    {/* Delete document */}
+                    <button
+                      onClick={() => setDeleteTarget(`doc:${doc.id}`)}
+                      disabled={actioning === doc.id}
+                      className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] font-bold transition hover:opacity-80 disabled:opacity-40"
+                      style={{ background: "rgba(239,68,68,0.08)", borderColor: "rgba(239,68,68,0.20)", color: "#EF4444" }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Delete
+                    </button>
                   </div>
 
-                  {/* Sections */}
+                  {/* ── Sections ── */}
                   {expanded.has(doc.id) && (
                     <div className="mt-4 space-y-3">
                       {!doc.sections ? (
                         <div className="flex justify-center py-4">
-                          <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+                          <Loader2 className="h-5 w-5 animate-spin" style={{ color: "#6366F1" }} />
                         </div>
                       ) : doc.sections.length === 0 ? (
-                        <p className="text-xs text-slate-500">No sections mapped yet.</p>
+                        <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>No sections mapped yet.</p>
                       ) : (
                         doc.sections.map(sec => (
                           <SectionRow
@@ -514,6 +737,7 @@ export default function AdminSourceDocumentsPage() {
                             onApprove={approveSection}
                             onReject={(id) => { setRejectTarget(id); setRejectReason(""); }}
                             onProcess={processSection}
+                            onDelete={(id) => setDeleteTarget(`sec:${id}`)}
                             actioning={actioning}
                           />
                         ))
@@ -527,26 +751,42 @@ export default function AdminSourceDocumentsPage() {
         </div>
       </div>
 
-      {/* Reject section modal */}
+      {/* ── Reject section modal ── */}
       {rejectTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-          <div className="w-full max-w-sm rounded-2xl border border-white/[0.08] bg-[#0D1230] p-6 shadow-2xl">
-            <h2 className="text-base font-semibold text-white">Reject this section?</h2>
-            <p className="mt-1 text-sm text-slate-400">Give a reason so the uploader knows what to fix.</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-2xl border p-6 shadow-2xl"
+            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+          >
+            <h2 className="text-sm font-black" style={{ color: "var(--sp-text)" }}>Reject this section?</h2>
+            <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+              Give a reason so the uploader knows what to fix.
+            </p>
             <textarea
               value={rejectReason} onChange={e => setRejectReason(e.target.value)}
               placeholder="e.g. Wrong course, blurry pages..."
               rows={3} maxLength={300}
-              className="mt-4 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              className="mt-4 w-full rounded-xl border px-4 py-3 text-sm outline-none transition"
+              style={{
+                background: "var(--sp-input-bg)", borderColor: "var(--sp-border)",
+                color: "var(--sp-text)",
+              }}
             />
-            <div className="mt-4 flex gap-2">
-              <button onClick={() => setRejectTarget(null)} disabled={actioning === rejectTarget}
-                className="flex-1 rounded-xl border border-white/10 bg-white/[0.04] py-2.5 text-sm font-semibold text-slate-300 transition hover:bg-white/[0.08] disabled:opacity-60">
+            <div className="mt-4 flex gap-2.5">
+              <button
+                onClick={() => setRejectTarget(null)}
+                disabled={actioning === rejectTarget}
+                className="flex-1 rounded-xl border py-2.5 text-xs font-bold transition hover:opacity-80 disabled:opacity-60"
+                style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)", background: "var(--sp-input-bg)" }}
+              >
                 Cancel
               </button>
-              <button onClick={submitRejectSection}
+              <button
+                onClick={submitRejectSection}
                 disabled={!rejectReason.trim() || actioning === rejectTarget}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-red-600 py-2.5 text-sm font-semibold text-white transition hover:bg-red-500 disabled:opacity-60">
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-black text-white transition hover:opacity-90 disabled:opacity-60"
+                style={{ background: "#EF4444" }}
+              >
                 {actioning === rejectTarget && <Loader2 className="h-4 w-4 animate-spin" />}
                 Reject section
               </button>
@@ -554,6 +794,27 @@ export default function AdminSourceDocumentsPage() {
           </div>
         </div>
       )}
+
+      {/* ── Delete confirm dialog ── */}
+      {deleteTarget && (() => {
+        const isDoc = deleteTarget.startsWith("doc:");
+        const id    = deleteTarget.slice(4);
+        return (
+          <ConfirmDialog
+            danger
+            title={isDoc ? "Delete document?" : "Delete section?"}
+            body={
+              isDoc
+                ? "This will permanently delete the document and all its sections. This cannot be undone."
+                : "This will permanently delete the section and any generated questions. This cannot be undone."
+            }
+            confirmLabel={isDoc ? "Delete document" : "Delete section"}
+            loading={actioning === id}
+            onCancel={() => setDeleteTarget(null)}
+            onConfirm={() => isDoc ? deleteDoc(id) : deleteSection(id)}
+          />
+        );
+      })()}
     </div>
   );
 }
