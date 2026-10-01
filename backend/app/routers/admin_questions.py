@@ -1,632 +1,518 @@
+"""
+scripts/github_worker.py
+Runs inside GitHub Actions. Downloads PDF from B2, extracts text,
+processes questions, updates Supabase. No FastAPI dependency.
+
+Two modes:
+  single  — processes one past_questions record  (RECORD_ID is set)
+  section — processes one course_document_sections record (SECTION_ID is set)
+            Also creates a past_questions record so the admin panel sees it.
+"""
 from __future__ import annotations
 
 import io
-import math
+import json
+import logging
 import os
+import random
+import re
+import sys
+import time
 from datetime import datetime, timezone
-from typing import Literal, Optional
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
-from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+import boto3
+from botocore.client import Config
+from google import genai
+from google.genai import errors, types
+from pypdf import PdfReader, PdfWriter
+from supabase import create_client, Client
 
-from app.admin_auth import get_current_admin
-from app.services.question_processor import ProcessingError, process_questions
-from app.services.watermarked_preview import watermark_preview
-from app.storage import delete_file, download_bytes, get_signed_url, upload_bytes
-from app.supabase_client import supabase
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger("github_worker")
 
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    _PILLOW_OK = True
-except ImportError:
-    _PILLOW_OK = False
+# ── Env ───────────────────────────────────────────────────────────────────────
 
-router = APIRouter(prefix="/api/admin/questions", tags=["admin-questions"])
-MAX_EXTRACTED_TEXT_LENGTH = 50_000
-PREVIEW_EXPIRY_SECONDS = 300
+RECORD_ID  = os.environ.get("RECORD_ID", "")
+SECTION_ID = os.environ.get("SECTION_ID", "")
+START_PAGE = int(os.environ.get("START_PAGE", "0") or "0")
+END_PAGE   = int(os.environ.get("END_PAGE",   "0") or "0")
+COURSE_ID  = os.environ.get("COURSE_ID", "")
 
-B2_BUCKET = os.getenv("B2_BUCKET_NAME", "sparkl-questions")
+FILE_KEY    = os.environ["FILE_KEY"]
+MIME_TYPE   = os.environ["MIME_TYPE"]
+COURSE_NAME = os.environ.get("COURSE_NAME", "")
+INSTITUTION = os.environ.get("INSTITUTION", "")
 
-ITEM_COLUMNS = (
-    "id, question_number, question_text, question_type, option_a, option_b, "
-    "option_c, option_d, correct_answer, model_answer, explanation, topic_tag, "
-    "difficulty, marks, is_verified, edited_by_admin"
+MODE = "section" if SECTION_ID else "single"
+
+GEMINI_API_KEY      = os.environ["GEMINI_API_KEY"]
+GEMINI_VISION_MODEL = os.environ.get("GEMINI_VISION_MODEL", "gemini-3.5-flash")
+GEMINI_TEXT_MODEL   = os.environ.get("GEMINI_TEXT_MODEL",   "gemini-3.5-flash")
+FALLBACK_MODEL      = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
+
+B2_ENDPOINT = os.environ["B2_ENDPOINT"]
+B2_KEY_ID   = os.environ["B2_KEY_ID"]
+B2_APP_KEY  = os.environ["B2_APP_KEY"]
+B2_BUCKET   = os.environ.get("B2_BUCKET_NAME", "sparkl-questions")
+
+SUPABASE_URL         = os.environ["SUPABASE_URL"]
+SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
+
+# ── Clients ───────────────────────────────────────────────────────────────────
+
+def _b2():
+    endpoint = B2_ENDPOINT if B2_ENDPOINT.startswith("http") else f"https://{B2_ENDPOINT}"
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=B2_KEY_ID,
+        aws_secret_access_key=B2_APP_KEY,
+        config=Config(signature_version="s3v4"),
+    )
+
+def _supabase() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+gemini = genai.Client(api_key=GEMINI_API_KEY)
+
+# ── Gemini retry helper ───────────────────────────────────────────────────────
+
+def generate_with_retry(primary_model, contents, config, attempts: int = 4):
+    models = [primary_model]
+    if FALLBACK_MODEL and FALLBACK_MODEL != primary_model:
+        models.append(FALLBACK_MODEL)
+
+    last_err = None
+    for model in models:
+        for i in range(attempts):
+            try:
+                return gemini.models.generate_content(
+                    model=model, contents=contents, config=config
+                )
+            except errors.APIError as e:
+                code = getattr(e, "code", None)
+                last_err = e
+                if code == 404:
+                    logger.warning("%s not available (404), trying next model", model)
+                    break
+                if code in (429, 500, 503, 504):
+                    wait = min(60, 3 * 2 ** i) + random.random()
+                    logger.warning(
+                        "%s got %s, retry %d/%d in %.0fs",
+                        model, code, i + 1, attempts, wait,
+                    )
+                    time.sleep(wait)
+                    continue
+                raise
+    raise last_err
+
+# ── B2 helpers ────────────────────────────────────────────────────────────────
+
+def download_from_b2(key: str) -> bytes:
+    logger.info("Downloading %s from B2", key)
+    response = _b2().get_object(Bucket=B2_BUCKET, Key=key)
+    return response["Body"].read()
+
+def get_signed_url(key: str, expires_in: int = 300) -> str:
+    return _b2().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": B2_BUCKET, "Key": key},
+        ExpiresIn=expires_in,
+    )
+
+# ── PDF slicing ───────────────────────────────────────────────────────────────
+
+def slice_pdf(file_bytes: bytes, start_page: int, end_page: int) -> bytes:
+    reader = PdfReader(io.BytesIO(file_bytes))
+    writer = PdfWriter()
+    total  = len(reader.pages)
+    logger.info("Slicing pages %d–%d from %d total pages", start_page, end_page, total)
+    for page_num in range(start_page - 1, min(end_page, total)):
+        writer.add_page(reader.pages[page_num])
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+# ── Text extraction ───────────────────────────────────────────────────────────
+
+def _score_text(text: str) -> float:
+    if not text:
+        return 0.0
+    words = text.split()
+    if len(words) < 10:
+        return 0.1
+    clean = sum(1 for w in words if any(c.isalpha() for c in w))
+    ratio = clean / len(words)
+    if ratio > 0.7: return 1.0
+    if ratio > 0.4: return 0.6
+    return 0.3
+
+def _strip_thinking(text: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+def _extract_pdf_native(file_bytes: bytes) -> str:
+    try:
+        reader = PdfReader(io.BytesIO(file_bytes))
+        pages  = [(p.extract_text() or "").strip() for p in reader.pages]
+        return "\n\n".join(p for p in pages if p).strip()
+    except Exception as e:
+        logger.warning("pypdf failed: %s", e)
+        return ""
+
+def _gemini_vision(file_bytes: bytes, mime_type: str) -> str:
+    response = generate_with_retry(
+        GEMINI_VISION_MODEL,
+        contents=[
+            types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+            (
+                "This is an academic past-examination paper. Extract all readable text. "
+                "Preserve page order, question numbering, options, mathematical notation, "
+                "tables, and section structure. Do not summarize or add commentary. "
+                "Return only the transcription. If a region cannot be read, write [unreadable section]."
+            ),
+        ],
+        config=types.GenerateContentConfig(temperature=0.0, max_output_tokens=12000),
+    )
+    return _strip_thinking((response.text or "").strip())
+
+def extract_text(file_bytes: bytes, mime_type: str) -> tuple[str, float]:
+    if mime_type == "application/pdf":
+        native = _extract_pdf_native(file_bytes)
+        score  = _score_text(native)
+        if native and score >= 0.4:
+            logger.info("Using native PDF extraction, quality=%.2f", score)
+            return native, score
+        logger.info("Native quality low (%.2f), falling back to Gemini vision", score)
+        vision = _gemini_vision(file_bytes, mime_type)
+        if vision:
+            return vision, _score_text(vision)
+        if native:
+            return native, score
+        raise RuntimeError("Could not extract text from PDF")
+    else:
+        vision = _gemini_vision(file_bytes, mime_type)
+        if not vision:
+            raise RuntimeError("Could not extract text from image")
+        return vision, _score_text(vision)
+
+# ── Question processing ───────────────────────────────────────────────────────
+
+PROCESS_PROMPT = """
+You are converting an academic past examination paper into structured practice questions.
+Return ONLY valid JSON: an array of objects. Do not use markdown or commentary.
+
+Rules:
+- Skip the paper header, institution name, course title, instructions, time allowed, and section headings.
+- For theory questions: question_type='theory'; options and correct_answer must be null; write a study-oriented model_answer.
+- For MCQs: question_type='mcq'; preserve all available options; correct_answer must be one of a, b, c, d only when supported by the paper; otherwise null.
+- Keep theory sub-parts together in one question_text.
+- Number sequentially across the whole paper.
+- Do not invent missing questions, options, answers, marks, or explanations. Use null when the source does not support a field.
+- topic_tag must be a short phrase or null.
+- difficulty must be easy, medium, hard, or null.
+- marks must be a whole number or null.
+
+Required object shape:
+[
+  {
+    "question_number": 1,
+    "question_text": "...",
+    "question_type": "theory",
+    "option_a": null,
+    "option_b": null,
+    "option_c": null,
+    "option_d": null,
+    "correct_answer": null,
+    "model_answer": "...",
+    "explanation": "...",
+    "topic_tag": "...",
+    "difficulty": "medium",
+    "marks": null
+  }
+]
+
+Course: __COURSE__
+Institution: __INSTITUTION__
+
+Extracted paper text:
+---
+__TEXT__
+---
+"""
+
+def _to_int_or_none(v):
+    if v is None or v == "": return None
+    try: return int(float(str(v).strip()))
+    except: return None
+
+def _validate_question(q: dict, i: int) -> dict:
+    q["question_type"] = str(q.get("question_type", "theory")).lower()
+    if q["question_type"] not in {"theory", "mcq"}:
+        q["question_type"] = "theory"
+    q["question_number"] = int(q.get("question_number", i + 1))
+    q["question_text"]   = str(q.get("question_text", "")).strip()
+    if not q["question_text"]:
+        raise ValueError(f"Item {i} has empty question_text")
+    for f in ("option_a","option_b","option_c","option_d","correct_answer",
+              "model_answer","explanation","topic_tag","difficulty","marks"):
+        q.setdefault(f, None)
+    if q["question_type"] == "theory":
+        for f in ("option_a","option_b","option_c","option_d","correct_answer"):
+            q[f] = None
+    elif q["correct_answer"] is not None:
+        ans = str(q["correct_answer"]).strip().lower()
+        q["correct_answer"] = ans if ans in {"a","b","c","d"} else None
+    if q["difficulty"] not in {None,"easy","medium","hard"}:
+        q["difficulty"] = None
+    q["marks"] = _to_int_or_none(q["marks"])
+    return q
+
+def process_questions(text: str, course_name: str, institution: str) -> list[dict]:
+    prompt = (
+        PROCESS_PROMPT
+        .replace("__COURSE__", course_name or "not specified")
+        .replace("__INSTITUTION__", institution or "not specified")
+        .replace("__TEXT__", text.strip())
+    )
+    response = generate_with_retry(
+        GEMINI_TEXT_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.1,
+            max_output_tokens=16000,
+        ),
+    )
+    raw = re.sub(r"^```(?:json)?\s*", "", (response.text or "")).strip()
+    raw = re.sub(r"\s*```$", "", raw).strip()
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        lists = [v for v in data.values() if isinstance(v, list)]
+        data  = lists[0] if lists else []
+    if not isinstance(data, list) or not data:
+        raise RuntimeError("Gemini returned no questions")
+
+    result = []
+    for i, item in enumerate(data):
+        try:
+            result.append(_validate_question(item, i))
+        except Exception as e:
+            logger.warning("Skipping item %d: %s", i, e)
+    if not result:
+        raise RuntimeError("No valid questions parsed")
+    return result
+
+# ── Shared question columns ───────────────────────────────────────────────────
+
+QUESTION_COLUMNS = (
+    "question_number", "question_text", "question_type",
+    "option_a", "option_b", "option_c", "option_d",
+    "correct_answer", "model_answer", "explanation",
+    "topic_tag", "difficulty", "marks",
 )
 
+# ── Supabase helpers — single mode ────────────────────────────────────────────
 
-class StatusUpdate(BaseModel):
-    status: Literal["pending", "approved", "rejected"]
-    reason: Optional[str] = None
+def mark_extracting(sb: Client):
+    sb.table("past_questions").update({
+        "processing_status": "extracting",
+        "processing_started_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", RECORD_ID).execute()
 
+def save_text(sb: Client, text: str, quality: float):
+    sb.table("past_questions").update({
+        "extracted_text": text,
+        "extraction_quality": quality,
+    }).eq("id", RECORD_ID).execute()
 
-class ExtractedTextUpdate(BaseModel):
-    extracted_text: str
+def mark_ready(sb: Client):
+    sb.table("past_questions").update({
+        "processing_status": "ready",
+        "processing_error": None,
+    }).eq("id", RECORD_ID).execute()
 
+def mark_failed(sb: Client, error: str):
+    sb.table("past_questions").update({
+        "processing_status": "failed",
+        "processing_error": error[:500],
+    }).eq("id", RECORD_ID).execute()
 
-class QuestionItemUpdate(BaseModel):
-    question_text: Optional[str] = Field(None, max_length=5000)
-    question_type: Optional[Literal["mcq", "theory"]] = None
-    option_a: Optional[str] = Field(None, max_length=1000)
-    option_b: Optional[str] = Field(None, max_length=1000)
-    option_c: Optional[str] = Field(None, max_length=1000)
-    option_d: Optional[str] = Field(None, max_length=1000)
-    correct_answer: Optional[Literal["a", "b", "c", "d"]] = None
-    model_answer: Optional[str] = Field(None, max_length=10000)
-    explanation: Optional[str] = Field(None, max_length=5000)
-    topic_tag: Optional[str] = Field(None, max_length=100)
-    difficulty: Optional[Literal["easy", "medium", "hard"]] = None
-    marks: Optional[int] = Field(None, ge=0, le=1000)
-    is_verified: Optional[bool] = None
-
-
-def _to_key(file_url: str) -> str:
-    """
-    Normalise file_url to a plain B2 key.
-    Old uploads stored the full URL; new ones store just the key.
-
-    Full URL example:
-      https://f005.backblazeb2.com/file/sparkl-questions/past-questions/uid/file.pdf
-    Key example:
-      past-questions/uid/file.pdf
-    """
-    if not file_url or not file_url.startswith("http"):
-        return file_url
-    marker = f"/file/{B2_BUCKET}/"
-    idx = file_url.find(marker)
-    if idx != -1:
-        return file_url[idx + len(marker):]
-    parts = file_url.split(f"/{B2_BUCKET}/", 1)
-    if len(parts) == 2:
-        return parts[1]
-    return file_url
-
-
-def _check_uuid(value: str, label: str = "id") -> None:
-    try:
-        UUID(value)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid {label}.") from exc
-
-
-def _first(result) -> Optional[dict]:
-    rows = result.data if result else None
-    return rows[0] if rows else None
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def reset_for_retry(question_id: str) -> None:
-    """
-    Put a paper back in the queue for reprocessing.
-
-    NOTE: if you already have a reset_for_retry defined elsewhere (e.g. in a
-    services module), delete this one and import yours instead. The "pending"
-    value below is an assumption: use whatever value your processing worker
-    looks for.
-    """
-    supabase.table("past_questions").update(
-        {"processing_status": "pending", "processing_error": None}
-    ).eq("id", question_id).execute()
-
-
-# ── Page-preview helpers (sync — run in threadpool) ───────────────────────────
-
-def _get_font(size: int):
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-    ]
-    for path in candidates:
-        try:
-            return ImageFont.truetype(path, size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
-
-
-def _apply_admin_watermark(img: "Image.Image", admin_id: str) -> "Image.Image":
-    """Light tiled watermark + admin footer bar — applied per page."""
-    img = img.convert("RGBA")
-    w, h = img.size
-
-    font_size = max(18, w // 35)
-    font = _get_font(font_size)
-    text = "SPARKL ADMIN"
-    color = (99, 102, 241, 30)
-
-    diag = int(math.hypot(w, h))
-    canvas = Image.new("RGBA", (diag * 2, diag * 2), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(canvas)
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = (bbox[2] - bbox[0]) + 48
-    th = (bbox[3] - bbox[1]) + 48
-    cw, ch = canvas.size
-    for row in range(-2, (ch // th) + 3):
-        for col in range(-2, (cw // tw) + 3):
-            x = col * tw + (row % 2) * (tw // 2)
-            y = row * th
-            draw.text((x, y), text, font=font, fill=color)
-    canvas = canvas.rotate(-26, resample=Image.BICUBIC)
-    ox = (canvas.width - w) // 2
-    oy = (canvas.height - h) // 2
-    cropped = canvas.crop((ox, oy, ox + w, oy + h))
-    img = Image.alpha_composite(img, cropped)
-
-    bar_h = max(32, h // 28)
-    ffont = _get_font(max(11, w // 60))
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    footer = f"Admin review only — SparkL  ·  {admin_id[:8]}…  ·  {stamp}"
-    draw2 = ImageDraw.Draw(img)
-    draw2.rectangle([(0, h - bar_h), (w, h)], fill=(10, 10, 30, 200))
-    fb = draw2.textbbox((0, 0), footer, font=ffont)
-    tx = (w - (fb[2] - fb[0])) // 2
-    ty = h - bar_h + (bar_h - (fb[3] - fb[1])) // 2
-    draw2.text((tx, ty), footer, font=ffont, fill=(255, 255, 255, 200))
-
-    return img.convert("RGB")
-
-
-def _page_count_sync(file_bytes: bytes, mime_type: str) -> int:
-    if mime_type == "application/pdf":
-        from pypdf import PdfReader
-        try:
-            return len(PdfReader(io.BytesIO(file_bytes)).pages)
-        except Exception:
-            return 1
-    return 1
-
-
-def _render_page_sync(
-    file_bytes: bytes, mime_type: str, page_num: int, admin_id: str
-) -> bytes:
-    if mime_type == "application/pdf":
-        try:
-            import pypdfium2 as pdfium
-        except ImportError:
-            raise HTTPException(status_code=500, detail="pypdfium2 is not installed.")
-        pdf = pdfium.PdfDocument(file_bytes)
-        if page_num > len(pdf):
-            raise HTTPException(status_code=404, detail=f"Page {page_num} does not exist.")
-        pil_img = pdf[page_num - 1].render(scale=150 / 72).to_pil().convert("RGB")
-        buf = io.BytesIO()
-        pil_img.save(buf, format="JPEG", quality=92)
-        img_bytes = buf.getvalue()
-    else:
-        img_bytes = file_bytes
-
-    if not _PILLOW_OK:
-        return img_bytes
-
-    img = Image.open(io.BytesIO(img_bytes))
-    watermarked = _apply_admin_watermark(img, admin_id)
-    out = io.BytesIO()
-    watermarked.save(out, format="JPEG", quality=88, optimize=True)
-    return out.getvalue()
-
-
-# ── Routes ────────────────────────────────────────────────────────────────────
-
-@router.get("")
-async def list_questions(
-    status: Optional[str] = Query(None),
-    admin_id: str = Depends(get_current_admin),
-):
-    query = (
-        supabase.table("past_questions")
-        .select(
-            "id, title, year, status, processing_status, created_at, "
-            "extracted_text, extraction_quality, rejection_reason, uploaded_by, "
-            "mime_type, course:courses(name), semester:semesters(name)"
-        )
-        .order("created_at", desc=True)
-    )
-    if status:
-        query = query.eq("status", status)
-    questions = query.execute().data or []
-
-    uploader_ids = list({q["uploaded_by"] for q in questions if q.get("uploaded_by")})
-    profiles_by_id: dict[str, dict] = {}
-    if uploader_ids:
-        profiles = (
-            supabase.table("profiles")
-            .select("id, full_name")
-            .in_("id", uploader_ids)
-            .execute()
-        )
-        profiles_by_id = {p["id"]: p for p in (profiles.data or [])}
-
-    ids = [q["id"] for q in questions]
-    processed_ids: set[str] = set()
-    if ids:
-        result = (
-            supabase.table("questions")
-            .select("past_question_id")
-            .in_("past_question_id", ids)
-            .execute()
-        )
-        processed_ids = {r["past_question_id"] for r in (result.data or [])}
-
-    for question in questions:
-        profile = profiles_by_id.get(question.get("uploaded_by"))
-        question["uploader"] = {"full_name": profile.get("full_name")} if profile else None
-        question.pop("uploaded_by", None)
-        question["ai_processed"] = question["id"] in processed_ids
-        question.pop("file_url", None)
-    return questions
-
-
-@router.get("/{question_id}/preview-url")
-async def get_watermarked_preview_url(
-    question_id: str,
-    admin_id: str = Depends(get_current_admin),
-):
-    """Legacy endpoint — kept for compatibility. Prefer preview-page/{n} instead."""
-    _check_uuid(question_id, "question id")
-    result = (
-        supabase.table("past_questions")
-        .select("id, file_url, mime_type")
-        .eq("id", question_id)
-        .maybe_single()
-        .execute()
-    )
-    row = result.data
-    if not row or not row.get("file_url"):
-        raise HTTPException(status_code=404, detail="Original upload not found.")
-
-    file_key = _to_key(row["file_url"])
-    original = await run_in_threadpool(download_bytes, file_key)
-    preview_bytes, preview_mime = await run_in_threadpool(
-        watermark_preview, original, row.get("mime_type", "application/pdf"), str(admin_id)
-    )
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    preview_key = f"admin-previews/{question_id}/{admin_id}/{stamp}.preview"
-    await run_in_threadpool(upload_bytes, preview_bytes, preview_key, preview_mime)
-
-    return {
-        "url": get_signed_url(preview_key, expires_in=PREVIEW_EXPIRY_SECONDS),
-        "expires_in": PREVIEW_EXPIRY_SECONDS,
-        "watermarked": True,
-    }
-
-
-@router.get("/{question_id}/preview-page-count")
-async def get_admin_preview_page_count(
-    question_id: str,
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    result = (
-        supabase.table("past_questions")
-        .select("id, file_url, mime_type")
-        .eq("id", question_id)
-        .maybe_single()
-        .execute()
-    )
-    row = result.data
-    if not row or not row.get("file_url"):
-        raise HTTPException(status_code=404, detail="File not found.")
-
-    file_key = _to_key(row["file_url"])
-    file_bytes = await run_in_threadpool(download_bytes, file_key)
-    count = await run_in_threadpool(
-        _page_count_sync, file_bytes, row.get("mime_type", "application/pdf")
-    )
-    return {"page_count": count}
-
-
-@router.get("/{question_id}/preview-page/{page_num}")
-async def get_admin_preview_page(
-    question_id: str,
-    page_num: int = Path(..., ge=1, le=500),
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    result = (
-        supabase.table("past_questions")
-        .select("id, file_url, mime_type")
-        .eq("id", question_id)
-        .maybe_single()
-        .execute()
-    )
-    row = result.data
-    if not row or not row.get("file_url"):
-        raise HTTPException(status_code=404, detail="File not found.")
-
-    file_key = _to_key(row["file_url"])
-    file_bytes = await run_in_threadpool(download_bytes, file_key)
-    jpeg = await run_in_threadpool(
-        _render_page_sync,
-        file_bytes,
-        row.get("mime_type", "application/pdf"),
-        page_num,
-        str(admin_id),
-    )
-    return Response(
-        content=jpeg,
-        media_type="image/jpeg",
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate, private",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "Content-Disposition": "inline",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
-
-
-@router.patch("/{question_id}/status")
-async def update_question_status(
-    question_id: str,
-    payload: StatusUpdate,
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    if payload.status == "rejected" and not (payload.reason or "").strip():
-        raise HTTPException(status_code=400, detail="A reason is required when rejecting.")
-    update = {
-        "status": payload.status,
-        "rejection_reason": payload.reason.strip() if payload.status == "rejected" else None,
-    }
-    result = supabase.table("past_questions").update(update).eq("id", question_id).execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Question not found.")
-    return result.data[0]
-
-
-@router.patch("/{question_id}/text")
-async def update_extracted_text(
-    question_id: str,
-    payload: ExtractedTextUpdate,
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    text = payload.extracted_text.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="Extracted text cannot be empty.")
-    if len(text) > MAX_EXTRACTED_TEXT_LENGTH:
-        raise HTTPException(status_code=400, detail="Extracted text is too long.")
-    result = (
-        supabase.table("past_questions")
-        .update({"extracted_text": text, "extraction_quality": 1.0})
-        .eq("id", question_id)
-        .execute()
-    )
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Question not found.")
-    return result.data[0]
-
-
-@router.post("/{question_id}/process")
-async def process_question_with_ai(
-    question_id: str,
-    force: bool = Query(False),
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    result = (
-        supabase.table("past_questions")
-        .select("id, extracted_text, status, course_id, course:courses(name)")
-        .eq("id", question_id)
-        .maybe_single()
-        .execute()
-    )
-    record = result.data
-    if not record:
-        raise HTTPException(status_code=404, detail="Question not found.")
-    if record["status"] == "rejected":
-        raise HTTPException(status_code=400, detail="Rejected papers can't be processed.")
-
-    extracted_text = (record.get("extracted_text") or "").strip()
-    if not extracted_text or extracted_text.startswith("[extraction failed"):
-        raise HTTPException(status_code=400, detail="No valid extracted text to process.")
-
-    if not force:
-        reviewed = (
-            supabase.table("questions")
-            .select("id")
-            .eq("past_question_id", question_id)
-            .or_("is_verified.eq.true,edited_by_admin.eq.true")
-            .limit(1)
-            .execute()
-        )
-        if reviewed.data:
-            raise HTTPException(
-                status_code=409,
-                detail="Reviewed questions exist; use force=true to regenerate.",
-            )
-
-    course_name = (record.get("course") or {}).get("name", "")
-    try:
-        questions = await run_in_threadpool(process_questions, extracted_text, course_name)
-    except ProcessingError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    if not questions:
-        raise HTTPException(status_code=500, detail="Gemini returned no questions.")
-
-    supabase.table("questions").delete().eq("past_question_id", question_id).execute()
-    rows = [
-        {
-            "past_question_id": question_id,
-            "course_id": record["course_id"],
-            "question_number": q.get("question_number"),
-            "question_text": q.get("question_text", ""),
-            "question_type": q.get("question_type", "theory"),
-            "option_a": q.get("option_a"),
-            "option_b": q.get("option_b"),
-            "option_c": q.get("option_c"),
-            "option_d": q.get("option_d"),
-            "correct_answer": q.get("correct_answer"),
-            "model_answer": q.get("model_answer"),
-            "explanation": q.get("explanation"),
-            "topic_tag": q.get("topic_tag"),
-            "difficulty": q.get("difficulty"),
-            "marks": q.get("marks"),
-            "ai_processed": True,
-            "is_verified": False,
-            "edited_by_admin": False,
-        }
-        for q in questions
-    ]
-    inserted = supabase.table("questions").insert(rows).execute()
-    supabase.table("past_questions").update(
-        {"processing_status": "ready", "processing_error": None}
-    ).eq("id", question_id).execute()
-    return {"processed": True, "questions_created": len(inserted.data or [])}
-
-
-@router.get("/{question_id}/processed-questions")
-async def get_processed_questions(
-    question_id: str,
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    result = (
-        supabase.table("questions")
-        .select(ITEM_COLUMNS)
-        .eq("past_question_id", question_id)
-        .order("question_number")
-        .execute()
-    )
-    return result.data or []
-
-
-@router.patch("/{question_id}/items/{item_id}")
-async def update_question_item(
-    question_id: str,
-    item_id: str,
-    payload: QuestionItemUpdate,
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    _check_uuid(item_id, "item id")
-    existing = _first(
-        supabase.table("questions")
-        .select(ITEM_COLUMNS)
-        .eq("id", item_id)
-        .eq("past_question_id", question_id)
+def questions_exist(sb: Client) -> bool:
+    res = (
+        sb.table("questions")
+        .select("id")
+        .eq("past_question_id", RECORD_ID)
         .limit(1)
         .execute()
     )
-    if not existing:
-        raise HTTPException(status_code=404, detail="Question not found.")
+    return bool(res and res.data)
 
-    data = payload.model_dump(exclude_unset=True)
-    verified = data.pop("is_verified", None)
-    if "question_text" in data and not (data["question_text"] or "").strip():
-        raise HTTPException(status_code=400, detail="Question text cannot be empty.")
-    merged = {**existing, **data}
-    if merged.get("question_type") == "mcq":
-        filled = {key for key in "abcd" if (merged.get(f"option_{key}") or "").strip()}
-        if len(filled) < 2 or merged.get("correct_answer") not in filled:
-            raise HTTPException(
-                status_code=400,
-                detail="MCQ needs at least two options and a valid answer.",
-            )
+def insert_questions(sb: Client, questions: list[dict]):
+    rows = [
+        {
+            **{col: q.get(col) for col in QUESTION_COLUMNS},
+            "past_question_id": RECORD_ID,
+            "section_id":       None,
+            "course_id":        None,
+            "ai_processed":     True,
+            "is_verified":      False,
+            "edited_by_admin":  False,
+        }
+        for q in questions
+    ]
+    sb.table("questions").insert(rows).execute()
+
+# ── Supabase helpers — section mode ──────────────────────────────────────────
+
+def mark_section_extracting(sb: Client):
+    sb.table("course_document_sections").update({
+        "processing_status": "extracting",
+    }).eq("id", SECTION_ID).execute()
+
+def save_section_text(sb: Client, text: str, quality: float):
+    sb.table("course_document_sections").update({
+        "extracted_text": text,
+        "extraction_quality": quality,
+    }).eq("id", SECTION_ID).execute()
+
+def mark_section_ready(sb: Client):
+    sb.table("course_document_sections").update({
+        "processing_status": "ready",
+        "processing_error": None,
+    }).eq("id", SECTION_ID).execute()
+
+def mark_section_failed(sb: Client, error: str):
+    sb.table("course_document_sections").update({
+        "processing_status": "failed",
+        "processing_error": error[:500],
+    }).eq("id", SECTION_ID).execute()
+
+def section_questions_exist(sb: Client) -> bool:
+    res = (
+        sb.table("questions")
+        .select("id")
+        .eq("section_id", SECTION_ID)
+        .limit(1)
+        .execute()
+    )
+    return bool(res and res.data)
+
+def create_past_questions_record(sb: Client, text: str, quality: float) -> str:
+    """
+    Create a past_questions record for this section so the admin panel
+    picks it up automatically. Returns the new record's id.
+    """
+    title = f"{COURSE_NAME} (pages {START_PAGE}–{END_PAGE})" if START_PAGE else COURSE_NAME
+    res = sb.table("past_questions").insert({
+        "course_id":          COURSE_ID,
+        "title":              title,
+        "extracted_text":     text,
+        "extraction_quality": quality,
+        "processing_status":  "ready",
+        "status":             "approved",
+        "mime_type":          MIME_TYPE,
+        "file_url":           FILE_KEY,
+        "ai_processed":       True,
+    }).execute()
+    pq_id = res.data[0]["id"]
+    logger.info("Created past_questions record %s for section %s", pq_id, SECTION_ID)
+    return pq_id
+
+def insert_section_questions(sb: Client, questions: list[dict], past_question_id: str):
+    rows = [
+        {
+            **{col: q.get(col) for col in QUESTION_COLUMNS},
+            "past_question_id": past_question_id,
+            "section_id":       SECTION_ID,
+            "course_id":        COURSE_ID,
+            "ai_processed":     True,
+            "is_verified":      False,
+            "edited_by_admin":  False,
+        }
+        for q in questions
+    ]
+    sb.table("questions").insert(rows).execute()
+
+# ── Mode runners ──────────────────────────────────────────────────────────────
+
+def run_single_mode():
+    sb = _supabase()
+    mark_extracting(sb)
+    logger.info("Processing record %s", RECORD_ID)
+
+    try:
+        file_bytes = download_from_b2(FILE_KEY)
+        logger.info("Downloaded %d bytes", len(file_bytes))
+
+        text, quality = extract_text(file_bytes, MIME_TYPE)
+        save_text(sb, text, quality)
+        logger.info("Extracted text, quality=%.2f, chars=%d", quality, len(text))
+
+        if not questions_exist(sb):
+            questions = process_questions(text, COURSE_NAME, INSTITUTION)
+            insert_questions(sb, questions)
+            logger.info("Inserted %d questions", len(questions))
+        else:
+            logger.info("Questions already exist, skipping")
+
+        mark_ready(sb)
+        logger.info("Done — record %s is ready", RECORD_ID)
+
+    except Exception as e:
+        logger.exception("Worker failed")
+        mark_failed(sb, str(e))
+        sys.exit(1)
+
+
+def run_section_mode():
+    sb = _supabase()
+    mark_section_extracting(sb)
+    logger.info("Processing section %s (pages %d–%d)", SECTION_ID, START_PAGE, END_PAGE)
+
+    try:
+        file_bytes = download_from_b2(FILE_KEY)
+        logger.info("Downloaded %d bytes", len(file_bytes))
+
+        if MIME_TYPE == "application/pdf" and START_PAGE > 0 and END_PAGE >= START_PAGE:
+            sliced = slice_pdf(file_bytes, START_PAGE, END_PAGE)
+            logger.info("Sliced PDF: %d bytes", len(sliced))
+        else:
+            sliced = file_bytes
+
+        text, quality = extract_text(sliced, MIME_TYPE)
+        save_section_text(sb, text, quality)
+        logger.info("Extracted text, quality=%.2f, chars=%d", quality, len(text))
+
+        if not section_questions_exist(sb):
+            questions = process_questions(text, COURSE_NAME, INSTITUTION)
+
+            # Create past_questions record so admin panel sees this section
+            pq_id = create_past_questions_record(sb, text, quality)
+
+            insert_section_questions(sb, questions, pq_id)
+            logger.info("Inserted %d questions for section %s", len(questions), SECTION_ID)
+        else:
+            logger.info("Questions already exist for section, skipping")
+
+        mark_section_ready(sb)
+        logger.info("Done — section %s is ready", SECTION_ID)
+
+    except Exception as e:
+        logger.exception("Section worker failed")
+        mark_section_failed(sb, str(e))
+        sys.exit(1)
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    logger.info("Mode: %s", MODE)
+    if MODE == "section":
+        run_section_mode()
     else:
-        for col in ("option_a", "option_b", "option_c", "option_d", "correct_answer"):
-            data[col] = None
-    if data:
-        data["edited_by_admin"] = True
-        if verified is None:
-            verified = False
-    if verified is True:
-        data.update({"is_verified": True, "verified_by": admin_id, "verified_at": _now_iso()})
-    elif verified is False:
-        data.update({"is_verified": False, "verified_by": None, "verified_at": None})
-    if not data:
-        return existing
+        run_single_mode()
 
-    result = (
-        supabase.table("questions")
-        .update(data)
-        .eq("id", item_id)
-        .eq("past_question_id", question_id)
-        .execute()
-    )
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Question not found.")
-    return result.data[0]
-
-
-@router.post("/{question_id}/retry", summary="Admin: retry processing a failed paper")
-async def retry_question_processing(
-    question_id: str,
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    row = (
-        supabase.table("past_questions")
-        .select("id, processing_status")
-        .eq("id", question_id)
-        .maybe_single()
-        .execute()
-    )
-    if not row.data:
-        raise HTTPException(status_code=404, detail="Question not found.")
-
-    await run_in_threadpool(reset_for_retry, question_id)
-    return {"ok": True, "message": "Paper queued for reprocessing."}
-
-
-@router.delete("/{question_id}/items/{item_id}")
-async def delete_question_item(
-    question_id: str,
-    item_id: str,
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    _check_uuid(item_id, "item id")
-    result = (
-        supabase.table("questions")
-        .delete()
-        .eq("id", item_id)
-        .eq("past_question_id", question_id)
-        .execute()
-    )
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Question not found.")
-    return {"deleted": True}
-
-
-@router.post("/{question_id}/verify-all")
-async def verify_all_items(
-    question_id: str,
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    result = (
-        supabase.table("questions")
-        .update({"is_verified": True, "verified_by": admin_id, "verified_at": _now_iso()})
-        .eq("past_question_id", question_id)
-        .execute()
-    )
-    return {"verified": len(result.data or [])}
-
-
-@router.delete("/{question_id}")
-async def delete_question(
-    question_id: str,
-    admin_id: str = Depends(get_current_admin),
-):
-    _check_uuid(question_id, "question id")
-    existing = (
-        supabase.table("past_questions")
-        .select("id, file_url")
-        .eq("id", question_id)
-        .maybe_single()
-        .execute()
-    )
-    if not existing.data:
-        raise HTTPException(status_code=404, detail="Question not found.")
-    file_key = _to_key(existing.data.get("file_url", ""))
-    result = supabase.table("past_questions").delete().eq("id", question_id).execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Question not found.")
-    if file_key:
-        delete_file(file_key)
-    return {"deleted": True}
+if __name__ == "__main__":
+    main()
