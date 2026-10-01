@@ -310,13 +310,13 @@ def process_questions(text: str, course_name: str, institution: str) -> list[dic
         raise RuntimeError("No valid questions parsed")
     return result
 
-# ── Supabase helpers — shared columns ────────────────────────────────────────
+# ── Shared question columns ───────────────────────────────────────────────────
 
 QUESTION_COLUMNS = (
-    "question_number","question_text","question_type",
-    "option_a","option_b","option_c","option_d",
-    "correct_answer","model_answer","explanation",
-    "topic_tag","difficulty","marks",
+    "question_number", "question_text", "question_type",
+    "option_a", "option_b", "option_c", "option_d",
+    "correct_answer", "model_answer", "explanation",
+    "topic_tag", "difficulty", "marks",
 )
 
 # ── Supabase helpers — single mode ────────────────────────────────────────────
@@ -346,12 +346,27 @@ def mark_failed(sb: Client, error: str):
     }).eq("id", RECORD_ID).execute()
 
 def questions_exist(sb: Client) -> bool:
-    res = sb.table("questions").select("id").eq("past_question_id", RECORD_ID).limit(1).execute()
+    res = (
+        sb.table("questions")
+        .select("id")
+        .eq("past_question_id", RECORD_ID)
+        .limit(1)
+        .execute()
+    )
     return bool(res and res.data)
 
 def insert_questions(sb: Client, questions: list[dict]):
+    """Insert questions for single (past_questions) mode."""
     rows = [
-        {**{col: q.get(col) for col in QUESTION_COLUMNS}, "past_question_id": RECORD_ID}
+        {
+            **{col: q.get(col) for col in QUESTION_COLUMNS},
+            "past_question_id": RECORD_ID,
+            "section_id":       None,
+            "course_id":        None,   # single mode doesn't pass COURSE_ID; set via FK if needed
+            "ai_processed":     True,
+            "is_verified":      False,
+            "edited_by_admin":  False,
+        }
         for q in questions
     ]
     sb.table("questions").insert(rows).execute()
@@ -382,15 +397,26 @@ def mark_section_failed(sb: Client, error: str):
     }).eq("id", SECTION_ID).execute()
 
 def section_questions_exist(sb: Client) -> bool:
-    res = sb.table("questions").select("id").eq("section_id", SECTION_ID).limit(1).execute()
+    res = (
+        sb.table("questions")
+        .select("id")
+        .eq("section_id", SECTION_ID)
+        .limit(1)
+        .execute()
+    )
     return bool(res and res.data)
 
 def insert_section_questions(sb: Client, questions: list[dict]):
+    """Insert questions for section (multi-course PDF) mode."""
     rows = [
         {
             **{col: q.get(col) for col in QUESTION_COLUMNS},
-            "section_id": SECTION_ID,
-            "course_id":  COURSE_ID,
+            "past_question_id": None,       # section questions have no past_question_id
+            "section_id":       SECTION_ID,
+            "course_id":        COURSE_ID,
+            "ai_processed":     True,
+            "is_verified":      False,
+            "edited_by_admin":  False,
         }
         for q in questions
     ]
@@ -449,7 +475,7 @@ def run_section_mode():
         save_section_text(sb, text, quality)
         logger.info("Extracted text, quality=%.2f, chars=%d", quality, len(text))
 
-        # 4. Process questions
+        # 4. Process and insert questions
         if not section_questions_exist(sb):
             questions = process_questions(text, COURSE_NAME, INSTITUTION)
             insert_section_questions(sb, questions)
