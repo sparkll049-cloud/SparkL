@@ -30,6 +30,7 @@ const navGroups = [
     label: "Moderation",
     items: [
       { href: "/admin/questions", label: "Past Questions", icon: FileText },
+      { href: "/admin/source-documents", label: "Multi-Course Docs", icon: Layers },
       { href: "/admin/users", label: "Users", icon: Users },
     ],
   },
