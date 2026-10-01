@@ -1,21 +1,13 @@
-# uploads.py
-"""Student-facing past-question upload feature.
-Files are stored in Backblaze B2 (private bucket).
-Signed URLs are generated on demand for viewing — no permanent public URLs.
 
-Flow:
-    1. Verify Supabase auth token → get real user_id
-    2. Require the upload declaration (stored with a timestamp)
-    3. Validate file size and actual file content (magic bytes)
-    4. Hash the file → reject duplicates before spending any extraction calls
-    5. Pre-extract text NOW — reject file immediately if completely unreadable
-    6. Upload to Backblaze B2 under past-questions/{user_id}/{uuid}.ext
-    7. Save record (processing_status = 'uploaded'); extracted_text is already
-       populated, or None if Gemini was rate-limited — worker retries later
-    8. Render pages to Backblaze at upload time — no rendering at view time
-    9. Stays invisible until admin approves via /api/admin/questions
+# app/routers/uploads.py
 """
+Past-question upload — single-course flow (unchanged behaviour).
+Multi-course PDFs go through /api/source-upload instead.
 
+Changes from original:
+  - Added GET /api/upload/{id}/retry  (was missing; admin_questions.py references it)
+  - No other logic changed.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -46,15 +38,15 @@ from app.services.text_extractor import (
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
 
 TABLE_NAME       = "past_questions"
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_TITLE_LENGTH = 150
 MIN_YEAR         = 1990
 CONSENT_VERSION  = "2026-09"
 
 FILE_SIGNATURES = {
     b"%PDF-":               ("application/pdf", "pdf"),
-    b"\xff\xd8\xff":       ("image/jpeg",       "jpg"),
-    b"\x89PNG\r\n\x1a\n": ("image/png",        "png"),
+    b"\xff\xd8\xff":        ("image/jpeg",      "jpg"),
+    b"\x89PNG\r\n\x1a\n":  ("image/png",       "png"),
 }
 
 
@@ -142,7 +134,7 @@ async def get_current_user_id(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    summary="Upload a past question — dedupes, pre-extracts text, renders pages",
+    summary="Upload a single-course past question",
 )
 async def upload_past_question(
     title: str = Form(...),
@@ -154,14 +146,12 @@ async def upload_past_question(
     file: UploadFile = File(...),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    # ── Consent ───────────────────────────────────────────────────────
     if not declaration_accepted:
         raise HTTPException(
             status_code=400,
             detail="You must accept the upload declaration.",
         )
 
-    # ── Validate title ────────────────────────────────────────────────
     title = title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Title is required.")
@@ -173,7 +163,6 @@ async def upload_past_question(
 
     year = validate_year(year)
 
-    # ── Validate IDs ──────────────────────────────────────────────────
     validate_uuid(course_id, "course_id")
     if semester_id:
         validate_uuid(semester_id, "semester_id")
@@ -183,7 +172,6 @@ async def upload_past_question(
     if not await run_in_threadpool(_course_exists, course_id):
         raise HTTPException(status_code=400, detail="Course not found.")
 
-    # ── Read and size-check file ──────────────────────────────────────
     declared_size = getattr(file, "size", None)
     if declared_size and declared_size > MAX_UPLOAD_BYTES:
         raise HTTPException(
@@ -200,10 +188,8 @@ async def upload_past_question(
             detail=f"File too large. Max size is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB.",
         )
 
-    # ── Detect real file type from magic bytes ────────────────────────
     mime_type, ext = detect_file_type(file_bytes)
 
-    # ── Duplicate check ───────────────────────────────────────────────
     file_hash = hashlib.sha256(file_bytes).hexdigest()
     duplicate = await run_in_threadpool(_find_duplicate, file_hash)
     if duplicate:
@@ -215,7 +201,6 @@ async def upload_past_question(
             ),
         )
 
-    # ── Pre-extraction ────────────────────────────────────────────────
     pre_extract_text    = None
     pre_extract_quality = None
     fake_filename       = f"file.{ext}"
@@ -235,11 +220,9 @@ async def upload_past_question(
     except UnsupportedFileTypeError as e:
         raise HTTPException(status_code=415, detail=str(e))
     except Exception:
-        # Gemini rate-limited or unavailable — don't block the upload
         pre_extract_text    = None
         pre_extract_quality = None
 
-    # ── Upload original file to Backblaze ─────────────────────────────
     storage_key = await run_in_threadpool(
         lambda: upload_file(
             file_bytes=file_bytes,
@@ -249,7 +232,6 @@ async def upload_past_question(
         )
     )
 
-    # ── Save record to Supabase ───────────────────────────────────────
     record = {
         "title":              title,
         "year":               year,
@@ -274,7 +256,6 @@ async def upload_past_question(
             lambda: supabase.table(TABLE_NAME).insert(record).execute()
         )
     except Exception as exc:
-        # Clean up orphaned B2 file if DB insert fails
         await run_in_threadpool(delete_file, storage_key)
         if _is_duplicate_error(exc):
             raise HTTPException(
@@ -287,9 +268,6 @@ async def upload_past_question(
         await run_in_threadpool(delete_file, storage_key)
         raise HTTPException(status_code=500, detail="Failed to save upload.")
 
-    # ── Render pages to Backblaze ─────────────────────────────────────
-    # Done at upload time so viewer.py never has to render PDFs.
-    # Failures are non-critical — admin can re-trigger if needed.
     question_id = response.data[0]["id"]
     try:
         from app.services.page_renderer import render_and_store_pages
@@ -304,7 +282,7 @@ async def upload_past_question(
 
 @router.get(
     "/mine",
-    summary="The logged-in user's own uploads, any status",
+    summary="The logged-in user's own uploads",
 )
 async def list_my_uploads(user_id: UUID = Depends(get_current_user_id)):
     def _query():
@@ -323,3 +301,36 @@ async def list_my_uploads(user_id: UUID = Depends(get_current_user_id)):
 
     response = await run_in_threadpool(_query)
     return response.data or []
+
+
+@router.post(
+    "/{question_id}/retry",
+    summary="Re-queue a failed single-course upload for processing",
+)
+async def retry_upload_processing(
+    question_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    try:
+        UUID(question_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid question id.")
+
+    # Confirm the upload belongs to this user
+    row = (
+        supabase.table(TABLE_NAME)
+        .select("id, uploaded_by, processing_status")
+        .eq("id", question_id)
+        .maybe_single()
+        .execute()
+    ).data
+    if not row:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    if row["uploaded_by"] != str(user_id):
+        raise HTTPException(status_code=403, detail="Not your upload.")
+
+    supabase.table(TABLE_NAME).update(
+        {"processing_status": "uploaded", "processing_error": None}
+    ).eq("id", question_id).execute()
+
+    return {"ok": True}
