@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Loader2, FileText, CheckCircle2, XCircle, ChevronDown,
   AlertCircle, Sparkles, Clock, BookOpen, Eye, Trash2,
@@ -401,10 +401,14 @@ export default function AdminSourceDocumentsPage() {
 
   const [docs,      setDocs]      = useState<SourceDoc[]>([]);
   const [loading,   setLoading]   = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error,     setError]     = useState("");
   const [expanded,  setExpanded]  = useState<Set<string>>(new Set());
   const [actioning, setActioning] = useState<string | null>(null);
-  const [token,     setToken]     = useState("");
+  // Keep token in a ref so it's always current regardless of render timing
+  const tokenRef = useRef("");
+  // Keep a stable string version for passing to child components
+  const [token, setToken] = useState("");
 
   // Reject section modal state
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
@@ -413,27 +417,44 @@ export default function AdminSourceDocumentsPage() {
   // Delete confirm state  — "doc:<id>" | "sec:<id>"
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
+  // Always fetch a fresh token from Supabase before any API call
+  async function getAuthToken(): Promise<string | null> {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) { router.push("/auth/login"); return null; }
+    tokenRef.current = session.access_token;
+    setToken(session.access_token);
+    return session.access_token;
+  }
+
   useEffect(() => {
     async function load() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { router.push("/auth/login"); return; }
-      setToken(session.access_token);
-      await fetchDocs(session.access_token);
+      const tok = await getAuthToken();
+      if (!tok) return;
+      await fetchDocs(tok);
       setLoading(false);
     }
     load();
   }, []);
 
-  async function fetchDocs(tok: string) {
+  async function fetchDocs(tok?: string) {
+    const authTok = tok ?? await getAuthToken();
+    if (!authTok) return;
     try {
       const res = await fetch(`${API}/api/admin/source-documents`, {
-        headers: { Authorization: `Bearer ${tok}` },
+        headers: { Authorization: `Bearer ${authTok}` },
       });
-      if (!res.ok) throw new Error("Failed to load source documents.");
+      if (!res.ok) throw new Error(`Failed to load source documents. (${res.status})`);
       setDocs(await res.json());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     }
+  }
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    setError("");
+    await fetchDocs();
+    setRefreshing(false);
   }
 
   async function toggleExpand(docId: string) {
@@ -442,8 +463,10 @@ export default function AdminSourceDocumentsPage() {
     const doc = docs.find(d => d.id === docId);
     if (!doc?.sections) {
       try {
+        const tok = await getAuthToken();
+        if (!tok) return;
         const res = await fetch(`${API}/api/admin/source-documents/${docId}`, {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${tok}` },
         });
         if (res.ok) {
           const full = await res.json();
@@ -456,11 +479,12 @@ export default function AdminSourceDocumentsPage() {
   }
 
   async function approveDoc(docId: string) {
+    const tok = await getAuthToken(); if (!tok) return;
     setActioning(docId);
     try {
       await fetch(`${API}/api/admin/source-documents/${docId}/status`, {
         method:  "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
         body:    JSON.stringify({ status: "approved" }),
       });
       setDocs(prev => prev.map(d => d.id === docId ? { ...d, status: "approved" } : d));
@@ -470,11 +494,12 @@ export default function AdminSourceDocumentsPage() {
 
   // ── Delete document ─────────────────────────────────────────────────────────
   async function deleteDoc(docId: string) {
+    const tok = await getAuthToken(); if (!tok) return;
     setActioning(docId);
     try {
       const res = await fetch(`${API}/api/admin/source-documents/${docId}`, {
         method:  "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${tok}` },
       });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Delete failed.");
       setDocs(prev => prev.filter(d => d.id !== docId));
@@ -486,11 +511,12 @@ export default function AdminSourceDocumentsPage() {
 
   // ── Delete section ──────────────────────────────────────────────────────────
   async function deleteSection(sectionId: string) {
+    const tok = await getAuthToken(); if (!tok) return;
     setActioning(sectionId);
     try {
       const res = await fetch(`${API}/api/admin/sections/${sectionId}`, {
         method:  "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${tok}` },
       });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Delete failed.");
       setDocs(prev => prev.map(d => ({
@@ -506,11 +532,12 @@ export default function AdminSourceDocumentsPage() {
   }
 
   async function approveSection(sectionId: string) {
+    const tok = await getAuthToken(); if (!tok) return;
     setActioning(sectionId);
     try {
       await fetch(`${API}/api/admin/sections/${sectionId}/status`, {
         method:  "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
         body:    JSON.stringify({ status: "approved" }),
       });
       setDocs(prev => prev.map(d => ({
@@ -525,11 +552,12 @@ export default function AdminSourceDocumentsPage() {
 
   async function submitRejectSection() {
     if (!rejectTarget || !rejectReason.trim()) return;
+    const tok = await getAuthToken(); if (!tok) return;
     setActioning(rejectTarget);
     try {
       await fetch(`${API}/api/admin/sections/${rejectTarget}/status`, {
         method:  "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
         body:    JSON.stringify({ status: "rejected", reason: rejectReason.trim() }),
       });
       setDocs(prev => prev.map(d => ({
@@ -545,11 +573,12 @@ export default function AdminSourceDocumentsPage() {
   }
 
   async function processSection(sectionId: string) {
+    const tok = await getAuthToken(); if (!tok) return;
     setActioning(sectionId);
     try {
       const res = await fetch(`${API}/api/admin/sections/${sectionId}/process`, {
         method:  "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${tok}` },
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -592,11 +621,13 @@ export default function AdminSourceDocumentsPage() {
               </p>
             </div>
             <button
-              onClick={() => fetchDocs(token)}
-              className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] font-bold transition hover:opacity-80"
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] font-bold transition hover:opacity-80 disabled:opacity-60"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
             >
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              {refreshing ? "Refreshing…" : "Refresh"}
             </button>
           </div>
         </div>
