@@ -4,14 +4,31 @@ on:
   workflow_dispatch:
     inputs:
       record_id:
-        description: "past_question id to process"
-        required: true
+        description: "past_question id (single mode)"
+        required: false
+        default: ""
+      section_id:
+        description: "course_document_sections id (section mode)"
+        required: false
+        default: ""
       file_key:
         description: "B2 file key"
         required: true
       mime_type:
         description: "mime type"
         required: true
+      start_page:
+        description: "start page — section mode only"
+        required: false
+        default: ""
+      end_page:
+        description: "end page — section mode only"
+        required: false
+        default: ""
+      course_id:
+        description: "course id — section mode only"
+        required: false
+        default: ""
       course_name:
         description: "course name"
         required: false
@@ -39,18 +56,22 @@ jobs:
 
       - name: Run extraction
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
           GEMINI_VISION_MODEL: ${{ secrets.GEMINI_VISION_MODEL }}
-          GEMINI_TEXT_MODEL: ${{ secrets.GEMINI_TEXT_MODEL }}
-          B2_ENDPOINT: ${{ secrets.B2_ENDPOINT }}
-          B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
-          B2_APP_KEY: ${{ secrets.B2_APP_KEY }}
-          B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          GEMINI_TEXT_MODEL:   ${{ secrets.GEMINI_TEXT_MODEL }}
+          B2_ENDPOINT:         ${{ secrets.B2_ENDPOINT }}
+          B2_KEY_ID:           ${{ secrets.B2_KEY_ID }}
+          B2_APP_KEY:          ${{ secrets.B2_APP_KEY }}
+          B2_BUCKET_NAME:      ${{ secrets.B2_BUCKET_NAME }}
+          SUPABASE_URL:        ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          RECORD_ID: ${{ github.event.inputs.record_id }}
-          FILE_KEY: ${{ github.event.inputs.file_key }}
-          MIME_TYPE: ${{ github.event.inputs.mime_type }}
-          COURSE_NAME: ${{ github.event.inputs.course_name }}
-          INSTITUTION: ${{ github.event.inputs.institution }}
+          RECORD_ID:    ${{ github.event.inputs.record_id }}
+          SECTION_ID:   ${{ github.event.inputs.section_id }}
+          FILE_KEY:     ${{ github.event.inputs.file_key }}
+          MIME_TYPE:    ${{ github.event.inputs.mime_type }}
+          START_PAGE:   ${{ github.event.inputs.start_page }}
+          END_PAGE:     ${{ github.event.inputs.end_page }}
+          COURSE_ID:    ${{ github.event.inputs.course_id }}
+          COURSE_NAME:  ${{ github.event.inputs.course_name }}
+          INSTITUTION:  ${{ github.event.inputs.institution }}
         run: python scripts/github_worker.py
