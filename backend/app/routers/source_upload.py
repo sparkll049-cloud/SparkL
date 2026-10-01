@@ -38,6 +38,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.routers.uploads import get_current_user_id
+from app.admin_auth import get_current_admin
 from app.storage import download_bytes, upload_bytes, upload_file
 from app.supabase_client import supabase
 
