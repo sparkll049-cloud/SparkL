@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import (
     dashboard,
     admin_lookup,
-    study, 
+    study,
     admin_community,
     admin_questions,
     admin_users,
@@ -20,9 +20,6 @@ from app.routers import (
     questions,
     answers,
     community,
-    source_upload,
-    admin_sections,
-    section_questions,
 )
 
 
@@ -59,9 +56,6 @@ app.include_router(answers.router)
 app.include_router(community.router)
 app.include_router(payments_router)
 app.include_router(study.router)
-app.include_router(source_upload.router)
-app.include_router(admin_sections.router)
-app.include_router(section_questions.router)
 
 @app.get("/")
 def root():
