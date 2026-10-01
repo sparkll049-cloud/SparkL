@@ -1,20 +1,14 @@
-
 # app/routers/uploads.py
-"""
-Past-question upload — single-course flow (unchanged behaviour).
-Multi-course PDFs go through /api/source-upload instead.
-
-Changes from original:
-  - Added GET /api/upload/{id}/retry  (was missing; admin_questions.py references it)
-  - No other logic changed.
-"""
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
 from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
 
+import httpx
 from fastapi import (
     APIRouter,
     Depends,
@@ -29,19 +23,19 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.supabase_client import supabase
 from app.storage import upload_file, delete_file
-from app.services.text_extractor import (
-    extract_text,
-    EmptyExtractionError,
-    UnsupportedFileTypeError,
-)
 
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
+
+logger = logging.getLogger("uploads")
 
 TABLE_NAME       = "past_questions"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_TITLE_LENGTH = 150
 MIN_YEAR         = 1990
 CONSENT_VERSION  = "2026-09"
+
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO  = os.getenv("GITHUB_REPO", "sparkll049-cloud/SparkL.git")
 
 FILE_SIGNATURES = {
     b"%PDF-":               ("application/pdf", "pdf"),
@@ -113,6 +107,24 @@ def _course_exists(course_id: str) -> bool:
     return bool(res and res.data)
 
 
+def _load_course_context(course_id: str) -> tuple[str, str]:
+    try:
+        res = (
+            supabase.table("courses")
+            .select("name, department:departments(institution:institutions(name))")
+            .eq("id", course_id)
+            .limit(1)
+            .execute()
+        )
+        row = (res.data or [None])[0] or {}
+        course_name = row.get("name") or ""
+        dept = row.get("department") or {}
+        inst = dept.get("institution") or {}
+        return course_name, inst.get("name") or ""
+    except Exception:
+        return "", ""
+
+
 async def get_current_user_id(
     authorization: Optional[str] = Header(None),
 ) -> UUID:
@@ -127,6 +139,44 @@ async def get_current_user_id(
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired session.")
     return UUID(user.id)
+
+
+async def trigger_github_extraction(
+    record_id: str,
+    file_key: str,
+    mime_type: str,
+    course_name: str = "",
+    institution: str = "",
+):
+    if not GITHUB_TOKEN:
+        logger.warning("GITHUB_TOKEN not set — skipping GitHub trigger")
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(
+                f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/extract.yml/dispatches",
+                headers={
+                    "Authorization": f"Bearer {GITHUB_TOKEN}",
+                    "Accept": "application/vnd.github+json",
+                },
+                json={
+                    "ref": "main",
+                    "inputs": {
+                        "record_id":   record_id,
+                        "file_key":    file_key,
+                        "mime_type":   mime_type,
+                        "course_name": course_name,
+                        "institution": institution,
+                    },
+                },
+                timeout=10,
+            )
+            if res.status_code != 204:
+                logger.error("GitHub trigger failed: %s %s", res.status_code, res.text)
+            else:
+                logger.info("GitHub extraction triggered for %s", record_id)
+    except Exception as e:
+        logger.error("GitHub trigger error: %s", e)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -201,28 +251,6 @@ async def upload_past_question(
             ),
         )
 
-    pre_extract_text    = None
-    pre_extract_quality = None
-    fake_filename       = f"file.{ext}"
-
-    try:
-        pre_result          = await run_in_threadpool(extract_text, fake_filename, file_bytes)
-        pre_extract_text    = pre_result.text
-        pre_extract_quality = pre_result.quality
-    except EmptyExtractionError as e:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"We couldn't read text from your file: {str(e)} "
-                "Please upload a clearer scan or a text-based PDF."
-            ),
-        )
-    except UnsupportedFileTypeError as e:
-        raise HTTPException(status_code=415, detail=str(e))
-    except Exception:
-        pre_extract_text    = None
-        pre_extract_quality = None
-
     storage_key = await run_in_threadpool(
         lambda: upload_file(
             file_bytes=file_bytes,
@@ -244,8 +272,8 @@ async def upload_past_question(
         "file_hash":          file_hash,
         "mime_type":          mime_type,
         "file_size":          len(file_bytes),
-        "extracted_text":     pre_extract_text,
-        "extraction_quality": pre_extract_quality,
+        "extracted_text":     None,
+        "extraction_quality": None,
         "uploaded_by":        str(user_id),
         "consent_at":         datetime.now(timezone.utc).isoformat(),
         "consent_version":    CONSENT_VERSION,
@@ -268,16 +296,23 @@ async def upload_past_question(
         await run_in_threadpool(delete_file, storage_key)
         raise HTTPException(status_code=500, detail="Failed to save upload.")
 
-    question_id = response.data[0]["id"]
-    try:
-        from app.services.page_renderer import render_and_store_pages
-        await run_in_threadpool(
-            render_and_store_pages, question_id, file_bytes, mime_type
-        )
-    except Exception:
-        pass
+    inserted = response.data[0]
+    record_id = inserted["id"]
 
-    return response.data[0]
+    # Load course context for GitHub worker
+    course_name, institution = await run_in_threadpool(_load_course_context, course_id)
+
+    # Trigger GitHub Actions — fire and forget
+    import asyncio
+    asyncio.create_task(trigger_github_extraction(
+        record_id=record_id,
+        file_key=storage_key,
+        mime_type=mime_type,
+        course_name=course_name,
+        institution=institution,
+    ))
+
+    return inserted
 
 
 @router.get(
@@ -316,10 +351,9 @@ async def retry_upload_processing(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid question id.")
 
-    # Confirm the upload belongs to this user
     row = (
         supabase.table(TABLE_NAME)
-        .select("id, uploaded_by, processing_status")
+        .select("id, uploaded_by, processing_status, file_url, mime_type, course_id")
         .eq("id", question_id)
         .maybe_single()
         .execute()
@@ -332,5 +366,18 @@ async def retry_upload_processing(
     supabase.table(TABLE_NAME).update(
         {"processing_status": "uploaded", "processing_error": None}
     ).eq("id", question_id).execute()
+
+    # Re-trigger GitHub extraction
+    course_name, institution = await run_in_threadpool(
+        _load_course_context, row["course_id"]
+    )
+    import asyncio
+    asyncio.create_task(trigger_github_extraction(
+        record_id=question_id,
+        file_key=row["file_url"],
+        mime_type=row["mime_type"],
+        course_name=course_name,
+        institution=institution,
+    ))
 
     return {"ok": True}
