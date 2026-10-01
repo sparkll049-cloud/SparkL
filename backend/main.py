@@ -1,5 +1,4 @@
 import os
-import asyncio
 from contextlib import asynccontextmanager
 from app.routers.payments import router as payments_router
 
@@ -25,14 +24,11 @@ from app.routers import (
     admin_sections,
     section_questions,
 )
-from app.services.extraction_worker import run_extraction_worker
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(run_extraction_worker())
     yield
-    task.cancel()
 
 
 app = FastAPI(title="SparkL API", lifespan=lifespan)
