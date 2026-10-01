@@ -11,7 +11,6 @@ import {
   School,
   BookOpen,
   GraduationCap,
-  Layers,
   CalendarDays,
   LogOut,
   Menu,
@@ -30,7 +29,6 @@ const navGroups = [
     label: "Moderation",
     items: [
       { href: "/admin/questions", label: "Past Questions", icon: FileText },
-      { href: "/admin/source-documents", label: "Multi-Course Docs", icon: Layers },
       { href: "/admin/users", label: "Users", icon: Users },
     ],
   },
@@ -40,10 +38,8 @@ const navGroups = [
       { href: "/admin/institutions", label: "Institutions", icon: School },
       { href: "/admin/departments", label: "Departments", icon: BookOpen },
       { href: "/admin/courses", label: "Courses", icon: GraduationCap },
-      { href: "/admin/levels", label: "Levels", icon: Layers },
-      { href: "/admin/study-modes", label: "Study Modes", icon: Layers },
-      { href: "/admin/reports", label: "Reports", icon: ShieldCheck },
       { href: "/admin/semesters", label: "Semesters", icon: CalendarDays },
+      { href: "/admin/reports", label: "Reports", icon: ShieldCheck },
     ],
   },
 ];
