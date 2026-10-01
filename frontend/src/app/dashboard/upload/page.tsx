@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -8,6 +7,7 @@ import {
   Upload as UploadIcon, FileText, Loader2, CheckCircle2,
   XCircle, Clock, AlertCircle, CloudUpload, RotateCcw,
   ChevronRight, BookOpen, Plus, Trash2, ArrowLeft,
+  Grid, List,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
@@ -27,7 +27,7 @@ interface MyUpload {
 }
 
 interface SectionDraft {
-  id: string;          // local only, for React keys
+  id: string;
   course_id: string;
   start_page: string;
   end_page: string;
@@ -35,14 +35,15 @@ interface SectionDraft {
 
 type UploadMode = "single" | "multi";
 type Step       = "form" | "mapping" | "done";
+type MapMode    = "preview" | "manual";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const MAX_FILE_SIZE        = 20 * 1024 * 1024;
-const ALLOWED_TYPES        = ["application/pdf", "image/jpeg", "image/png"];
-const MIN_YEAR             = 1990;
-const LOW_QUALITY          = 0.5;
-const POLL_MS              = 10_000;
+const MAX_FILE_SIZE = 20 * 1024 * 1024;
+const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png"];
+const MIN_YEAR      = 1990;
+const LOW_QUALITY   = 0.5;
+const POLL_MS       = 10_000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -147,7 +148,74 @@ function ProcessingRow({ status, retrying, onRetry }: {
   );
 }
 
-// ── Page mapping UI ───────────────────────────────────────────────────────────
+// ── Page Thumbnail ────────────────────────────────────────────────────────────
+
+function PageThumb({
+  sourceId, pageNum, token, apiBase,
+  isStart, isEnd, isInRange, isSelected,
+  onClick,
+}: {
+  sourceId: string; pageNum: number; token: string; apiBase: string;
+  isStart: boolean; isEnd: boolean; isInRange: boolean; isSelected: boolean;
+  onClick: () => void;
+}) {
+  const [url,     setUrl]     = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      try {
+        const res = await fetch(`${apiBase}/api/source-upload/${sourceId}/page/${pageNum}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok && alive) {
+          const blob = await res.blob();
+          setUrl(URL.createObjectURL(blob));
+        }
+      } catch { /* non-critical */ }
+      finally { if (alive) setLoading(false); }
+    }
+    load();
+    return () => { alive = false; };
+  }, [sourceId, pageNum, token, apiBase]);
+
+  let ring = "";
+  if (isStart)   ring = "ring-2 ring-blue-500";
+  else if (isEnd) ring = "ring-2 ring-emerald-500";
+  else if (isInRange) ring = "ring-2 ring-blue-400/40";
+
+  return (
+    <button
+      onClick={onClick}
+      className={`relative flex flex-col items-center gap-1 rounded-xl border p-1 transition-all ${ring} ${
+        isSelected ? "border-blue-500 bg-blue-500/10" : "hover:border-blue-400/40"
+      }`}
+      style={{ borderColor: isSelected ? undefined : "var(--sp-border)" }}
+    >
+      <div className="relative w-full aspect-[3/4] rounded-lg overflow-hidden bg-white/5 flex items-center justify-center">
+        {loading
+          ? <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
+          : url
+            ? <img src={url} alt={`Page ${pageNum}`} className="w-full h-full object-cover" />
+            : <FileText className="h-4 w-4 text-slate-500" />
+        }
+        {isStart && (
+          <span className="absolute top-1 left-1 rounded-md bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold text-white">START</span>
+        )}
+        {isEnd && (
+          <span className="absolute top-1 right-1 rounded-md bg-emerald-500 px-1.5 py-0.5 text-[9px] font-bold text-white">END</span>
+        )}
+        {isInRange && !isStart && !isEnd && (
+          <div className="absolute inset-0 bg-blue-500/10" />
+        )}
+      </div>
+      <span className="text-[10px] font-medium" style={{ color: "var(--sp-text-3)" }}>{pageNum}</span>
+    </button>
+  );
+}
+
+// ── Mapping Step ──────────────────────────────────────────────────────────────
 
 function MappingStep({
   sourceId, pageCount, courses, token,
@@ -156,44 +224,60 @@ function MappingStep({
   sourceId: string; pageCount: number; courses: Option[]; token: string;
   onBack: () => void; onDone: () => void;
 }) {
-  const [sections, setSections] = useState<SectionDraft[]>([
+  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
+
+  const [mapMode,   setMapMode]   = useState<MapMode>("preview");
+  const [sections,  setSections]  = useState<SectionDraft[]>([
     { id: uid(), course_id: "", start_page: "1", end_page: "" },
   ]);
-  const [thumbPage, setThumbPage] = useState<number | null>(null);
-  const [thumbUrl,  setThumbUrl]  = useState<string | null>(null);
-  const [thumbLoading, setThumbLoading] = useState(false);
-  const [saving,  setSaving]  = useState(false);
-  const [errors,  setErrors]  = useState<string[]>([]);
-  const [warnings,setWarnings]= useState<string[]>([]);
-  const apiBase = process.env.NEXT_PUBLIC_API_URL;
+  const [saving,   setSaving]   = useState(false);
+  const [errors,   setErrors]   = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
 
-  // Load page thumbnail when user clicks a page number input
-  async function loadThumb(page: number) {
-    if (page < 1 || page > pageCount) return;
-    setThumbPage(page);
-    setThumbLoading(true);
-    try {
-      const res = await fetch(`${apiBase}/api/source-upload/${sourceId}/page/${page}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const blob = await res.blob();
-        setThumbUrl(URL.createObjectURL(blob));
-      }
-    } catch { /* non-critical */ }
-    finally { setThumbLoading(false); }
-  }
+  // Preview mode state
+  const [activeSectionId, setActiveSectionId] = useState<string>(sections[0].id);
+  const [pickMode, setPickMode] = useState<"start" | "end">("start");
+
+  const inputCls = "w-full rounded-xl border px-3 py-2 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20";
+  const inputSt  = { background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" };
 
   function addSection() {
-    setSections(prev => [...prev, { id: uid(), course_id: "", start_page: "", end_page: "" }]);
+    const newSec = { id: uid(), course_id: "", start_page: "", end_page: "" };
+    setSections(prev => [...prev, newSec]);
+    setActiveSectionId(newSec.id);
+    setPickMode("start");
   }
 
   function removeSection(id: string) {
-    setSections(prev => prev.filter(s => s.id !== id));
+    setSections(prev => {
+      const next = prev.filter(s => s.id !== id);
+      if (activeSectionId === id && next.length > 0) setActiveSectionId(next[0].id);
+      return next;
+    });
   }
 
   function updateSection(id: string, field: keyof SectionDraft, value: string) {
     setSections(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
+  }
+
+  // Preview mode: tap a page thumbnail
+  function handlePageClick(pageNum: number) {
+    const active = sections.find(s => s.id === activeSectionId);
+    if (!active) return;
+    if (pickMode === "start") {
+      updateSection(activeSectionId, "start_page", String(pageNum));
+      setPickMode("end");
+    } else {
+      updateSection(activeSectionId, "end_page", String(pageNum));
+      setPickMode("start");
+    }
+  }
+
+  function isPageInRange(pageNum: number, sec: SectionDraft) {
+    const s = parseInt(sec.start_page);
+    const e = parseInt(sec.end_page);
+    if (isNaN(s) || isNaN(e)) return false;
+    return pageNum >= s && pageNum <= e;
   }
 
   async function saveMapping() {
@@ -212,22 +296,15 @@ function MappingStep({
         body:    JSON.stringify(payload),
       });
       const body = await res.json();
-      if (!res.ok) {
-        setErrors([body?.detail ?? "Failed to save mapping."]);
-        return;
-      }
-      if (!body.saved) {
-        setErrors(body.errors ?? []);
-        setWarnings(body.warnings ?? []);
-        return;
-      }
+      if (!res.ok) { setErrors([body?.detail ?? "Failed to save mapping."]); return; }
+      if (!body.saved) { setErrors(body.errors ?? []); setWarnings(body.warnings ?? []); return; }
       setWarnings(body.warnings ?? []);
 
-      // Trigger extraction
-      await fetch(`${apiBase}/api/source-upload/${sourceId}/extract`, {
-        method:  "POST",
+      // Fire and forget extraction — don't await so user isn't waiting
+      fetch(`${apiBase}/api/source-upload/${sourceId}/extract`, {
+        method: "POST",
         headers: { Authorization: `Bearer ${token}` },
-      });
+      }).catch(() => {});
 
       onDone();
     } catch (e) {
@@ -237,11 +314,11 @@ function MappingStep({
     }
   }
 
-  const inputCls = "w-full rounded-xl border px-3 py-2 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20";
-  const inputSt  = { background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" };
+  const activeSection = sections.find(s => s.id === activeSectionId);
+  const canSave = sections.every(s => s.course_id && s.start_page && s.end_page);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
 
       {/* Header */}
       <div className="flex items-center gap-3">
@@ -252,95 +329,189 @@ function MappingStep({
         <div>
           <h2 className="text-lg font-bold" style={{ color: "var(--sp-text)" }}>Map pages to courses</h2>
           <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
-            This PDF has {pageCount} pages. Assign each page range to its course.
+            {pageCount} pages — assign each page range to its course.
           </p>
         </div>
       </div>
 
-      {/* Thumbnail preview */}
-      {thumbPage && (
-        <div
-          className="rounded-2xl border p-4 flex flex-col items-center gap-3"
-          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+      {/* Mode toggle */}
+      <div className="flex items-center gap-2 rounded-xl border p-1"
+        style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}>
+        <button
+          onClick={() => setMapMode("preview")}
+          className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-semibold transition ${
+            mapMode === "preview" ? "bg-blue-600 text-white" : ""
+          }`}
+          style={mapMode !== "preview" ? { color: "var(--sp-text-3)" } : {}}
         >
-          <p className="text-xs font-semibold" style={{ color: "var(--sp-text-3)" }}>
-            Page {thumbPage} preview
-          </p>
-          {thumbLoading
-            ? <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
-            : thumbUrl
-              ? <img src={thumbUrl} alt={`Page ${thumbPage}`} className="max-h-80 w-auto rounded-lg object-contain shadow-lg" />
-              : <p className="text-xs text-red-400">Couldn&apos;t load preview.</p>
-          }
+          <Grid className="h-3.5 w-3.5" /> Preview pages
+        </button>
+        <button
+          onClick={() => setMapMode("manual")}
+          className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-semibold transition ${
+            mapMode === "manual" ? "bg-blue-600 text-white" : ""
+          }`}
+          style={mapMode !== "manual" ? { color: "var(--sp-text-3)" } : {}}
+        >
+          <List className="h-3.5 w-3.5" /> Enter manually
+        </button>
+      </div>
+
+      {/* ── PREVIEW MODE ── */}
+      {mapMode === "preview" && (
+        <div className="space-y-4">
+
+          {/* Course tabs */}
+          <div className="flex flex-wrap gap-2">
+            {sections.map((sec, i) => (
+              <button
+                key={sec.id}
+                onClick={() => { setActiveSectionId(sec.id); setPickMode("start"); }}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                  activeSectionId === sec.id
+                    ? "border-blue-500 bg-blue-500/10 text-blue-400"
+                    : ""
+                }`}
+                style={activeSectionId !== sec.id ? { borderColor: "var(--sp-border)", color: "var(--sp-text-3)" } : {}}
+              >
+                {sec.course_id
+                  ? courses.find(c => c.id === sec.course_id)?.name ?? `Course ${i + 1}`
+                  : `Course ${i + 1}`
+                }
+                {sec.start_page && sec.end_page && (
+                  <span className="ml-1.5 opacity-60">p{sec.start_page}–{sec.end_page}</span>
+                )}
+              </button>
+            ))}
+            <button onClick={addSection}
+              className="flex items-center gap-1 rounded-full border border-dashed px-3 py-1.5 text-xs font-semibold text-blue-400 transition hover:bg-blue-500/5"
+              style={{ borderColor: "var(--sp-border)" }}>
+              <Plus className="h-3 w-3" /> Add course
+            </button>
+          </div>
+
+          {/* Active section config */}
+          {activeSection && (
+            <div className="rounded-xl border p-4 space-y-3"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
+                  {courses.find(c => c.id === activeSection.course_id)?.name ?? "Select course below"}
+                </p>
+                {sections.length > 1 && (
+                  <button onClick={() => removeSection(activeSection.id)} className="text-red-400 hover:text-red-300">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+
+              <SelectField
+                label="Course" value={activeSection.course_id}
+                onChange={(v) => updateSection(activeSection.id, "course_id", v)}
+                placeholder="Select a course" options={courses} required
+              />
+
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs"
+                  style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}>
+                  Start: <span className="font-bold text-blue-400">{activeSection.start_page || "—"}</span>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs"
+                  style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}>
+                  End: <span className="font-bold text-emerald-400">{activeSection.end_page || "—"}</span>
+                </div>
+                <div className="ml-auto flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-[11px] font-semibold text-blue-400">
+                  Tap a page to set {pickMode === "start" ? "START" : "END"}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Page grid */}
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+            {Array.from({ length: pageCount }, (_, i) => i + 1).map(pageNum => {
+              const activeStart = parseInt(activeSection?.start_page ?? "");
+              const activeEnd   = parseInt(activeSection?.end_page ?? "");
+              const isStart     = activeSection ? parseInt(activeSection.start_page) === pageNum : false;
+              const isEnd       = activeSection ? parseInt(activeSection.end_page) === pageNum : false;
+              const isInRange   = !isNaN(activeStart) && !isNaN(activeEnd) && pageNum >= activeStart && pageNum <= activeEnd;
+
+              return (
+                <PageThumb
+                  key={pageNum}
+                  sourceId={sourceId}
+                  pageNum={pageNum}
+                  token={token}
+                  apiBase={apiBase}
+                  isStart={isStart}
+                  isEnd={isEnd}
+                  isInRange={isInRange}
+                  isSelected={false}
+                  onClick={() => handlePageClick(pageNum)}
+                />
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {/* Section rows */}
-      <div className="space-y-3">
-        {sections.map((sec, i) => (
-          <div
-            key={sec.id}
-            className="rounded-2xl border p-4 space-y-3"
-            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-          >
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold" style={{ color: "var(--sp-text-3)" }}>
-                Course {i + 1}
-              </p>
-              {sections.length > 1 && (
-                <button onClick={() => removeSection(sec.id)}
-                  className="text-red-400 hover:text-red-300 transition">
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-
-            {/* Course select */}
-            <SelectField
-              label="Course" value={sec.course_id}
-              onChange={(v) => updateSection(sec.id, "course_id", v)}
-              placeholder="Select a course" options={courses} required
-            />
-
-            {/* Page range */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-                  Start page <span className="text-blue-400">*</span>
-                </label>
-                <input
-                  type="number" min={1} max={pageCount}
-                  value={sec.start_page}
-                  onChange={(e) => updateSection(sec.id, "start_page", e.target.value)}
-                  onBlur={() => sec.start_page && loadThumb(+sec.start_page)}
-                  placeholder="e.g. 1"
-                  className={inputCls} style={inputSt}
-                />
+      {/* ── MANUAL MODE ── */}
+      {mapMode === "manual" && (
+        <div className="space-y-3">
+          {sections.map((sec, i) => (
+            <div key={sec.id} className="rounded-2xl border p-4 space-y-3"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold" style={{ color: "var(--sp-text-3)" }}>Course {i + 1}</p>
+                {sections.length > 1 && (
+                  <button onClick={() => removeSection(sec.id)} className="text-red-400 hover:text-red-300 transition">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-                  End page <span className="text-blue-400">*</span>
-                </label>
-                <input
-                  type="number" min={1} max={pageCount}
-                  value={sec.end_page}
-                  onChange={(e) => updateSection(sec.id, "end_page", e.target.value)}
-                  onBlur={() => sec.end_page && loadThumb(+sec.end_page)}
-                  placeholder={`e.g. ${pageCount}`}
-                  className={inputCls} style={inputSt}
-                />
+
+              <SelectField
+                label="Course" value={sec.course_id}
+                onChange={(v) => updateSection(sec.id, "course_id", v)}
+                placeholder="Select a course" options={courses} required
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
+                    Start page <span className="text-blue-400">*</span>
+                  </label>
+                  <input
+                    type="number" min={1} max={pageCount}
+                    value={sec.start_page}
+                    onChange={(e) => updateSection(sec.id, "start_page", e.target.value)}
+                    placeholder="e.g. 1"
+                    className={inputCls} style={inputSt}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
+                    End page <span className="text-blue-400">*</span>
+                  </label>
+                  <input
+                    type="number" min={1} max={pageCount}
+                    value={sec.end_page}
+                    onChange={(e) => updateSection(sec.id, "end_page", e.target.value)}
+                    placeholder={`e.g. ${pageCount}`}
+                    className={inputCls} style={inputSt}
+                  />
+                </div>
               </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
 
-      {/* Add course button */}
-      <button onClick={addSection}
-        className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed py-3 text-sm font-semibold text-blue-400 transition hover:bg-blue-500/5"
-        style={{ borderColor: "var(--sp-border)" }}>
-        <Plus className="h-4 w-4" /> Add another course
-      </button>
+          <button onClick={addSection}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed py-3 text-sm font-semibold text-blue-400 transition hover:bg-blue-500/5"
+            style={{ borderColor: "var(--sp-border)" }}>
+            <Plus className="h-4 w-4" /> Add another course
+          </button>
+        </div>
+      )}
 
       {/* Errors and warnings */}
       {errors.length > 0 && (
@@ -365,7 +536,7 @@ function MappingStep({
       {/* Save */}
       <button
         onClick={saveMapping}
-        disabled={saving || sections.some(s => !s.course_id || !s.start_page || !s.end_page)}
+        disabled={saving || !canSave}
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
       >
         {saving
@@ -384,7 +555,6 @@ export default function UploadPage() {
   const router   = useRouter();
   const fileRef  = useRef<HTMLInputElement>(null);
 
-  // Options
   const [institutions, setInstitutions] = useState<Option[]>([]);
   const [departments,  setDepartments]  = useState<Option[]>([]);
   const [levels,       setLevels]       = useState<Option[]>([]);
@@ -392,7 +562,6 @@ export default function UploadPage() {
   const [semesters,    setSemesters]    = useState<Option[]>([]);
   const [myUploads,    setMyUploads]    = useState<MyUpload[]>([]);
 
-  // Form fields
   const [title,         setTitle]         = useState("");
   const [year,          setYear]          = useState("");
   const [institutionId, setInstitutionId] = useState("");
@@ -401,23 +570,19 @@ export default function UploadPage() {
   const [courseId,      setCourseId]      = useState("");
   const [semesterId,    setSemesterId]    = useState("");
 
-  // File
-  const [file,          setFile]          = useState<File | null>(null);
-  const [compressedFile,setCompressedFile]= useState<File | null>(null);
-  const [compressing,   setCompressing]   = useState(false);
-  const [fileError,     setFileError]     = useState("");
-  const [dragOver,      setDragOver]      = useState(false);
+  const [file,           setFile]           = useState<File | null>(null);
+  const [compressedFile, setCompressedFile] = useState<File | null>(null);
+  const [compressing,    setCompressing]    = useState(false);
+  const [fileError,      setFileError]      = useState("");
+  const [dragOver,       setDragOver]       = useState(false);
 
-  // Mode
-  const [mode,   setMode]   = useState<UploadMode>("single");
-  const [step,   setStep]   = useState<Step>("form");
+  const [mode, setMode] = useState<UploadMode>("single");
+  const [step, setStep] = useState<Step>("form");
 
-  // Multi-course state (set after first upload)
-  const [sourceId,   setSourceId]   = useState<string | null>(null);
-  const [pageCount,  setPageCount]  = useState(0);
-  const [token,      setToken]      = useState("");
+  const [sourceId,  setSourceId]  = useState<string | null>(null);
+  const [pageCount, setPageCount] = useState(0);
+  const [token,     setToken]     = useState("");
 
-  // UI state
   const [declarationChecked, setDeclarationChecked] = useState(false);
   const [fetching,   setFetching]   = useState(true);
   const [loadingDep, setLoadingDep] = useState(false);
@@ -430,7 +595,6 @@ export default function UploadPage() {
   const currentYear = new Date().getFullYear();
   const apiBase     = process.env.NEXT_PUBLIC_API_URL;
 
-  // ── Initial load ──────────────────────────────────────────────────────────
   useEffect(() => {
     async function init() {
       const { data: { session } } = await supabase.auth.getSession();
@@ -466,7 +630,6 @@ export default function UploadPage() {
       .then(({ data }) => { setCourses(data ?? []); setLoadingCou(false); });
   }, [departmentId]);
 
-  // Poll while processing
   useEffect(() => {
     const active = myUploads.some(
       u => u.processing_status === "uploaded" || u.processing_status === "extracting"
@@ -534,7 +697,6 @@ export default function UploadPage() {
     else { setFile(null); setCompressedFile(null); }
   }
 
-  // ── Submit ────────────────────────────────────────────────────────────────
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setError(""); setSuccess(false);
     if (!compressedFile) { setError("Please choose a file."); return; }
@@ -550,9 +712,8 @@ export default function UploadPage() {
 
     try {
       if (mode === "single") {
-        // ── Single-course upload (existing flow) ──────────────────────────
         const fd = new FormData();
-        fd.append("title",                title);
+        fd.append("title", title);
         if (year)       fd.append("year",        year);
         fd.append("course_id",            courseId);
         if (semesterId) fd.append("semester_id", semesterId);
@@ -575,8 +736,6 @@ export default function UploadPage() {
         await loadMyUploads(session.access_token);
 
       } else {
-        // ── Multi-course upload ───────────────────────────────────────────
-        // Step 1: upload the PDF to get a source_document_id
         const fd = new FormData();
         fd.append("file", compressedFile);
 
@@ -628,19 +787,16 @@ export default function UploadPage() {
     isValidYear(year, currentYear) &&
     (mode === "single" ? !!courseId : true);
 
-  // ── Loading ───────────────────────────────────────────────────────────────
   if (fetching) return (
     <div className="flex min-h-[60vh] items-center justify-center" style={{ background: "var(--sp-bg)" }}>
       <Loader2 className="h-7 w-7 animate-spin text-blue-500" />
     </div>
   );
 
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen px-4 py-8 sm:px-6 lg:px-10 transition-colors" style={{ background: "var(--sp-bg)" }}>
       <div className="mx-auto max-w-2xl">
 
-        {/* Header */}
         <div className="mb-8">
           <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">Contribute</p>
           <h1 className="text-3xl font-extrabold" style={{ color: "var(--sp-text)" }}>Upload a past question</h1>
@@ -649,12 +805,9 @@ export default function UploadPage() {
           </p>
         </div>
 
-        {/* ── Mapping step ── */}
         {step === "mapping" && sourceId ? (
-          <div
-            className="rounded-2xl border p-6 transition-colors"
-            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-          >
+          <div className="rounded-2xl border p-6 transition-colors"
+            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
             <MappingStep
               sourceId={sourceId} pageCount={pageCount}
               courses={courses} token={token}
@@ -662,12 +815,10 @@ export default function UploadPage() {
               onDone={handleMappingDone}
             />
           </div>
+
         ) : step === "done" ? (
-          // ── Success screen ──
-          <div
-            className="rounded-2xl border p-8 text-center space-y-4 transition-colors"
-            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-          >
+          <div className="rounded-2xl border p-8 text-center space-y-4 transition-colors"
+            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
             <div className="flex justify-center">
               <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10">
                 <CheckCircle2 className="h-7 w-7 text-emerald-400" />
@@ -675,23 +826,20 @@ export default function UploadPage() {
             </div>
             <h2 className="text-lg font-bold" style={{ color: "var(--sp-text)" }}>Upload submitted!</h2>
             <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>
-              Your PDF has been mapped and text extraction is running.
+              Your PDF has been mapped and text extraction is running in the background.
               An admin will review it before it goes live.
             </p>
-            <button
-              onClick={() => setStep("form")}
-              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500"
-            >
+            <button onClick={() => setStep("form")}
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500">
               Upload another
             </button>
           </div>
+
         ) : (
-          // ── Upload form ──
-          <form
-            onSubmit={handleSubmit}
+          <form onSubmit={handleSubmit}
             className="rounded-2xl border p-6 space-y-5 transition-colors"
-            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-          >
+            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+
             {/* Mode toggle */}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
@@ -699,26 +847,20 @@ export default function UploadPage() {
               </label>
               <div className="grid grid-cols-2 gap-3">
                 {(["single", "multi"] as UploadMode[]).map((m) => (
-                  <button
-                    key={m} type="button"
-                    onClick={() => setMode(m)}
+                  <button key={m} type="button" onClick={() => setMode(m)}
                     className={`flex items-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition ${
-                      mode === m
-                        ? "border-blue-500 bg-blue-500/10 text-blue-400"
-                        : "text-slate-400 hover:bg-white/[0.04]"
+                      mode === m ? "border-blue-500 bg-blue-500/10 text-blue-400" : "text-slate-400 hover:bg-white/[0.04]"
                     }`}
-                    style={mode !== m ? { borderColor: "var(--sp-border)" } : {}}
-                  >
+                    style={mode !== m ? { borderColor: "var(--sp-border)" } : {}}>
                     {m === "single"
                       ? <><BookOpen className="h-4 w-4 shrink-0" /> One course</>
-                      : <><FileText className="h-4 w-4 shrink-0" /> Multiple courses</>
-                    }
+                      : <><FileText className="h-4 w-4 shrink-0" /> Multiple courses</>}
                   </button>
                 ))}
               </div>
               {mode === "multi" && (
                 <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>
-                  After uploading, you&apos;ll assign page ranges to each course.
+                  After uploading, you&apos;ll preview pages and assign each range to a course.
                 </p>
               )}
             </div>
@@ -728,12 +870,10 @@ export default function UploadPage() {
               <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
                 Title <span className="text-blue-400">*</span>
               </label>
-              <input
-                value={title} onChange={(e) => setTitle(e.target.value)} maxLength={150}
+              <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={150}
                 placeholder={mode === "multi" ? "e.g. 200 Level First Semester 2023" : "e.g. CSC 301 — First Semester 2023"}
                 className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }}
-              />
+                style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }} />
             </div>
 
             {/* Institution + Department */}
@@ -745,7 +885,7 @@ export default function UploadPage() {
                 placeholder={loadingDep ? "Loading…" : "Select department"} options={departments} />
             </div>
 
-            {/* Level + Course (course hidden for multi) */}
+            {/* Level + Course */}
             <div className={`grid gap-4 ${mode === "single" ? "grid-cols-2" : "grid-cols-1"}`}>
               <SelectField label="Level" value={levelId} onChange={setLevelId}
                 disabled={levels.length === 0} placeholder="Select level" options={levels} />
@@ -768,8 +908,7 @@ export default function UploadPage() {
                     onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
                     placeholder="e.g. 2023" inputMode="numeric" maxLength={4}
                     className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                    style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }}
-                  />
+                    style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }} />
                   {year && !isValidYear(year, currentYear) && (
                     <p className="text-xs text-red-400">Enter a year between {MIN_YEAR} and {currentYear + 1}.</p>
                   )}
@@ -791,8 +930,7 @@ export default function UploadPage() {
                   : file    ? "border-emerald-500/40 bg-emerald-500/5"
                   :           "hover:border-blue-500/40 hover:bg-blue-500/5"
                 }`}
-                style={!dragOver && !file ? { borderColor: "var(--sp-border)" } : {}}
-              >
+                style={!dragOver && !file ? { borderColor: "var(--sp-border)" } : {}}>
                 {compressing ? (
                   <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
                     <Loader2 className="h-5 w-5 animate-spin text-blue-400" /></div>
@@ -855,7 +993,6 @@ export default function UploadPage() {
               </label>
             </div>
 
-            {/* Errors */}
             {error && (
               <div className="flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
                 <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
@@ -865,19 +1002,16 @@ export default function UploadPage() {
             {success && (
               <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
                 <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-                <p className="text-sm text-emerald-400">
-                  Uploaded — pending admin review.
-                </p>
+                <p className="text-sm text-emerald-400">Uploaded — pending admin review.</p>
               </div>
             )}
 
-            {/* Submit */}
             <button type="submit" disabled={!formValid || submitting}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40">
               {submitting
                 ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</>
                 : mode === "multi"
-                  ? <><ChevronRight className="h-4 w-4" /> Upload &amp; set page mapping</>
+                  ? <><ChevronRight className="h-4 w-4" /> Upload &amp; preview pages</>
                   : <><UploadIcon className="h-4 w-4" /> Submit for review</>
               }
             </button>
