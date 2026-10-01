@@ -2,10 +2,6 @@
 scripts/github_worker.py
 Runs inside GitHub Actions. Downloads PDF from B2, extracts text,
 processes questions, updates Supabase. No FastAPI dependency.
-
-Two modes:
-  single  — processes one past_questions record  (RECORD_ID is set)
-  section — processes one course_document_sections record (SECTION_ID is set)
 """
 from __future__ import annotations
 
@@ -31,22 +27,11 @@ logger = logging.getLogger("github_worker")
 
 # ── Env ───────────────────────────────────────────────────────────────────────
 
-# Single mode
-RECORD_ID  = os.environ.get("RECORD_ID", "")
-
-# Section mode
-SECTION_ID = os.environ.get("SECTION_ID", "")
-START_PAGE = int(os.environ.get("START_PAGE", "0") or "0")
-END_PAGE   = int(os.environ.get("END_PAGE",   "0") or "0")
-COURSE_ID  = os.environ.get("COURSE_ID", "")
-
-# Shared
+RECORD_ID   = os.environ["RECORD_ID"]
 FILE_KEY    = os.environ["FILE_KEY"]
 MIME_TYPE   = os.environ["MIME_TYPE"]
 COURSE_NAME = os.environ.get("COURSE_NAME", "")
 INSTITUTION = os.environ.get("INSTITUTION", "")
-
-MODE = "section" if SECTION_ID else "single"
 
 GEMINI_API_KEY      = os.environ["GEMINI_API_KEY"]
 GEMINI_VISION_MODEL = os.environ.get("GEMINI_VISION_MODEL", "gemini-3.5-flash")
@@ -81,7 +66,6 @@ gemini = genai.Client(api_key=GEMINI_API_KEY)
 # ── Gemini retry helper ───────────────────────────────────────────────────────
 
 def generate_with_retry(primary_model, contents, config, attempts: int = 4):
-    """Exponential backoff on 429/5xx; falls back to FALLBACK_MODEL on 404."""
     models = [primary_model]
     if FALLBACK_MODEL and FALLBACK_MODEL != primary_model:
         models.append(FALLBACK_MODEL)
@@ -117,27 +101,6 @@ def download_from_b2(key: str) -> bytes:
     response = _b2().get_object(Bucket=B2_BUCKET, Key=key)
     return response["Body"].read()
 
-def get_signed_url(key: str, expires_in: int = 300) -> str:
-    return _b2().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": B2_BUCKET, "Key": key},
-        ExpiresIn=expires_in,
-    )
-
-# ── PDF slicing ───────────────────────────────────────────────────────────────
-
-def slice_pdf(file_bytes: bytes, start_page: int, end_page: int) -> bytes:
-    """Extract pages start_page..end_page (1-indexed, inclusive) into a new PDF."""
-    reader = PdfReader(io.BytesIO(file_bytes))
-    writer = PdfWriter()
-    total = len(reader.pages)
-    logger.info("Slicing pages %d–%d from %d total pages", start_page, end_page, total)
-    for page_num in range(start_page - 1, min(end_page, total)):
-        writer.add_page(reader.pages[page_num])
-    buf = io.BytesIO()
-    writer.write(buf)
-    return buf.getvalue()
-
 # ── Text extraction ───────────────────────────────────────────────────────────
 
 def _score_text(text: str) -> float:
@@ -158,7 +121,7 @@ def _strip_thinking(text: str) -> str:
 def _extract_pdf_native(file_bytes: bytes) -> str:
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
-        pages = [(p.extract_text() or "").strip() for p in reader.pages]
+        pages  = [(p.extract_text() or "").strip() for p in reader.pages]
         return "\n\n".join(p for p in pages if p).strip()
     except Exception as e:
         logger.warning("pypdf failed: %s", e)
@@ -181,7 +144,6 @@ def _gemini_vision(file_bytes: bytes, mime_type: str) -> str:
     return _strip_thinking((response.text or "").strip())
 
 def extract_text(file_bytes: bytes, mime_type: str) -> tuple[str, float]:
-    """Returns (text, quality_score)"""
     if mime_type == "application/pdf":
         native = _extract_pdf_native(file_bytes)
         score  = _score_text(native)
@@ -319,7 +281,7 @@ QUESTION_COLUMNS = (
     "topic_tag", "difficulty", "marks",
 )
 
-# ── Supabase helpers — single mode ────────────────────────────────────────────
+# ── Supabase helpers ──────────────────────────────────────────────────────────
 
 def mark_extracting(sb: Client):
     sb.table("past_questions").update({
@@ -356,13 +318,10 @@ def questions_exist(sb: Client) -> bool:
     return bool(res and res.data)
 
 def insert_questions(sb: Client, questions: list[dict]):
-    """Insert questions for single (past_questions) mode."""
     rows = [
         {
             **{col: q.get(col) for col in QUESTION_COLUMNS},
             "past_question_id": RECORD_ID,
-            "section_id":       None,
-            "course_id":        None,   # single mode doesn't pass COURSE_ID; set via FK if needed
             "ai_processed":     True,
             "is_verified":      False,
             "edited_by_admin":  False,
@@ -371,60 +330,9 @@ def insert_questions(sb: Client, questions: list[dict]):
     ]
     sb.table("questions").insert(rows).execute()
 
-# ── Supabase helpers — section mode ──────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 
-def mark_section_extracting(sb: Client):
-    sb.table("course_document_sections").update({
-        "processing_status": "extracting",
-    }).eq("id", SECTION_ID).execute()
-
-def save_section_text(sb: Client, text: str, quality: float):
-    sb.table("course_document_sections").update({
-        "extracted_text": text,
-        "extraction_quality": quality,
-    }).eq("id", SECTION_ID).execute()
-
-def mark_section_ready(sb: Client):
-    sb.table("course_document_sections").update({
-        "processing_status": "ready",
-        "processing_error": None,
-    }).eq("id", SECTION_ID).execute()
-
-def mark_section_failed(sb: Client, error: str):
-    sb.table("course_document_sections").update({
-        "processing_status": "failed",
-        "processing_error": error[:500],
-    }).eq("id", SECTION_ID).execute()
-
-def section_questions_exist(sb: Client) -> bool:
-    res = (
-        sb.table("questions")
-        .select("id")
-        .eq("section_id", SECTION_ID)
-        .limit(1)
-        .execute()
-    )
-    return bool(res and res.data)
-
-def insert_section_questions(sb: Client, questions: list[dict]):
-    """Insert questions for section (multi-course PDF) mode."""
-    rows = [
-        {
-            **{col: q.get(col) for col in QUESTION_COLUMNS},
-            "past_question_id": None,       # section questions have no past_question_id
-            "section_id":       SECTION_ID,
-            "course_id":        COURSE_ID,
-            "ai_processed":     True,
-            "is_verified":      False,
-            "edited_by_admin":  False,
-        }
-        for q in questions
-    ]
-    sb.table("questions").insert(rows).execute()
-
-# ── Mode runners ──────────────────────────────────────────────────────────────
-
-def run_single_mode():
+def main():
     sb = _supabase()
     mark_extracting(sb)
     logger.info("Processing record %s", RECORD_ID)
@@ -451,56 +359,6 @@ def run_single_mode():
         logger.exception("Worker failed")
         mark_failed(sb, str(e))
         sys.exit(1)
-
-
-def run_section_mode():
-    sb = _supabase()
-    mark_section_extracting(sb)
-    logger.info("Processing section %s (pages %d–%d)", SECTION_ID, START_PAGE, END_PAGE)
-
-    try:
-        # 1. Download full PDF from B2
-        file_bytes = download_from_b2(FILE_KEY)
-        logger.info("Downloaded %d bytes", len(file_bytes))
-
-        # 2. Slice to the section's page range (PDF only; images are single-page)
-        if MIME_TYPE == "application/pdf" and START_PAGE > 0 and END_PAGE >= START_PAGE:
-            sliced = slice_pdf(file_bytes, START_PAGE, END_PAGE)
-            logger.info("Sliced PDF: %d bytes", len(sliced))
-        else:
-            sliced = file_bytes
-
-        # 3. Extract text from the sliced PDF
-        text, quality = extract_text(sliced, MIME_TYPE)
-        save_section_text(sb, text, quality)
-        logger.info("Extracted text, quality=%.2f, chars=%d", quality, len(text))
-
-        # 4. Process and insert questions
-        if not section_questions_exist(sb):
-            questions = process_questions(text, COURSE_NAME, INSTITUTION)
-            insert_section_questions(sb, questions)
-            logger.info("Inserted %d questions for section %s", len(questions), SECTION_ID)
-        else:
-            logger.info("Questions already exist for section, skipping")
-
-        # 5. Mark section ready
-        mark_section_ready(sb)
-        logger.info("Done — section %s is ready", SECTION_ID)
-
-    except Exception as e:
-        logger.exception("Section worker failed")
-        mark_section_failed(sb, str(e))
-        sys.exit(1)
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
-def main():
-    logger.info("Mode: %s", MODE)
-    if MODE == "section":
-        run_section_mode()
-    else:
-        run_single_mode()
 
 if __name__ == "__main__":
     main()
