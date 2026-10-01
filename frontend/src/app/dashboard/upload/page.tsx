@@ -6,8 +6,7 @@ import Link from "next/link";
 import {
   Upload as UploadIcon, FileText, Loader2, CheckCircle2,
   XCircle, Clock, AlertCircle, CloudUpload, RotateCcw,
-  ChevronRight, BookOpen, Plus, Trash2, ArrowLeft,
-  Grid, List,
+  ChevronRight, BookOpen,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
@@ -26,17 +25,6 @@ interface MyUpload {
   semester: { name: string } | null;
 }
 
-interface SectionDraft {
-  id: string;
-  course_id: string;
-  start_page: string;
-  end_page: string;
-}
-
-type UploadMode = "single" | "multi";
-type Step       = "form" | "mapping" | "done";
-type MapMode    = "preview" | "manual";
-
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
@@ -46,8 +34,6 @@ const LOW_QUALITY   = 0.5;
 const POLL_MS       = 10_000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function uid() { return Math.random().toString(36).slice(2); }
 
 async function compressImage(file: File): Promise<File> {
   return new Promise((resolve) => {
@@ -148,406 +134,6 @@ function ProcessingRow({ status, retrying, onRetry }: {
   );
 }
 
-// ── Page Thumbnail ────────────────────────────────────────────────────────────
-
-function PageThumb({
-  sourceId, pageNum, token, apiBase,
-  isStart, isEnd, isInRange, isSelected,
-  onClick,
-}: {
-  sourceId: string; pageNum: number; token: string; apiBase: string;
-  isStart: boolean; isEnd: boolean; isInRange: boolean; isSelected: boolean;
-  onClick: () => void;
-}) {
-  const [url,     setUrl]     = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let alive = true;
-    async function load() {
-      try {
-        const res = await fetch(`${apiBase}/api/source-upload/${sourceId}/page/${pageNum}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok && alive) {
-          const blob = await res.blob();
-          setUrl(URL.createObjectURL(blob));
-        }
-      } catch { /* non-critical */ }
-      finally { if (alive) setLoading(false); }
-    }
-    load();
-    return () => { alive = false; };
-  }, [sourceId, pageNum, token, apiBase]);
-
-  let ring = "";
-  if (isStart)   ring = "ring-2 ring-blue-500";
-  else if (isEnd) ring = "ring-2 ring-emerald-500";
-  else if (isInRange) ring = "ring-2 ring-blue-400/40";
-
-  return (
-    <button
-      onClick={onClick}
-      className={`relative flex flex-col items-center gap-1 rounded-xl border p-1 transition-all ${ring} ${
-        isSelected ? "border-blue-500 bg-blue-500/10" : "hover:border-blue-400/40"
-      }`}
-      style={{ borderColor: isSelected ? undefined : "var(--sp-border)" }}
-    >
-      <div className="relative w-full aspect-[3/4] rounded-lg overflow-hidden bg-white/5 flex items-center justify-center">
-        {loading
-          ? <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
-          : url
-            ? <img src={url} alt={`Page ${pageNum}`} className="w-full h-full object-cover" />
-            : <FileText className="h-4 w-4 text-slate-500" />
-        }
-        {isStart && (
-          <span className="absolute top-1 left-1 rounded-md bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold text-white">START</span>
-        )}
-        {isEnd && (
-          <span className="absolute top-1 right-1 rounded-md bg-emerald-500 px-1.5 py-0.5 text-[9px] font-bold text-white">END</span>
-        )}
-        {isInRange && !isStart && !isEnd && (
-          <div className="absolute inset-0 bg-blue-500/10" />
-        )}
-      </div>
-      <span className="text-[10px] font-medium" style={{ color: "var(--sp-text-3)" }}>{pageNum}</span>
-    </button>
-  );
-}
-
-// ── Mapping Step ──────────────────────────────────────────────────────────────
-
-function MappingStep({
-  sourceId, pageCount, courses, token,
-  onBack, onDone,
-}: {
-  sourceId: string; pageCount: number; courses: Option[]; token: string;
-  onBack: () => void; onDone: () => void;
-}) {
-  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
-
-  const [mapMode,   setMapMode]   = useState<MapMode>("preview");
-  const [sections,  setSections]  = useState<SectionDraft[]>([
-    { id: uid(), course_id: "", start_page: "1", end_page: "" },
-  ]);
-  const [saving,   setSaving]   = useState(false);
-  const [errors,   setErrors]   = useState<string[]>([]);
-  const [warnings, setWarnings] = useState<string[]>([]);
-
-  // Preview mode state
-  const [activeSectionId, setActiveSectionId] = useState<string>(sections[0].id);
-  const [pickMode, setPickMode] = useState<"start" | "end">("start");
-
-  const inputCls = "w-full rounded-xl border px-3 py-2 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20";
-  const inputSt  = { background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" };
-
-  function addSection() {
-    const newSec = { id: uid(), course_id: "", start_page: "", end_page: "" };
-    setSections(prev => [...prev, newSec]);
-    setActiveSectionId(newSec.id);
-    setPickMode("start");
-  }
-
-  function removeSection(id: string) {
-    setSections(prev => {
-      const next = prev.filter(s => s.id !== id);
-      if (activeSectionId === id && next.length > 0) setActiveSectionId(next[0].id);
-      return next;
-    });
-  }
-
-  function updateSection(id: string, field: keyof SectionDraft, value: string) {
-    setSections(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
-  }
-
-  // Preview mode: tap a page thumbnail
-  function handlePageClick(pageNum: number) {
-    const active = sections.find(s => s.id === activeSectionId);
-    if (!active) return;
-    if (pickMode === "start") {
-      updateSection(activeSectionId, "start_page", String(pageNum));
-      setPickMode("end");
-    } else {
-      updateSection(activeSectionId, "end_page", String(pageNum));
-      setPickMode("start");
-    }
-  }
-
-  function isPageInRange(pageNum: number, sec: SectionDraft) {
-    const s = parseInt(sec.start_page);
-    const e = parseInt(sec.end_page);
-    if (isNaN(s) || isNaN(e)) return false;
-    return pageNum >= s && pageNum <= e;
-  }
-
-  async function saveMapping() {
-    setErrors([]); setWarnings([]); setSaving(true);
-    try {
-      const payload = {
-        sections: sections.map(s => ({
-          course_id:  s.course_id,
-          start_page: parseInt(s.start_page, 10),
-          end_page:   parseInt(s.end_page,   10),
-        })),
-      };
-      const res = await fetch(`${apiBase}/api/source-upload/${sourceId}/mapping`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body:    JSON.stringify(payload),
-      });
-      const body = await res.json();
-      if (!res.ok) { setErrors([body?.detail ?? "Failed to save mapping."]); return; }
-      if (!body.saved) { setErrors(body.errors ?? []); setWarnings(body.warnings ?? []); return; }
-      setWarnings(body.warnings ?? []);
-
-      // Fire and forget extraction — don't await so user isn't waiting
-      fetch(`${apiBase}/api/source-upload/${sourceId}/extract`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {});
-
-      onDone();
-    } catch (e) {
-      setErrors([e instanceof Error ? e.message : "Something went wrong."]);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const activeSection = sections.find(s => s.id === activeSectionId);
-  const canSave = sections.every(s => s.course_id && s.start_page && s.end_page);
-
-  return (
-    <div className="space-y-5">
-
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <button onClick={onBack}
-          className="flex items-center gap-1 text-sm font-medium text-blue-400 hover:text-blue-300 transition">
-          <ArrowLeft className="h-4 w-4" /> Back
-        </button>
-        <div>
-          <h2 className="text-lg font-bold" style={{ color: "var(--sp-text)" }}>Map pages to courses</h2>
-          <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
-            {pageCount} pages — assign each page range to its course.
-          </p>
-        </div>
-      </div>
-
-      {/* Mode toggle */}
-      <div className="flex items-center gap-2 rounded-xl border p-1"
-        style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}>
-        <button
-          onClick={() => setMapMode("preview")}
-          className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-semibold transition ${
-            mapMode === "preview" ? "bg-blue-600 text-white" : ""
-          }`}
-          style={mapMode !== "preview" ? { color: "var(--sp-text-3)" } : {}}
-        >
-          <Grid className="h-3.5 w-3.5" /> Preview pages
-        </button>
-        <button
-          onClick={() => setMapMode("manual")}
-          className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-semibold transition ${
-            mapMode === "manual" ? "bg-blue-600 text-white" : ""
-          }`}
-          style={mapMode !== "manual" ? { color: "var(--sp-text-3)" } : {}}
-        >
-          <List className="h-3.5 w-3.5" /> Enter manually
-        </button>
-      </div>
-
-      {/* ── PREVIEW MODE ── */}
-      {mapMode === "preview" && (
-        <div className="space-y-4">
-
-          {/* Course tabs */}
-          <div className="flex flex-wrap gap-2">
-            {sections.map((sec, i) => (
-              <button
-                key={sec.id}
-                onClick={() => { setActiveSectionId(sec.id); setPickMode("start"); }}
-                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                  activeSectionId === sec.id
-                    ? "border-blue-500 bg-blue-500/10 text-blue-400"
-                    : ""
-                }`}
-                style={activeSectionId !== sec.id ? { borderColor: "var(--sp-border)", color: "var(--sp-text-3)" } : {}}
-              >
-                {sec.course_id
-                  ? courses.find(c => c.id === sec.course_id)?.name ?? `Course ${i + 1}`
-                  : `Course ${i + 1}`
-                }
-                {sec.start_page && sec.end_page && (
-                  <span className="ml-1.5 opacity-60">p{sec.start_page}–{sec.end_page}</span>
-                )}
-              </button>
-            ))}
-            <button onClick={addSection}
-              className="flex items-center gap-1 rounded-full border border-dashed px-3 py-1.5 text-xs font-semibold text-blue-400 transition hover:bg-blue-500/5"
-              style={{ borderColor: "var(--sp-border)" }}>
-              <Plus className="h-3 w-3" /> Add course
-            </button>
-          </div>
-
-          {/* Active section config */}
-          {activeSection && (
-            <div className="rounded-xl border p-4 space-y-3"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-                  {courses.find(c => c.id === activeSection.course_id)?.name ?? "Select course below"}
-                </p>
-                {sections.length > 1 && (
-                  <button onClick={() => removeSection(activeSection.id)} className="text-red-400 hover:text-red-300">
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
-
-              <SelectField
-                label="Course" value={activeSection.course_id}
-                onChange={(v) => updateSection(activeSection.id, "course_id", v)}
-                placeholder="Select a course" options={courses} required
-              />
-
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs"
-                  style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}>
-                  Start: <span className="font-bold text-blue-400">{activeSection.start_page || "—"}</span>
-                </div>
-                <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs"
-                  style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}>
-                  End: <span className="font-bold text-emerald-400">{activeSection.end_page || "—"}</span>
-                </div>
-                <div className="ml-auto flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-[11px] font-semibold text-blue-400">
-                  Tap a page to set {pickMode === "start" ? "START" : "END"}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Page grid */}
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-            {Array.from({ length: pageCount }, (_, i) => i + 1).map(pageNum => {
-              const activeStart = parseInt(activeSection?.start_page ?? "");
-              const activeEnd   = parseInt(activeSection?.end_page ?? "");
-              const isStart     = activeSection ? parseInt(activeSection.start_page) === pageNum : false;
-              const isEnd       = activeSection ? parseInt(activeSection.end_page) === pageNum : false;
-              const isInRange   = !isNaN(activeStart) && !isNaN(activeEnd) && pageNum >= activeStart && pageNum <= activeEnd;
-
-              return (
-                <PageThumb
-                  key={pageNum}
-                  sourceId={sourceId}
-                  pageNum={pageNum}
-                  token={token}
-                  apiBase={apiBase}
-                  isStart={isStart}
-                  isEnd={isEnd}
-                  isInRange={isInRange}
-                  isSelected={false}
-                  onClick={() => handlePageClick(pageNum)}
-                />
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ── MANUAL MODE ── */}
-      {mapMode === "manual" && (
-        <div className="space-y-3">
-          {sections.map((sec, i) => (
-            <div key={sec.id} className="rounded-2xl border p-4 space-y-3"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold" style={{ color: "var(--sp-text-3)" }}>Course {i + 1}</p>
-                {sections.length > 1 && (
-                  <button onClick={() => removeSection(sec.id)} className="text-red-400 hover:text-red-300 transition">
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
-
-              <SelectField
-                label="Course" value={sec.course_id}
-                onChange={(v) => updateSection(sec.id, "course_id", v)}
-                placeholder="Select a course" options={courses} required
-              />
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-                    Start page <span className="text-blue-400">*</span>
-                  </label>
-                  <input
-                    type="number" min={1} max={pageCount}
-                    value={sec.start_page}
-                    onChange={(e) => updateSection(sec.id, "start_page", e.target.value)}
-                    placeholder="e.g. 1"
-                    className={inputCls} style={inputSt}
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-                    End page <span className="text-blue-400">*</span>
-                  </label>
-                  <input
-                    type="number" min={1} max={pageCount}
-                    value={sec.end_page}
-                    onChange={(e) => updateSection(sec.id, "end_page", e.target.value)}
-                    placeholder={`e.g. ${pageCount}`}
-                    className={inputCls} style={inputSt}
-                  />
-                </div>
-              </div>
-            </div>
-          ))}
-
-          <button onClick={addSection}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed py-3 text-sm font-semibold text-blue-400 transition hover:bg-blue-500/5"
-            style={{ borderColor: "var(--sp-border)" }}>
-            <Plus className="h-4 w-4" /> Add another course
-          </button>
-        </div>
-      )}
-
-      {/* Errors and warnings */}
-      {errors.length > 0 && (
-        <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 space-y-1">
-          {errors.map((e, i) => (
-            <p key={i} className="flex items-center gap-1.5 text-sm text-red-400">
-              <XCircle className="h-3.5 w-3.5 shrink-0" />{e}
-            </p>
-          ))}
-        </div>
-      )}
-      {warnings.length > 0 && (
-        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 space-y-1">
-          {warnings.map((w, i) => (
-            <p key={i} className="flex items-center gap-1.5 text-sm text-amber-400">
-              <AlertCircle className="h-3.5 w-3.5 shrink-0" />{w}
-            </p>
-          ))}
-        </div>
-      )}
-
-      {/* Save */}
-      <button
-        onClick={saveMapping}
-        disabled={saving || !canSave}
-        className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {saving
-          ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving mapping…</>
-          : <><BookOpen className="h-4 w-4" /> Save mapping &amp; extract text</>
-        }
-      </button>
-    </div>
-  );
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
@@ -576,13 +162,6 @@ export default function UploadPage() {
   const [fileError,      setFileError]      = useState("");
   const [dragOver,       setDragOver]       = useState(false);
 
-  const [mode, setMode] = useState<UploadMode>("single");
-  const [step, setStep] = useState<Step>("form");
-
-  const [sourceId,  setSourceId]  = useState<string | null>(null);
-  const [pageCount, setPageCount] = useState(0);
-  const [token,     setToken]     = useState("");
-
   const [declarationChecked, setDeclarationChecked] = useState(false);
   const [fetching,   setFetching]   = useState(true);
   const [loadingDep, setLoadingDep] = useState(false);
@@ -599,7 +178,6 @@ export default function UploadPage() {
     async function init() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.push("/auth/login"); return; }
-      setToken(session.access_token);
       const [{ data: inst }, { data: lev }, { data: sem }] = await Promise.all([
         supabase.from("institutions").select("id, name").order("name"),
         supabase.from("levels").select("id, name").order("name"),
@@ -704,57 +282,35 @@ export default function UploadPage() {
     if (year && !isValidYear(year, currentYear)) {
       setError(`Year must be between ${MIN_YEAR} and ${currentYear + 1}.`); return;
     }
-    if (mode === "single" && !courseId) { setError("Please select a course."); return; }
+    if (!courseId) { setError("Please select a course."); return; }
 
     setSubmitting(true);
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { setSubmitting(false); router.push("/auth/login"); return; }
 
     try {
-      if (mode === "single") {
-        const fd = new FormData();
-        fd.append("title", title);
-        if (year)       fd.append("year",        year);
-        fd.append("course_id",            courseId);
-        if (semesterId) fd.append("semester_id", semesterId);
-        if (levelId)    fd.append("level_id",    levelId);
-        fd.append("declaration_accepted", "true");
-        fd.append("file",                 compressedFile);
+      const fd = new FormData();
+      fd.append("title", title);
+      if (year)       fd.append("year",        year);
+      fd.append("course_id",            courseId);
+      if (semesterId) fd.append("semester_id", semesterId);
+      if (levelId)    fd.append("level_id",    levelId);
+      fd.append("declaration_accepted", "true");
+      fd.append("file",                 compressedFile);
 
-        const res = await fetch(`${apiBase}/api/upload`, {
-          method:  "POST",
-          headers: { Authorization: `Bearer ${session.access_token}` },
-          body:    fd,
-        });
-        if (res.status === 401) { router.push("/auth/login"); return; }
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.detail ?? "Upload failed.");
-        }
-        setSuccess(true);
-        resetForm();
-        await loadMyUploads(session.access_token);
-
-      } else {
-        const fd = new FormData();
-        fd.append("file", compressedFile);
-
-        const res = await fetch(`${apiBase}/api/source-upload`, {
-          method:  "POST",
-          headers: { Authorization: `Bearer ${session.access_token}` },
-          body:    fd,
-        });
-        if (res.status === 401) { router.push("/auth/login"); return; }
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.detail ?? "Upload failed.");
-        }
-        const data = await res.json();
-        setSourceId(data.id);
-        setPageCount(data.page_count ?? 0);
-        setToken(session.access_token);
-        setStep("mapping");
+      const res = await fetch(`${apiBase}/api/upload`, {
+        method:  "POST",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body:    fd,
+      });
+      if (res.status === 401) { router.push("/auth/login"); return; }
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? "Upload failed.");
       }
+      setSuccess(true);
+      resetForm();
+      await loadMyUploads(session.access_token);
 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -771,12 +327,6 @@ export default function UploadPage() {
     if (fileRef.current) fileRef.current.value = "";
   }
 
-  function handleMappingDone() {
-    setStep("done");
-    resetForm();
-    setMode("single");
-  }
-
   const savedBytes = file && compressedFile && compressedFile.size < file.size
     ? file.size - compressedFile.size : 0;
 
@@ -785,7 +335,7 @@ export default function UploadPage() {
     compressedFile && !fileError && !compressing &&
     declarationChecked &&
     isValidYear(year, currentYear) &&
-    (mode === "single" ? !!courseId : true);
+    !!courseId;
 
   if (fetching) return (
     <div className="flex min-h-[60vh] items-center justify-center" style={{ background: "var(--sp-bg)" }}>
@@ -805,218 +355,155 @@ export default function UploadPage() {
           </p>
         </div>
 
-        {step === "mapping" && sourceId ? (
-          <div className="rounded-2xl border p-6 transition-colors"
-            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-            <MappingStep
-              sourceId={sourceId} pageCount={pageCount}
-              courses={courses} token={token}
-              onBack={() => setStep("form")}
-              onDone={handleMappingDone}
-            />
+        <form onSubmit={handleSubmit}
+          className="rounded-2xl border p-6 space-y-5 transition-colors"
+          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+
+          {/* Title */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
+              Title <span className="text-blue-400">*</span>
+            </label>
+            <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={150}
+              placeholder="e.g. CSC 301 — First Semester 2023"
+              className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }} />
           </div>
 
-        ) : step === "done" ? (
-          <div className="rounded-2xl border p-8 text-center space-y-4 transition-colors"
-            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-            <div className="flex justify-center">
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10">
-                <CheckCircle2 className="h-7 w-7 text-emerald-400" />
-              </div>
-            </div>
-            <h2 className="text-lg font-bold" style={{ color: "var(--sp-text)" }}>Upload submitted!</h2>
-            <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>
-              Your PDF has been mapped and text extraction is running in the background.
-              An admin will review it before it goes live.
-            </p>
-            <button onClick={() => setStep("form")}
-              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500">
-              Upload another
-            </button>
+          {/* Institution + Department */}
+          <div className="grid grid-cols-2 gap-4">
+            <SelectField label="Institution" value={institutionId} onChange={setInstitutionId}
+              disabled={institutions.length === 0} placeholder="Select institution" options={institutions} />
+            <SelectField label="Department" value={departmentId} onChange={setDepartmentId}
+              disabled={!institutionId || loadingDep}
+              placeholder={loadingDep ? "Loading…" : "Select department"} options={departments} />
           </div>
 
-        ) : (
-          <form onSubmit={handleSubmit}
-            className="rounded-2xl border p-6 space-y-5 transition-colors"
-            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+          {/* Level + Course */}
+          <div className="grid grid-cols-2 gap-4">
+            <SelectField label="Level" value={levelId} onChange={setLevelId}
+              disabled={levels.length === 0} placeholder="Select level" options={levels} />
+            <SelectField label="Course" value={courseId} onChange={setCourseId}
+              disabled={!departmentId || loadingCou}
+              placeholder={loadingCou ? "Loading…" : "Select course"}
+              options={courses} required />
+          </div>
 
-            {/* Mode toggle */}
+          {/* Semester + Year */}
+          <div className="grid grid-cols-2 gap-4">
+            <SelectField label="Semester" value={semesterId} onChange={setSemesterId}
+              placeholder="Not specified" options={semesters} />
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-                What does this PDF contain?
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                {(["single", "multi"] as UploadMode[]).map((m) => (
-                  <button key={m} type="button" onClick={() => setMode(m)}
-                    className={`flex items-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition ${
-                      mode === m ? "border-blue-500 bg-blue-500/10 text-blue-400" : "text-slate-400 hover:bg-white/[0.04]"
-                    }`}
-                    style={mode !== m ? { borderColor: "var(--sp-border)" } : {}}>
-                    {m === "single"
-                      ? <><BookOpen className="h-4 w-4 shrink-0" /> One course</>
-                      : <><FileText className="h-4 w-4 shrink-0" /> Multiple courses</>}
-                  </button>
-                ))}
-              </div>
-              {mode === "multi" && (
-                <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>
-                  After uploading, you&apos;ll preview pages and assign each range to a course.
-                </p>
-              )}
-            </div>
-
-            {/* Title */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-                Title <span className="text-blue-400">*</span>
-              </label>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={150}
-                placeholder={mode === "multi" ? "e.g. 200 Level First Semester 2023" : "e.g. CSC 301 — First Semester 2023"}
+              <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>Year</label>
+              <input value={year}
+                onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                placeholder="e.g. 2023" inputMode="numeric" maxLength={4}
                 className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                 style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }} />
-            </div>
-
-            {/* Institution + Department */}
-            <div className="grid grid-cols-2 gap-4">
-              <SelectField label="Institution" value={institutionId} onChange={setInstitutionId}
-                disabled={institutions.length === 0} placeholder="Select institution" options={institutions} />
-              <SelectField label="Department" value={departmentId} onChange={setDepartmentId}
-                disabled={!institutionId || loadingDep}
-                placeholder={loadingDep ? "Loading…" : "Select department"} options={departments} />
-            </div>
-
-            {/* Level + Course */}
-            <div className={`grid gap-4 ${mode === "single" ? "grid-cols-2" : "grid-cols-1"}`}>
-              <SelectField label="Level" value={levelId} onChange={setLevelId}
-                disabled={levels.length === 0} placeholder="Select level" options={levels} />
-              {mode === "single" && (
-                <SelectField label="Course" value={courseId} onChange={setCourseId}
-                  disabled={!departmentId || loadingCou}
-                  placeholder={loadingCou ? "Loading…" : "Select course"}
-                  options={courses} required />
+              {year && !isValidYear(year, currentYear) && (
+                <p className="text-xs text-red-400">Enter a year between {MIN_YEAR} and {currentYear + 1}.</p>
               )}
             </div>
+          </div>
 
-            {/* Semester + Year */}
-            {mode === "single" && (
-              <div className="grid grid-cols-2 gap-4">
-                <SelectField label="Semester" value={semesterId} onChange={setSemesterId}
-                  placeholder="Not specified" options={semesters} />
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>Year</label>
-                  <input value={year}
-                    onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                    placeholder="e.g. 2023" inputMode="numeric" maxLength={4}
-                    className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                    style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }} />
-                  {year && !isValidYear(year, currentYear) && (
-                    <p className="text-xs text-red-400">Enter a year between {MIN_YEAR} and {currentYear + 1}.</p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* File drop zone */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-                File <span className="text-blue-400">*</span>
-              </label>
-              <label
-                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={handleDrop}
-                className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-all ${
-                  dragOver ? "border-blue-500 bg-blue-500/10"
-                  : file    ? "border-emerald-500/40 bg-emerald-500/5"
-                  :           "hover:border-blue-500/40 hover:bg-blue-500/5"
-                }`}
-                style={!dragOver && !file ? { borderColor: "var(--sp-border)" } : {}}>
-                {compressing ? (
-                  <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
-                    <Loader2 className="h-5 w-5 animate-spin text-blue-400" /></div>
-                    <div><p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Compressing image…</p></div>
-                  </>
-                ) : file ? (
-                  <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10">
-                    <CheckCircle2 className="h-5 w-5 text-emerald-400" /></div>
-                    <div>
-                      <p className="text-sm font-semibold text-emerald-400">{compressedFile?.name ?? file.name}</p>
-                      <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
-                        {fmtBytes(compressedFile?.size ?? file.size)}
-                        {savedBytes > 0 && <span className="ml-1.5 text-emerald-400 font-medium">(saved {fmtBytes(savedBytes)})</span>}
-                        {" · tap to change"}
-                      </p>
-                    </div>
-                  </>
-                ) : (
-                  <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
-                    <CloudUpload className="h-5 w-5 text-blue-400" /></div>
-                    <div>
-                      <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Drop your file here, or tap to browse</p>
-                      <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>PDF, JPG, PNG — max 20MB</p>
-                    </div>
-                  </>
-                )}
-                <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={handleFileChange} className="hidden" />
-              </label>
-              {fileError && (
-                <p className="flex items-center gap-1.5 text-xs text-red-400">
-                  <AlertCircle className="h-3.5 w-3.5" />{fileError}
-                </p>
+          {/* File drop zone */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
+              File <span className="text-blue-400">*</span>
+            </label>
+            <label
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-all ${
+                dragOver ? "border-blue-500 bg-blue-500/10"
+                : file    ? "border-emerald-500/40 bg-emerald-500/5"
+                :           "hover:border-blue-500/40 hover:bg-blue-500/5"
+              }`}
+              style={!dragOver && !file ? { borderColor: "var(--sp-border)" } : {}}>
+              {compressing ? (
+                <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
+                  <Loader2 className="h-5 w-5 animate-spin text-blue-400" /></div>
+                  <div><p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Compressing image…</p></div>
+                </>
+              ) : file ? (
+                <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-400" /></div>
+                  <div>
+                    <p className="text-sm font-semibold text-emerald-400">{compressedFile?.name ?? file.name}</p>
+                    <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
+                      {fmtBytes(compressedFile?.size ?? file.size)}
+                      {savedBytes > 0 && <span className="ml-1.5 text-emerald-400 font-medium">(saved {fmtBytes(savedBytes)})</span>}
+                      {" · tap to change"}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
+                  <CloudUpload className="h-5 w-5 text-blue-400" /></div>
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Drop your file here, or tap to browse</p>
+                    <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>PDF, JPG, PNG — max 20MB</p>
+                  </div>
+                </>
               )}
-            </div>
-
-            {/* Declaration */}
-            <div className="rounded-xl border p-4 space-y-3"
-              style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}>
-              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
-                Upload declaration
+              <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png"
+                onChange={handleFileChange} className="hidden" />
+            </label>
+            {fileError && (
+              <p className="flex items-center gap-1.5 text-xs text-red-400">
+                <AlertCircle className="h-3.5 w-3.5" />{fileError}
               </p>
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input type="checkbox" checked={declarationChecked}
-                  onChange={(e) => setDeclarationChecked(e.target.checked)}
-                  className="mt-0.5 shrink-0 rounded accent-blue-500" />
-                <span className="text-sm leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
-                  I confirm I have the right to share this material and have not included confidential
-                  or unlawfully obtained content. I understand SparkL may review, watermark, or remove
-                  this upload per the{" "}
-                  <Link href="/content-guidelines" target="_blank"
-                    className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium">
-                    Content Guidelines
-                  </Link>{" "}and{" "}
-                  <Link href="/terms" target="_blank"
-                    className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium">
-                    Terms of Service
-                  </Link>.
-                </span>
-              </label>
+            )}
+          </div>
+
+          {/* Declaration */}
+          <div className="rounded-xl border p-4 space-y-3"
+            style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}>
+            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
+              Upload declaration
+            </p>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={declarationChecked}
+                onChange={(e) => setDeclarationChecked(e.target.checked)}
+                className="mt-0.5 shrink-0 rounded accent-blue-500" />
+              <span className="text-sm leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
+                I confirm I have the right to share this material and have not included confidential
+                or unlawfully obtained content. I understand SparkL may review, watermark, or remove
+                this upload per the{" "}
+                <Link href="/content-guidelines" target="_blank"
+                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium">
+                  Content Guidelines
+                </Link>{" "}and{" "}
+                <Link href="/terms" target="_blank"
+                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium">
+                  Terms of Service
+                </Link>.
+              </span>
+            </label>
+          </div>
+
+          {error && (
+            <div className="flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
+              <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+              <p className="text-sm text-red-400">{error}</p>
             </div>
+          )}
+          {success && (
+            <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+              <p className="text-sm text-emerald-400">Uploaded — pending admin review.</p>
+            </div>
+          )}
 
-            {error && (
-              <div className="flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
-                <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-                <p className="text-sm text-red-400">{error}</p>
-              </div>
-            )}
-            {success && (
-              <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-                <p className="text-sm text-emerald-400">Uploaded — pending admin review.</p>
-              </div>
-            )}
-
-            <button type="submit" disabled={!formValid || submitting}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40">
-              {submitting
-                ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</>
-                : mode === "multi"
-                  ? <><ChevronRight className="h-4 w-4" /> Upload &amp; preview pages</>
-                  : <><UploadIcon className="h-4 w-4" /> Submit for review</>
-              }
-            </button>
-          </form>
-        )}
+          <button type="submit" disabled={!formValid || submitting}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40">
+            {submitting
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</>
+              : <><UploadIcon className="h-4 w-4" /> Submit for review</>
+            }
+          </button>
+        </form>
 
         {/* My Uploads */}
         <div className="mt-10">
