@@ -1,0 +1,523 @@
+# app/routers/source_upload.py
+"""
+Multi-course PDF upload.
+
+Flow:
+  1. POST /api/source-upload
+         → upload PDF to B2, create source_documents row
+  2. GET  /api/source-upload/{id}/pages
+         → return page count so the frontend can render the mapping UI
+  3. GET  /api/source-upload/{id}/page/{n}
+         → return a single page JPEG for the mapping UI thumbnails
+  4. POST /api/source-upload/{id}/mapping
+         → save course→page-range assignments, validate for gaps/overlaps
+  5. POST /api/source-upload/{id}/extract
+         → extract text from each section's pages and save to Supabase
+"""
+from __future__ import annotations
+
+import hashlib
+import io
+from datetime import date, datetime, timezone
+from typing import List, Optional
+from uuid import UUID
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    status,
+)
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+
+from app.routers.uploads import get_current_user_id   # reuse existing auth helper
+from app.storage import download_bytes, upload_bytes, upload_file
+from app.supabase_client import supabase
+
+router = APIRouter(prefix="/api/source-upload", tags=["Source Upload"])
+
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024   # 20 MB
+MAX_PAGES        = 200
+MIN_YEAR         = 1990
+
+FILE_SIGNATURES = {
+    b"%PDF-":               ("application/pdf", "pdf"),
+    b"\xff\xd8\xff":        ("image/jpeg",      "jpg"),
+    b"\x89PNG\r\n\x1a\n":  ("image/png",       "png"),
+}
+
+_IMG_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
+
+class SectionIn(BaseModel):
+    course_id:  str
+    start_page: int = Field(..., ge=1)
+    end_page:   int = Field(..., ge=1)
+
+
+class MappingPayload(BaseModel):
+    sections: List[SectionIn] = Field(..., min_length=1)
+
+
+# ── Small helpers ─────────────────────────────────────────────────────────────
+
+def _detect_type(file_bytes: bytes) -> tuple[str, str]:
+    for sig, (mime, ext) in FILE_SIGNATURES.items():
+        if file_bytes.startswith(sig):
+            return mime, ext
+    raise HTTPException(
+        status_code=415,
+        detail="Only PDF, JPG, and PNG files are accepted.",
+    )
+
+
+def _check_uuid(value: str, label: str = "id") -> None:
+    try:
+        UUID(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid {label}.")
+
+
+def _find_duplicate(file_hash: str) -> Optional[dict]:
+    res = (
+        supabase.table("source_documents")
+        .select("id, status")
+        .eq("file_hash", file_hash)
+        .neq("status", "rejected")
+        .limit(1)
+        .execute()
+    )
+    rows = res.data or []
+    return rows[0] if rows else None
+
+
+def _course_exists(course_id: str) -> bool:
+    res = (
+        supabase.table("courses")
+        .select("id")
+        .eq("id", course_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(res and res.data)
+
+
+# ── Page count helpers ────────────────────────────────────────────────────────
+
+def _count_pages_sync(file_bytes: bytes, mime_type: str) -> int:
+    if mime_type == "application/pdf":
+        try:
+            import pypdfium2 as pdfium
+            pdf = pdfium.PdfDocument(file_bytes)
+            count = max(1, len(pdf))
+            pdf.close()
+            return count
+        except Exception:
+            try:
+                from pypdf import PdfReader
+                return max(1, len(PdfReader(io.BytesIO(file_bytes)).pages))
+            except Exception:
+                return 1
+    return 1  # single-page image
+
+
+def _render_page_sync(file_bytes: bytes, mime_type: str, page_num: int) -> bytes:
+    """Render one page to a JPEG thumbnail (used in the mapping UI)."""
+    from PIL import Image
+
+    if mime_type == "application/pdf":
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:
+            raise HTTPException(status_code=500, detail="pypdfium2 is not installed.")
+
+        pdf = pdfium.PdfDocument(file_bytes)
+        if page_num > len(pdf):
+            pdf.close()
+            raise HTTPException(status_code=404, detail=f"Page {page_num} does not exist.")
+        img = pdf[page_num - 1].render(scale=96 / 72).to_pil().convert("RGB")
+        pdf.close()
+    else:
+        img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+
+    # Cap width so thumbnails stay small
+    max_w = 800
+    if img.width > max_w:
+        ratio = max_w / img.width
+        img = img.resize((max_w, int(img.height * ratio)), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=80, optimize=True)
+    return buf.getvalue()
+
+
+# ── Text extraction per page range ────────────────────────────────────────────
+
+def _extract_pages_sync(
+    file_bytes: bytes,
+    mime_type: str,
+    start_page: int,
+    end_page: int,
+) -> tuple[str, float]:
+    """
+    Extract text from a specific page range of a PDF.
+    Returns (text, quality_score).
+    """
+    if mime_type != "application/pdf":
+        # Single image — treat the whole thing as page 1
+        from app.services.text_extractor import extract_text
+        result = extract_text("file.jpg", file_bytes)
+        return result.text, result.quality
+
+    # Slice out the requested pages into a new in-memory PDF
+    try:
+        import pypdfium2 as pdfium
+        src = pdfium.PdfDocument(file_bytes)
+        dst = pdfium.PdfDocument.new()
+        indices = list(range(start_page - 1, min(end_page, len(src))))
+        dst.import_pages(src, indices)
+        sliced_bytes = bytes(dst)
+        src.close()
+        dst.close()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not slice pages {start_page}–{end_page}: {exc}",
+        )
+
+    from app.services.text_extractor import extract_text
+    result = extract_text("file.pdf", sliced_bytes)
+    return result.text, result.quality
+
+
+# ── Mapping validation ────────────────────────────────────────────────────────
+
+def _validate_mapping(sections: List[SectionIn], total_pages: int) -> dict:
+    """
+    Returns a dict with keys:
+      errors   – list of blocking problems (overlaps, out-of-range)
+      warnings – list of non-blocking notices (gaps)
+    """
+    errors   = []
+    warnings = []
+
+    for i, s in enumerate(sections):
+        if s.end_page < s.start_page:
+            errors.append(
+                f"Section {i+1}: end_page ({s.end_page}) is before start_page ({s.start_page})."
+            )
+        if s.start_page < 1 or s.end_page > total_pages:
+            errors.append(
+                f"Section {i+1}: pages {s.start_page}–{s.end_page} out of range "
+                f"(document has {total_pages} pages)."
+            )
+
+    # Check overlaps between every pair
+    for i in range(len(sections)):
+        for j in range(i + 1, len(sections)):
+            a, b = sections[i], sections[j]
+            if a.start_page <= b.end_page and b.start_page <= a.end_page:
+                errors.append(
+                    f"Sections {i+1} and {j+1} overlap "
+                    f"(pages {a.start_page}–{a.end_page} and {b.start_page}–{b.end_page})."
+                )
+
+    # Check for unassigned pages (gaps) — just a warning, not a blocker
+    covered = set()
+    for s in sections:
+        covered.update(range(s.start_page, s.end_page + 1))
+    unassigned = sorted(set(range(1, total_pages + 1)) - covered)
+    if unassigned:
+        # Collapse into ranges for a readable message
+        groups, start = [], unassigned[0]
+        prev = unassigned[0]
+        for p in unassigned[1:]:
+            if p != prev + 1:
+                groups.append(f"{start}–{prev}" if start != prev else str(start))
+                start = p
+            prev = p
+        groups.append(f"{start}–{prev}" if start != prev else str(start))
+        warnings.append(f"Unassigned pages: {', '.join(groups)}.")
+
+    return {"errors": errors, "warnings": warnings}
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def upload_source_document(
+    file: UploadFile = File(...),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    Step 1 — Upload the PDF.
+    Stores the file in B2 and creates a source_documents row.
+    Does NOT extract text yet (that happens after mapping).
+    """
+    file_bytes = await file.read()
+
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum is {MAX_UPLOAD_BYTES // (1024*1024)} MB.",
+        )
+
+    mime_type, ext = _detect_type(file_bytes)
+
+    # Duplicate check
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+    duplicate = await run_in_threadpool(_find_duplicate, file_hash)
+    if duplicate:
+        raise HTTPException(
+            status_code=409,
+            detail="This file has already been uploaded.",
+        )
+
+    # Count pages and enforce the limit
+    page_count = await run_in_threadpool(_count_pages_sync, file_bytes, mime_type)
+    if page_count > MAX_PAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"PDF has {page_count} pages. Maximum allowed is {MAX_PAGES}.",
+        )
+
+    # Upload to B2
+    file_key = await run_in_threadpool(
+        lambda: upload_file(
+            file_bytes=file_bytes,
+            user_id=str(user_id),
+            mime_type=mime_type,
+            ext=ext,
+        )
+    )
+
+    # Save record to Supabase
+    record = {
+        "uploader_id": str(user_id),
+        "file_key":    file_key,
+        "mime_type":   mime_type,
+        "file_size":   len(file_bytes),
+        "file_hash":   file_hash,
+        "page_count":  page_count,
+        "status":      "pending",
+    }
+    res = supabase.table("source_documents").insert(record).execute()
+    if not res.data:
+        raise HTTPException(status_code=500, detail="Failed to save upload record.")
+
+    return res.data[0]
+
+
+@router.get("/{source_id}/pages")
+async def get_page_count(
+    source_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    Step 2 — Return total page count so the frontend
+    can render the mapping UI.
+    """
+    _check_uuid(source_id, "source_id")
+    res = (
+        supabase.table("source_documents")
+        .select("id, page_count, uploader_id, status")
+        .eq("id", source_id)
+        .maybe_single()
+        .execute()
+    )
+    row = res.data
+    if not row:
+        raise HTTPException(status_code=404, detail="Source document not found.")
+    if row["uploader_id"] != str(user_id):
+        raise HTTPException(status_code=403, detail="Not your document.")
+
+    return {"source_id": source_id, "page_count": row["page_count"]}
+
+
+@router.get("/{source_id}/page/{page_num}", response_class=Response)
+async def get_page_thumbnail(
+    source_id: str,
+    page_num: int,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    Step 2b — Return a single page as a JPEG thumbnail.
+    Used by the mapping UI so the uploader can see each page.
+    """
+    _check_uuid(source_id, "source_id")
+
+    res = (
+        supabase.table("source_documents")
+        .select("id, file_key, mime_type, page_count, uploader_id")
+        .eq("id", source_id)
+        .maybe_single()
+        .execute()
+    )
+    row = res.data
+    if not row:
+        raise HTTPException(status_code=404, detail="Source document not found.")
+    if row["uploader_id"] != str(user_id):
+        raise HTTPException(status_code=403, detail="Not your document.")
+    if page_num < 1 or (row["page_count"] and page_num > row["page_count"]):
+        raise HTTPException(status_code=400, detail="Invalid page number.")
+
+    file_bytes = await run_in_threadpool(download_bytes, row["file_key"])
+    jpeg = await run_in_threadpool(
+        _render_page_sync, file_bytes, row["mime_type"], page_num
+    )
+    return Response(content=jpeg, media_type="image/jpeg", headers=_IMG_HEADERS)
+
+
+@router.post("/{source_id}/mapping")
+async def save_mapping(
+    source_id: str,
+    payload: MappingPayload,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    Step 3 — Save course→page-range assignments.
+    Validates for overlaps and out-of-range pages.
+    Returns errors (blocking) and warnings (gaps, non-blocking).
+    If there are no errors, saves the sections to Supabase.
+    """
+    _check_uuid(source_id, "source_id")
+
+    res = (
+        supabase.table("source_documents")
+        .select("id, page_count, uploader_id, status")
+        .eq("id", source_id)
+        .maybe_single()
+        .execute()
+    )
+    row = res.data
+    if not row:
+        raise HTTPException(status_code=404, detail="Source document not found.")
+    if row["uploader_id"] != str(user_id):
+        raise HTTPException(status_code=403, detail="Not your document.")
+
+    total_pages = row["page_count"] or 0
+    if total_pages == 0:
+        raise HTTPException(status_code=400, detail="Page count not available yet.")
+
+    # Validate all course IDs
+    for i, s in enumerate(payload.sections):
+        _check_uuid(s.course_id, f"section {i+1} course_id")
+        exists = await run_in_threadpool(_course_exists, s.course_id)
+        if not exists:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Section {i+1}: course_id {s.course_id} not found.",
+            )
+
+    # Validate page ranges
+    validation = _validate_mapping(payload.sections, total_pages)
+    if validation["errors"]:
+        return {
+            "saved":    False,
+            "errors":   validation["errors"],
+            "warnings": validation["warnings"],
+        }
+
+    # Delete any previous sections for this document (uploader is re-mapping)
+    supabase.table("course_document_sections") \
+        .delete() \
+        .eq("source_document_id", source_id) \
+        .execute()
+
+    # Insert new sections
+    rows = [
+        {
+            "source_document_id": source_id,
+            "course_id":          s.course_id,
+            "start_page":         s.start_page,
+            "end_page":           s.end_page,
+            "processing_status":  "pending",
+        }
+        for s in payload.sections
+    ]
+    supabase.table("course_document_sections").insert(rows).execute()
+
+    return {
+        "saved":    True,
+        "errors":   [],
+        "warnings": validation["warnings"],
+        "sections": len(rows),
+    }
+
+
+@router.post("/{source_id}/extract")
+async def extract_sections(
+    source_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    Step 4 — Extract text from each section's page range.
+    Runs synchronously (suitable for Render free tier with small PDFs).
+    Saves extracted text and quality score per section in Supabase.
+    """
+    _check_uuid(source_id, "source_id")
+
+    src_res = (
+        supabase.table("source_documents")
+        .select("id, file_key, mime_type, uploader_id, page_count")
+        .eq("id", source_id)
+        .maybe_single()
+        .execute()
+    )
+    src = src_res.data
+    if not src:
+        raise HTTPException(status_code=404, detail="Source document not found.")
+    if src["uploader_id"] != str(user_id):
+        raise HTTPException(status_code=403, detail="Not your document.")
+
+    sec_res = (
+        supabase.table("course_document_sections")
+        .select("id, start_page, end_page")
+        .eq("source_document_id", source_id)
+        .execute()
+    )
+    sections = sec_res.data or []
+    if not sections:
+        raise HTTPException(
+            status_code=400,
+            detail="No sections found. Save the page mapping first.",
+        )
+
+    # Download the PDF once, then slice per section
+    file_bytes = await run_in_threadpool(download_bytes, src["file_key"])
+
+    results = []
+    for sec in sections:
+        try:
+            text, quality = await run_in_threadpool(
+                _extract_pages_sync,
+                file_bytes,
+                src["mime_type"],
+                sec["start_page"],
+                sec["end_page"],
+            )
+            supabase.table("course_document_sections").update({
+                "extracted_text":     text,
+                "extraction_quality": quality,
+                "processing_status":  "ready",
+                "processing_error":   None,
+            }).eq("id", sec["id"]).execute()
+            results.append({"section_id": sec["id"], "status": "ready"})
+
+        except Exception as exc:
+            supabase.table("course_document_sections").update({
+                "processing_status": "failed",
+                "processing_error":  str(exc),
+            }).eq("id", sec["id"]).execute()
+            results.append({"section_id": sec["id"], "status": "failed", "error": str(exc)})
+
+    return {"source_id": source_id, "sections": results}
