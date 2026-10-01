@@ -1,10 +1,17 @@
-# viewer.py
+
+# app/routers/viewer.py
 """
 Serves protected past-question content.
-Pages are pre-rendered at upload time and stored in Backblaze.
-For questions uploaded before the pre-render system existed, falls back
-to rendering from the original PDF on demand (and stores the result so
-it never renders twice).
+
+Single-course uploads  → /api/questions/{id}/page/{n}   (unchanged)
+Multi-course sections  → /api/questions/section/{id}/page/{n}  (NEW)
+
+For single-course: pages pre-rendered at upload time; falls back to
+on-demand rendering + B2 cache for old uploads.
+
+For multi-course sections: renders on-demand from the source document,
+restricted to the section's page range so users can never retrieve
+another course's pages.
 """
 from __future__ import annotations
 
@@ -18,15 +25,15 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
 from app.supabase_client import supabase
-from app.storage import download_bytes, get_signed_url, list_keys_with_prefix, upload_bytes
+from app.storage import download_bytes, get_signed_url, upload_bytes
 
 router = APIRouter(prefix="/api/questions", tags=["Viewer"])
 
 SIGNED_URL_TTL  = 300
-FREE_PAGE_LIMIT = 2
+FREE_PAGE_LIMIT = 2        # single-course: free pages
+FREE_Q_LIMIT    = 10       # multi-course sections: free questions
 TILE_GRID       = 3
-# Fallback render quality — lower than upload-time render to save memory
-FALLBACK_SCALE   = 100 / 72   # ~100 DPI
+FALLBACK_SCALE   = 100 / 72
 FALLBACK_QUALITY = 75
 MAX_IMG_WIDTH    = 1200
 
@@ -65,19 +72,15 @@ async def get_current_user(
         )
 
     return {
-        "id": UUID(user.id),
+        "id":       UUID(user.id),
         "is_admin": is_admin,
-        "email": user.email or str(user.id),
+        "email":    user.email or str(user.id),
     }
 
 
 # ── Key helpers ───────────────────────────────────────────────────────────────
 
 def _to_key(file_url: str) -> str:
-    """
-    Normalise file_url to a plain B2 key.
-    Old uploads stored the full URL; new ones store just the key.
-    """
     if not file_url or not file_url.startswith("http"):
         return file_url
     marker = f"/file/{B2_BUCKET}/"
@@ -123,7 +126,7 @@ def _get_subscription(user_id: str) -> dict:
     return {"is_paid": False}
 
 
-# ── Page count (lazy fill for rows where page_count is NULL) ─────────────────
+# ── Page count ────────────────────────────────────────────────────────────────
 
 def _count_pages(file_bytes: bytes, mime_type: str) -> int:
     if mime_type == "application/pdf":
@@ -149,15 +152,13 @@ def _save_page_count(question_id: str, total: int) -> None:
             {"page_count": total}
         ).eq("id", question_id).execute()
     except Exception:
-        pass  # non-critical — it will be recomputed next time
+        pass
 
 
 def _ensure_page_count(record: dict) -> int:
-    """Return page_count, computing and saving it if the row has none yet."""
     existing = record.get("page_count")
     if existing:
         return int(existing)
-
     file_bytes = download_bytes(_to_key(record["file_url"]))
     total = _count_pages(file_bytes, record.get("mime_type") or "application/pdf")
     _save_page_count(record["id"], total)
@@ -177,14 +178,9 @@ def _add_watermark(img, text: str):
     return watermarked.convert("RGB")
 
 
-# ── Fallback: render one page from the original file ─────────────────────────
+# ── Render helpers ────────────────────────────────────────────────────────────
 
 def _render_page_to_jpeg(file_bytes: bytes, mime_type: str, page_number: int) -> bytes:
-    """
-    Render a single page from the original PDF/image to JPEG bytes.
-    Used only when the pre-rendered JPEG is missing (old uploads).
-    Low DPI + capped width to keep memory use small.
-    """
     from PIL import Image
 
     if mime_type == "application/pdf":
@@ -200,12 +196,10 @@ def _render_page_to_jpeg(file_bytes: bytes, mime_type: str, page_number: int) ->
 
         bitmap  = pdf[page_number - 1].render(scale=FALLBACK_SCALE)
         pil_img = bitmap.to_pil().convert("RGB")
-        # Free the pdf object immediately — don't hold all pages in memory
         pdf.close()
     else:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
 
-    # Cap width to limit memory and storage
     if pil_img.width > MAX_IMG_WIDTH:
         ratio   = MAX_IMG_WIDTH / pil_img.width
         pil_img = pil_img.resize(
@@ -224,28 +218,19 @@ def _fetch_rendered_page(
     file_url: str,
     mime_type: str,
 ) -> bytes:
-    """
-    Return JPEG bytes for a page.
-    1. Try pre-rendered image from Backblaze (fast, zero rendering).
-    2. If missing (old upload), render from original PDF, then store the
-       result so this path is never hit again for the same page.
-    """
     key = _page_key(question_id, page_number)
-
     try:
         return download_bytes(key)
     except HTTPException:
-        pass  # pre-rendered image not found — fall through to render
+        pass
 
-    # Download original and render just this one page
     original_bytes = download_bytes(_to_key(file_url))
     jpeg_bytes     = _render_page_to_jpeg(original_bytes, mime_type, page_number)
 
-    # Store it so future requests skip rendering entirely
     try:
         upload_bytes(jpeg_bytes, key, "image/jpeg")
     except Exception:
-        pass  # non-critical — serve the bytes anyway
+        pass
 
     return jpeg_bytes
 
@@ -260,7 +245,6 @@ def _fetch_and_watermark_page(
     from PIL import Image
 
     raw_bytes = _fetch_rendered_page(question_id, page_number, file_url, mime_type)
-
     img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
     img = _add_watermark(img, f"SparkL · {user_email}")
 
@@ -269,7 +253,51 @@ def _fetch_and_watermark_page(
     return buf.getvalue()
 
 
-# ── Core page getter (auth + gating) ─────────────────────────────────────────
+# ── NEW: multi-course section page renderer ───────────────────────────────────
+
+def _render_section_page_sync(
+    file_key: str,
+    mime_type: str,
+    page_number: int,
+    user_email: str,
+) -> bytes:
+    """
+    Render one page from a source document (multi-course PDF) on demand.
+    Watermarks with the user's email.
+    Does NOT cache to B2 — source docs can be large; cache only if needed.
+    """
+    from PIL import Image
+
+    file_bytes = download_bytes(file_key)
+
+    if mime_type == "application/pdf":
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:
+            raise HTTPException(status_code=500, detail="pypdfium2 not installed.")
+
+        pdf = pdfium.PdfDocument(file_bytes)
+        if page_number > len(pdf):
+            pdf.close()
+            raise HTTPException(status_code=404, detail=f"Page {page_number} does not exist.")
+
+        img = pdf[page_number - 1].render(scale=FALLBACK_SCALE).to_pil().convert("RGB")
+        pdf.close()
+    else:
+        img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+
+    if img.width > MAX_IMG_WIDTH:
+        ratio = MAX_IMG_WIDTH / img.width
+        img   = img.resize((MAX_IMG_WIDTH, int(img.height * ratio)), Image.LANCZOS)
+
+    img = _add_watermark(img, f"SparkL · {user_email}")
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=82, optimize=True)
+    return buf.getvalue()
+
+
+# ── Core page getter (single-course) ─────────────────────────────────────────
 
 async def _get_page_jpeg(
     question_id: str,
@@ -316,7 +344,7 @@ def _crop_tile(jpeg_bytes: bytes, row: int, col: int) -> bytes:
     return out.getvalue()
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── Single-course routes (unchanged) ─────────────────────────────────────────
 
 @router.get("/{question_id}/page/{page_number}", response_class=Response)
 async def get_page_image(
@@ -358,9 +386,9 @@ async def get_page_count(
     )
 
     return {
-        "total_pages": total,
+        "total_pages":    total,
         "viewable_pages": total if sub["is_paid"] else min(total, FREE_PAGE_LIMIT),
-        "is_paid": sub["is_paid"],
+        "is_paid":        sub["is_paid"],
     }
 
 
@@ -369,19 +397,14 @@ async def trigger_page_render(
     question_id: str,
     user: dict = Depends(get_current_user),
 ):
-    """
-    Admin-only: pre-render all pages for a question uploaded before the
-    render-on-upload system was deployed. Safe to call multiple times —
-    page_renderer skips pages that already exist.
-    """
     if not user["is_admin"]:
         raise HTTPException(status_code=403, detail="Admin only.")
 
     from app.services.page_renderer import render_and_store_pages
 
-    record = await run_in_threadpool(_get_question_record, question_id)
+    record     = await run_in_threadpool(_get_question_record, question_id)
     file_bytes = await run_in_threadpool(download_bytes, _to_key(record["file_url"]))
-    total = await run_in_threadpool(
+    total      = await run_in_threadpool(
         render_and_store_pages,
         question_id,
         file_bytes,
@@ -404,3 +427,77 @@ async def get_admin_signed_url(
         get_signed_url, _to_key(record["file_url"]), SIGNED_URL_TTL
     )
     return {"url": signed_url, "expires_in": SIGNED_URL_TTL, "warning": "Admin only."}
+
+
+# ── NEW: multi-course section page route ──────────────────────────────────────
+
+@router.get("/section/{section_id}/page/{page_number}", response_class=Response)
+async def get_section_page_image(
+    section_id: str,
+    page_number: int,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Serve one page from a multi-course source document.
+
+    Rules:
+    - Paid users (or admins) only.
+    - Page must be within the section's assigned range.
+    - Source document must be approved (admins bypass this).
+    """
+    if page_number < 1:
+        raise HTTPException(status_code=400, detail="Page number must be 1 or greater.")
+
+    # Check subscription before any DB queries
+    if not user["is_admin"]:
+        sub = await run_in_threadpool(_get_subscription, str(user["id"]))
+        if not sub["is_paid"]:
+            raise HTTPException(
+                status_code=403,
+                detail="Page images are available to paid subscribers only.",
+            )
+
+    # Fetch section
+    sec = (
+        supabase.table("course_document_sections")
+        .select("id, start_page, end_page, processing_status, source_document_id")
+        .eq("id", section_id)
+        .maybe_single()
+        .execute()
+    ).data
+    if not sec:
+        raise HTTPException(status_code=404, detail="Section not found.")
+    if sec["processing_status"] != "approved" and not user["is_admin"]:
+        raise HTTPException(status_code=404, detail="Section not found.")
+
+    # Enforce page range — no cross-course access
+    if page_number < sec["start_page"] or page_number > sec["end_page"]:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Page {page_number} is not part of this course "
+                f"(pages {sec['start_page']}–{sec['end_page']})."
+            ),
+        )
+
+    # Fetch source document
+    src = (
+        supabase.table("source_documents")
+        .select("file_key, mime_type, status")
+        .eq("id", sec["source_document_id"])
+        .maybe_single()
+        .execute()
+    ).data
+    if not src:
+        raise HTTPException(status_code=404, detail="Source document not found.")
+    if src["status"] != "approved" and not user["is_admin"]:
+        raise HTTPException(status_code=404, detail="Source document not found.")
+
+    jpeg = await run_in_threadpool(
+        _render_section_page_sync,
+        src["file_key"],
+        src["mime_type"],
+        page_number,
+        user["email"],
+    )
+    return Response(content=jpeg, media_type="image/jpeg", headers=_IMG_HEADERS)
