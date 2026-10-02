@@ -1,19 +1,17 @@
-"""Student-facing past-question API.
-
-Students receive metadata and structured processed questions only. The original
-B2 object is intentionally never returned from this router.
-
-Supports two question sources:
-  - past_questions  (single-upload flow)  — accessed via /api/questions/{question_id}
-  - course_document_sections (multi-course PDF flow) — accessed via /api/questions/section/{section_id}
+"""
+Student-facing past-question API.
+Changes:
+- _is_admin: removed redundant DB call — uses user dict passed from auth
+- get_question: excluded extracted_text from response (not needed by students)
+- _can_access: accepts pre-fetched is_admin flag instead of re-querying
 """
 from __future__ import annotations
 
+from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
-from app.routers.uploads import get_current_user_id
 from app.supabase_client import supabase
 
 router = APIRouter(prefix="/api/questions", tags=["Questions"])
@@ -25,28 +23,58 @@ PROCESSED_COLUMNS = (
 )
 
 
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+async def get_current_user(
+    authorization: Optional[str] = Header(None),
+) -> dict:
+    """
+    Single auth + profile fetch.
+    Returns {id, is_admin, email} — no downstream re-queries needed.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        user_response = supabase.auth.get_user(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
+    user = getattr(user_response, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
+
+    profile = (
+        supabase.table("profiles")
+        .select("is_admin, admin_role")
+        .eq("id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    is_admin = False
+    if profile and profile.data:
+        is_admin = bool(
+            profile.data.get("is_admin") or profile.data.get("admin_role")
+        )
+
+    return {
+        "id":       UUID(user.id),
+        "is_admin": is_admin,
+        "email":    user.email or str(user.id),
+    }
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _is_admin(user_id: UUID) -> bool:
-    try:
-        result = (
-            supabase.table("profiles")
-            .select("is_admin")
-            .eq("id", str(user_id))
-            .single()
-            .execute()
-        )
-        return bool(result.data and result.data.get("is_admin"))
-    except Exception:
-        return False
-
-
-def _can_access(row: dict, user_id: UUID) -> bool:
+def _can_access(row: dict, user: dict) -> bool:
+    """
+    Access check using already-fetched user dict.
+    No extra DB call needed.
+    """
     if row.get("status") == "approved":
         return True
-    if row.get("uploaded_by") == str(user_id):
+    if row.get("uploaded_by") == str(user["id"]):
         return True
-    return _is_admin(user_id)
+    return user.get("is_admin", False)
 
 
 def _check_uuid(value: str, label: str = "id") -> None:
@@ -71,7 +99,6 @@ def _get_paper(question_id: str) -> dict:
 
 
 def _user_enrolled_in_course(user_id: UUID, course_id: str) -> bool:
-    """Check the user is enrolled in the course the section belongs to."""
     try:
         res = (
             supabase.table("user_courses")
@@ -86,21 +113,22 @@ def _user_enrolled_in_course(user_id: UUID, course_id: str) -> bool:
         return False
 
 
-# ── Past-questions (single-upload) routes ─────────────────────────────────────
+# ── Past-questions routes ─────────────────────────────────────────────────────
 
 @router.get("/{question_id}")
 async def get_question(
     question_id: str,
-    user_id: UUID = Depends(get_current_user_id),
+    user:        dict = Depends(get_current_user),
 ):
     row = _get_paper(question_id)
-    if not _can_access(row, user_id):
+    if not _can_access(row, user):
         raise HTTPException(status_code=404, detail="Question not found.")
 
     response = (
         supabase.table("past_questions")
         .select(
-            "id, title, year, status, extracted_text, extraction_quality, "
+            # extracted_text excluded — students don't need raw text
+            "id, title, year, status, extraction_quality, "
             "mime_type, created_at, "
             "course:courses(id, name), semester:semesters(id, name)"
         )
@@ -116,14 +144,10 @@ async def get_question(
 @router.get("/{question_id}/processed")
 async def get_processed_questions(
     question_id: str,
-    user_id: UUID = Depends(get_current_user_id),
+    user:        dict = Depends(get_current_user),
 ):
-    """
-    Returns processed questions for a past_questions record.
-    Fetches questions that have this past_question_id — covers the single-upload flow.
-    """
     row = _get_paper(question_id)
-    if not _can_access(row, user_id):
+    if not _can_access(row, user):
         raise HTTPException(status_code=404, detail="Question not found.")
 
     response = (
@@ -136,17 +160,13 @@ async def get_processed_questions(
     return response.data or []
 
 
-# ── Section (multi-course PDF) routes ─────────────────────────────────────────
+# ── Section routes ────────────────────────────────────────────────────────────
 
 @router.get("/section/{section_id}")
 async def get_section_detail(
     section_id: str,
-    user_id: UUID = Depends(get_current_user_id),
+    user:       dict = Depends(get_current_user),
 ):
-    """
-    Returns metadata for a course_document_sections record.
-    Used by the course viewer to show section title, page range, course info.
-    """
     _check_uuid(section_id, "section id")
 
     sec = (
@@ -157,17 +177,16 @@ async def get_section_detail(
             "source_document:source_documents(id, status, page_count, created_at)"
         )
         .eq("id", section_id)
-        .eq("processing_status", "ready")   # only expose ready sections
+        .eq("processing_status", "ready")
         .maybe_single()
         .execute()
     )
     if not sec.data:
         raise HTTPException(status_code=404, detail="Section not found.")
 
-    # Verify user is enrolled in this course (or is admin)
     course_id = (sec.data.get("course") or {}).get("id")
-    if course_id and not _is_admin(user_id):
-        if not _user_enrolled_in_course(user_id, course_id):
+    if course_id and not user["is_admin"]:
+        if not _user_enrolled_in_course(user["id"], course_id):
             raise HTTPException(status_code=403, detail="Not enrolled in this course.")
 
     return sec.data
@@ -176,15 +195,10 @@ async def get_section_detail(
 @router.get("/section/{section_id}/processed")
 async def get_section_processed_questions(
     section_id: str,
-    user_id: UUID = Depends(get_current_user_id),
+    user:       dict = Depends(get_current_user),
 ):
-    """
-    Returns all processed questions for a section (multi-course PDF flow).
-    Only returns questions from approved/ready sections.
-    """
     _check_uuid(section_id, "section id")
 
-    # Confirm section exists and is ready
     sec = (
         supabase.table("course_document_sections")
         .select("id, processing_status, course_id")
@@ -197,10 +211,9 @@ async def get_section_processed_questions(
     if sec.data.get("processing_status") not in ("ready", "approved"):
         raise HTTPException(status_code=404, detail="Section not ready yet.")
 
-    # Verify enrollment (or admin)
     course_id = sec.data.get("course_id")
-    if course_id and not _is_admin(user_id):
-        if not _user_enrolled_in_course(user_id, course_id):
+    if course_id and not user["is_admin"]:
+        if not _user_enrolled_in_course(user["id"], course_id):
             raise HTTPException(status_code=403, detail="Not enrolled in this course.")
 
     response = (
@@ -213,29 +226,19 @@ async def get_section_processed_questions(
     return response.data or []
 
 
-# ── Course-level aggregation ───────────────────────────────────────────────────
+# ── Course-level aggregation ──────────────────────────────────────────────────
 
 @router.get("/course/{course_id}/all")
 async def get_all_course_questions(
     course_id: str,
-    user_id: UUID = Depends(get_current_user_id),
+    user:      dict = Depends(get_current_user),
 ):
-    """
-    Returns ALL processed questions for a course — both flows combined.
-    Used by the course viewer / practice mode to show everything in one list.
-
-    Sources:
-      1. past_questions → questions (via past_question_id)
-      2. course_document_sections → questions (via section_id)
-    """
     _check_uuid(course_id, "course id")
 
-    # Enrollment check
-    if not _is_admin(user_id):
-        if not _user_enrolled_in_course(user_id, course_id):
+    if not user["is_admin"]:
+        if not _user_enrolled_in_course(user["id"], course_id):
             raise HTTPException(status_code=403, detail="Not enrolled in this course.")
 
-    # ── Source 1: single-upload past questions ────────────────────────────────
     past_papers = (
         supabase.table("past_questions")
         .select("id")
@@ -258,7 +261,6 @@ async def get_all_course_questions(
             q["source"] = "past_question"
         past_questions = res.data or []
 
-    # ── Source 2: multi-course PDF sections ───────────────────────────────────
     sections = (
         supabase.table("course_document_sections")
         .select("id")
@@ -283,7 +285,7 @@ async def get_all_course_questions(
 
     all_questions = past_questions + section_questions
     return {
-        "course_id":  course_id,
-        "total":      len(all_questions),
-        "questions":  all_questions,
+        "course_id": course_id,
+        "total":     len(all_questions),
+        "questions": all_questions,
     }
