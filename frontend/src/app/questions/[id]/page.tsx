@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -16,8 +16,7 @@ import { createClient } from "@/utils/supabase/client";
 
 // Import KaTeX styles and rendering components
 import "katex/dist/katex.min.css";
-import InlineMath from "react-katex";
-import BlockMath from "react-katex";
+import { InlineMath, BlockMath } from "react-katex";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -76,32 +75,42 @@ type Tab = "paper" | "submit";
 // ══════════════════════════════════════════════════════════════════════════════
 
 function MathRenderer({ content, className = "" }: { content: string | null; className?: string }) {
+  const parts = useMemo(() => {
+    if (!content) return [];
+
+    // Normalize LaTeX bracket delimiters to $ / $$
+    const normalized = content
+      .replace(/\\\[/g, "$$")
+      .replace(/\\\]/g, "$$")
+      .replace(/\\\(/g, "$")
+      .replace(/\\\)/g, "$");
+
+    return normalized.split(/(\$\$.*?\$\$|\$.*?\$)/gs);
+  }, [content]);
+
   if (!content) return null;
-
-  // Split by block math ($$...$$), inline math ($...$), or LaTeX bracket notation \[...\] / \(...\)
-  const normalized = content
-    .replace(/\\\[/g, "$$")
-    .replace(/\\\]/g, "$$")
-    .replace(/\\\(/g, "$")
-    .replace(/\\\)/g, "$");
-
-  const parts = normalized.split(/(\$\$.*?\$\$|\$.*?\$)/gs);
 
   return (
     <span className={className}>
       {parts.map((part, index) => {
+        if (!part) return null;
+
         if (part.startsWith("$$") && part.endsWith("$$")) {
           const math = part.slice(2, -2).trim();
+          if (!math) return null;
           return (
-            <span key={index} className="my-2 block overflow-x-auto">
+            <span key={index} className="my-2 block overflow-x-auto max-w-full">
               <BlockMath math={math} />
             </span>
           );
         }
+
         if (part.startsWith("$") && part.endsWith("$")) {
           const math = part.slice(1, -1).trim();
+          if (!math) return null;
           return <InlineMath key={index} math={math} />;
         }
+
         return <span key={index}>{part}</span>;
       })}
     </span>
@@ -789,7 +798,7 @@ export default function QuestionDetailPage() {
       }
     }
     load();
-  }, [questionId]);
+  }, [questionId, router, supabase.auth]);
 
   useEffect(() => {
     const style = document.createElement("style");
