@@ -4,51 +4,78 @@ import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import { Sun, Moon, Monitor } from "lucide-react";
 
-export function ThemeToggle({ expanded }: { expanded?: boolean }) {
+const options = [
+  { value: "light", icon: Sun, label: "Light" },
+  { value: "dark", icon: Moon, label: "Dark" },
+  { value: "system", icon: Monitor, label: "Auto" },
+] as const;
+
+export function ThemeToggle({
+  expanded,
+}: {
+  expanded?: boolean;
+}) {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
-  // Avoid hydration mismatch
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   if (!mounted) return null;
 
-  const options = [
-    { value: "light", icon: Sun,     label: "Light"  },
-    { value: "dark",  icon: Moon,    label: "Dark"   },
-    { value: "system",icon: Monitor, label: "Auto"   },
-  ] as const;
+  const selectedTheme = options.some(
+    (option) => option.value === theme,
+  )
+    ? theme
+    : "system";
 
   if (!expanded) {
-    // Icon-only: cycle through modes
-    const current = options.find(o => o.value === theme) ?? options[2];
+    const currentIndex = options.findIndex(
+      (option) => option.value === selectedTheme,
+    );
+
+    const current = options[currentIndex];
+    const next = options[(currentIndex + 1) % options.length];
     const Icon = current.icon;
-    const next = options[(options.findIndex(o => o.value === theme) + 1) % 3];
+
     return (
       <button
+        type="button"
         onClick={() => setTheme(next.value)}
         title={`Switch to ${next.label} mode`}
-        className="flex w-full items-center justify-center rounded-lg px-2 py-2.5 text-[#64748B] transition hover:bg-white/[0.05] hover:text-slate-300"
+        aria-label={`Current theme: ${current.label}. Switch to ${next.label} mode`}
+        className="flex w-full items-center justify-center rounded-lg px-2 py-2.5 text-[var(--sp-text-2)] transition hover:bg-[var(--sp-bg-muted)] hover:text-[var(--sp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
       >
-        <Icon className="h-4 w-4" />
+        <Icon className="h-4 w-4" aria-hidden="true" />
       </button>
     );
   }
 
-  // Expanded: pill switcher
   return (
-    <div className="mx-2 mb-1 flex items-center rounded-lg border border-white/[0.06] bg-white/[0.03] p-0.5">
+    <div
+      role="group"
+      aria-label="Choose theme"
+      className="mx-2 mb-1 flex items-center rounded-lg border border-[var(--sp-border)] bg-[var(--sp-bg-muted)] p-0.5"
+    >
       {options.map(({ value, icon: Icon, label }) => (
         <button
+          type="button"
           key={value}
           onClick={() => setTheme(value)}
-          title={label}
-          className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 text-[10px] font-semibold transition-all
-            ${theme === value
-              ? "bg-[#2563EB] text-white shadow"
-              : "text-[#64748B] hover:text-slate-300"
-            }`}
+          title={
+            value === "system"
+              ? "Follow your device theme"
+              : `${label} mode`
+          }
+          aria-pressed={selectedTheme === value}
+          className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[10px] font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+            selectedTheme === value
+              ? "bg-blue-600 text-white shadow"
+              : "text-[var(--sp-text-2)] hover:bg-[var(--sp-bg-card)] hover:text-[var(--sp-text)]"
+          }`}
         >
-          <Icon className="h-3 w-3" />
+          <Icon className="h-3 w-3" aria-hidden="true" />
           {label}
         </button>
       ))}
