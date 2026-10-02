@@ -65,7 +65,7 @@ interface Submission {
 
 const LOW_QUALITY_THRESHOLD = 0.5;
 const FREE_PRACTICE_CAP     = 5;
-const FREE_TEXT_LINES       = 10; // lines of extracted text free users see
+const FREE_TEXT_LINES       = 10;
 
 type Tab = "view" | "read" | "practice" | "submit";
 
@@ -74,13 +74,6 @@ type Tab = "view" | "read" | "practice" | "submit";
 // ── Anti-screenshot overlay ───────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Renders a CSS-only watermark overlay over protected content.
- * Also hooks into visibility/focus events to blank the screen when
- * the user switches apps (covers most in-app screen recorders).
- * True OS-level screenshot blocking is not possible in a browser —
- * this is the maximum available protection on web.
- */
 function useAntiCapture(enabled: boolean) {
   const [hidden, setHidden] = useState(false);
 
@@ -120,7 +113,6 @@ function ProtectedWrap({ userEmail, children, enabled = true }: ProtectedWrapPro
 
   return (
     <div className="relative select-none">
-      {/* Blur entire section when window loses focus (screen recorder switch) */}
       {hidden && (
         <div
           className="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-2xl"
@@ -136,7 +128,6 @@ function ProtectedWrap({ userEmail, children, enabled = true }: ProtectedWrapPro
         </div>
       )}
 
-      {/* Diagonal watermark tiled over content */}
       <div
         className="pointer-events-none absolute inset-0 z-10 overflow-hidden rounded-2xl"
         aria-hidden
@@ -160,7 +151,6 @@ function ProtectedWrap({ userEmail, children, enabled = true }: ProtectedWrapPro
         ))}
       </div>
 
-      {/* Actual content */}
       <div style={{ userSelect: "none", WebkitUserSelect: "none" }}>
         {children}
       </div>
@@ -218,7 +208,6 @@ function ExtractedTextView({
             ))}
           </div>
 
-          {/* Blur fade for free users */}
           {isGated && (
             <div
               className="relative -mt-10 pt-10"
@@ -230,7 +219,6 @@ function ExtractedTextView({
         </div>
       </ProtectedWrap>
 
-      {/* Gate banner */}
       {isGated && (
         <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-6 text-center">
           <div className="flex justify-center mb-3">
@@ -470,15 +458,22 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         throw new Error(d.detail || "Failed to submit. Please try again.");
       }
 
+      // ── FIX: resolve JSON before entering setState ──
+      const newSub = await res.json();
+
       setSubmissions(prev => [{
-        id: (await res.json()).id,
-        status: "pending", feedback: null,
+        id: newSub.id,
+        status: "pending",
+        feedback: null,
         extracted_text: text.trim() || null,
-        mime_type: file?.type ?? null, file_size: file?.size ?? null,
-        created_at: new Date().toISOString(), reviewed_at: null,
+        mime_type: file?.type ?? null,
+        file_size: file?.size ?? null,
+        created_at: new Date().toISOString(),
+        reviewed_at: null,
       }, ...prev]);
 
-      setText(""); setFile(null);
+      setText("");
+      setFile(null);
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
@@ -623,8 +618,6 @@ export default function QuestionDetailPage() {
   });
 
   const [tab, setTab] = useState<Tab>("view");
-
-  // Whether to show the PDF preview panel (only paid; user must click to show)
   const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
@@ -674,14 +667,11 @@ export default function QuestionDetailPage() {
     load();
   }, [questionId]);
 
-  // ── Anti-screenshot global style injection ────────────────────────────────
   useEffect(() => {
     const style = document.createElement("style");
     style.id    = "sp-anticap";
     style.textContent = `
-      /* Prevent text selection on protected content */
       .sp-protected { user-select: none; -webkit-user-select: none; }
-      /* Blank page during screen recording on some browsers (CSS only, best-effort) */
       @media print { .sp-protected { filter: blur(20px) !important; } }
     `;
     document.head.appendChild(style);
@@ -721,7 +711,6 @@ export default function QuestionDetailPage() {
     <div className="min-h-screen px-4 py-8 sm:px-6" style={{ background: "var(--sp-bg)" }}>
       <div className="mx-auto max-w-3xl">
 
-        {/* Back */}
         <Link
           href={data.course ? `/dashboard/courses/${data.course.id}` : "/dashboard"}
           className="inline-flex items-center gap-1.5 text-sm font-medium transition-colors"
@@ -730,7 +719,6 @@ export default function QuestionDetailPage() {
           <ArrowLeft size={15} /> Back
         </Link>
 
-        {/* Header card */}
         <div className="mt-4 rounded-2xl border p-5"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
           <div className="flex items-start gap-3">
@@ -756,11 +744,9 @@ export default function QuestionDetailPage() {
             </div>
           )}
 
-          {/* Tabs */}
           <div className="mt-5 flex items-center gap-1 flex-wrap border-t pt-4"
             style={{ borderColor: "var(--sp-border)" }}>
 
-            {/* View paper (PDF inline — paid only) */}
             {isPdf && (
               <button
                 onClick={() => setTab("view")}
@@ -773,7 +759,6 @@ export default function QuestionDetailPage() {
               </button>
             )}
 
-            {/* Read (extracted text) */}
             {hasText && (
               <button
                 onClick={() => setTab("read")}
@@ -791,7 +776,6 @@ export default function QuestionDetailPage() {
               </button>
             )}
 
-            {/* Practice */}
             {questionsLoading ? (
               <div className="flex items-center gap-1.5 px-3.5 py-2">
                 <Loader2 size={12} className="animate-spin text-indigo-400" />
@@ -814,7 +798,6 @@ export default function QuestionDetailPage() {
               </button>
             ) : null}
 
-            {/* Submit */}
             <button
               onClick={() => setTab("submit")}
               className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
@@ -842,16 +825,13 @@ export default function QuestionDetailPage() {
           </div>
         </div>
 
-        {/* Tab content */}
         <div className="mt-4 space-y-4">
 
-          {/* ── VIEW (PDF inline) ── */}
           {tab === "view" && isPdf && (
             <div className="space-y-3">
               {limits.is_paid ? (
                 <div className="rounded-2xl border p-5"
                   style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-                  {/* Toggle preview button */}
                   <button
                     onClick={() => setShowPreview(v => !v)}
                     className="flex items-center gap-2 mb-4 rounded-xl border px-4 py-2.5 text-sm font-semibold transition w-full justify-center"
@@ -893,7 +873,6 @@ export default function QuestionDetailPage() {
             </div>
           )}
 
-          {/* ── READ (Extracted text) ── */}
           {tab === "read" && hasText && (
             <ExtractedTextView
               text={data.extracted_text!}
@@ -902,7 +881,6 @@ export default function QuestionDetailPage() {
             />
           )}
 
-          {/* ── PRACTICE ── */}
           {tab === "practice" && (
             <div className="space-y-4">
               {hasProcessed ? (
@@ -946,7 +924,6 @@ export default function QuestionDetailPage() {
             </div>
           )}
 
-          {/* ── SUBMIT SOLUTION ── */}
           {tab === "submit" && (
             <SubmitSolutionSection questionId={questionId} />
           )}
