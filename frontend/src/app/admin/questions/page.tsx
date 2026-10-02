@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTheme } from "next-themes";
 import {
   Loader2, FileText, CheckCircle2, XCircle, Trash2,
   ExternalLink, ChevronDown, Pencil, Sparkles, Clock,
@@ -91,9 +92,9 @@ class ReviewPanelBoundary extends React.Component<
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { bg: string; label: string; icon: React.ReactNode }> = {
-    pending:  { bg: "bg-amber-500/10 text-amber-400 border border-amber-500/20",       label: "Pending",  icon: <Clock        className="h-3 w-3" /> },
-    approved: { bg: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20", label: "Approved", icon: <CheckCircle2 className="h-3 w-3" /> },
-    rejected: { bg: "bg-red-500/10 text-red-400 border border-red-500/20",             label: "Rejected", icon: <XCircle      className="h-3 w-3" /> },
+    pending:  { bg: "bg-amber-500/10 text-[var(--admin-amber)] border border-amber-500/20",       label: "Pending",  icon: <Clock        className="h-3 w-3" /> },
+    approved: { bg: "bg-emerald-500/10 text-[var(--admin-green)] border border-emerald-500/20", label: "Approved", icon: <CheckCircle2 className="h-3 w-3" /> },
+    rejected: { bg: "bg-red-500/10 text-[var(--admin-red)] border border-red-500/20",             label: "Rejected", icon: <XCircle      className="h-3 w-3" /> },
   };
   const s = map[status] ?? map.pending;
   return (
@@ -118,12 +119,12 @@ function ProcessingBadge({
 
   if (s === "failed") return (
     <div className="mt-2 space-y-1.5">
-      <p className="flex items-center gap-1.5 text-xs text-red-400">
+      <p className="flex items-center gap-1.5 text-xs text-[var(--admin-red)]">
         <AlertCircle className="h-3.5 w-3.5 shrink-0" />
         Processing failed{errorMsg ? `: ${errorMsg}` : ""}
       </p>
       {retryError && (
-        <p className="flex items-center gap-1.5 text-xs text-red-300">
+        <p className="flex items-center gap-1.5 text-xs text-[var(--admin-red)]">
           <AlertCircle className="h-3 w-3 shrink-0" />
           {retryError}
         </p>
@@ -131,7 +132,7 @@ function ProcessingBadge({
       <button
         onClick={onProcess}
         disabled={processing}
-        className="flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-400 transition hover:bg-blue-500/20 disabled:opacity-50"
+        className="flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-[var(--admin-blue)] transition hover:bg-blue-500/20 disabled:opacity-50"
       >
         {processing ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
         {processing ? "Processing…" : "Process now"}
@@ -140,7 +141,7 @@ function ProcessingBadge({
   );
 
   if (s === "extracting") return (
-    <p className="mt-2 flex items-center gap-1.5 text-xs text-blue-400">
+    <p className="mt-2 flex items-center gap-1.5 text-xs text-[var(--admin-blue)]">
       <Loader2 className="h-3 w-3 animate-spin" />
       Extracting text…
     </p>
@@ -158,6 +159,7 @@ function ProcessingBadge({
 
 export default function AdminQuestionsPage() {
   const supabase = createClient();
+  const { resolvedTheme } = useTheme();
 
   const [questions,   setQuestions]   = useState<Question[]>([]);
   const [loading,     setLoading]     = useState(true);
@@ -210,7 +212,7 @@ export default function AdminQuestionsPage() {
     return session.access_token;
   }, [supabase]);
 
-  // ── Poll helpers — defined before loadQuestions ───────────────────────────
+  // ── Poll helpers ──────────────────────────────────────────────────────────
 
   const stopPolling = useCallback((id: string) => {
     if (pollRefs.current[id]) {
@@ -220,7 +222,7 @@ export default function AdminQuestionsPage() {
   }, []);
 
   const startPolling = useCallback((id: string) => {
-    if (pollRefs.current[id]) return; // already polling
+    if (pollRefs.current[id]) return;
 
     const interval = setInterval(async () => {
       const token = await getToken();
@@ -256,17 +258,13 @@ export default function AdminQuestionsPage() {
     pollRefs.current[id] = interval;
   }, [getToken, stopPolling]);
 
-  // ── Clean up polls when tab changes or component unmounts ─────────────────
+  // ── Clean up polls ────────────────────────────────────────────────────────
 
   useEffect(() => {
-    // Stop polling questions that are no longer in the list
-    return () => {
-      Object.keys(pollRefs.current).forEach(stopPolling);
-    };
+    return () => { Object.keys(pollRefs.current).forEach(stopPolling); };
   }, [stopPolling]);
 
   useEffect(() => {
-    // When activeTab changes, stop all existing polls (new list will restart relevant ones)
     Object.keys(pollRefs.current).forEach(stopPolling);
   }, [activeTab, stopPolling]);
 
@@ -292,7 +290,6 @@ export default function AdminQuestionsPage() {
       const data: Question[] = await res.json();
       setQuestions(data);
 
-      // Auto-start polling for in-progress items
       for (const q of data) {
         if (q.processing_status === "uploaded" || q.processing_status === "extracting") {
           startPolling(q.id);
@@ -311,15 +308,8 @@ export default function AdminQuestionsPage() {
 
   async function toggleExpand(q: Question) {
     if (editingId === q.id) return;
-
-    if (expandedId === q.id) {
-      setExpandedId(null);
-      return;
-    }
-
+    if (expandedId === q.id) { setExpandedId(null); return; }
     setExpandedId(q.id);
-
-    // Already fetched
     if (expandedText[q.id] !== undefined) return;
 
     setExpandLoading(q.id);
@@ -341,13 +331,12 @@ export default function AdminQuestionsPage() {
     }
   }
 
-  // ── Start editing (also lazy-loads text if needed) ────────────────────────
+  // ── Start editing ─────────────────────────────────────────────────────────
 
   async function startEditing(q: Question) {
     setExpandedId(q.id);
     setTextError("");
 
-    // Use cached text if available
     if (expandedText[q.id] !== undefined) {
       setEditText(expandedText[q.id] ?? "");
       setEditingId(q.id);
@@ -400,7 +389,6 @@ export default function AdminQuestionsPage() {
         },
       );
       if (!res.ok) throw new Error("Failed to save changes.");
-      // Update the cached expanded text
       setExpandedText(prev => ({ ...prev, [id]: trimmed }));
       setEditingId(null);
       setEditText("");
@@ -411,7 +399,7 @@ export default function AdminQuestionsPage() {
     }
   }
 
-  // ── Trigger GitHub Actions processing ─────────────────────────────────────
+  // ── Trigger processing ────────────────────────────────────────────────────
 
   async function triggerProcessing(id: string) {
     setProcessingMap(prev => ({ ...prev, [id]: { active: true, error: null } }));
@@ -535,7 +523,6 @@ export default function AdminQuestionsPage() {
       );
       if (!res.ok) throw new Error("Failed to delete.");
       setQuestions(prev => prev.filter(q => q.id !== id));
-      // Clean up any cached text for deleted item
       setExpandedText(prev => { const n = { ...prev }; delete n[id]; return n; });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -610,13 +597,22 @@ export default function AdminQuestionsPage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-[#07091A] px-4 py-8 sm:px-6 lg:px-10">
+    <div
+      className="min-h-screen bg-[var(--sp-bg)] px-4 py-8 text-[var(--sp-text)] sm:px-6 lg:px-10"
+      style={{
+        "--admin-blue":   resolvedTheme === "dark" ? "#60A5FA" : "#2563EB",
+        "--admin-green":  resolvedTheme === "dark" ? "#34D399" : "#047857",
+        "--admin-red":    resolvedTheme === "dark" ? "#F87171" : "#B91C1C",
+        "--admin-amber":  resolvedTheme === "dark" ? "#FBBF24" : "#92400E",
+        "--admin-violet": resolvedTheme === "dark" ? "#A78BFA" : "#7C3AED",
+      } as React.CSSProperties}
+    >
       <div className="mx-auto max-w-5xl">
 
         <div className="mb-8">
-          <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">Admin</p>
-          <h1 className="text-3xl font-extrabold text-white">Past Questions</h1>
-          <p className="mt-2 text-sm text-slate-500">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-[var(--admin-blue)]">Admin</p>
+          <h1 className="text-3xl font-extrabold text-[var(--sp-text)]">Past Questions</h1>
+          <p className="mt-2 text-sm text-[var(--sp-text-2)]">
             Review uploads, check AI-generated questions, then approve before students see them.
           </p>
         </div>
@@ -631,7 +627,7 @@ export default function AdminQuestionsPage() {
                 className={`rounded-full px-4 py-2 text-sm font-medium transition ${
                   activeTab === tab.key
                     ? "bg-blue-600 text-white"
-                    : "border border-white/10 bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] hover:text-white"
+                    : "border border-[var(--sp-border)] bg-[var(--sp-input-bg)] text-[var(--sp-text-2)] hover:bg-[var(--sp-bg-muted)] hover:text-[var(--sp-text)]"
                 }`}
               >
                 {tab.label}
@@ -652,7 +648,7 @@ export default function AdminQuestionsPage() {
             <button
               onClick={loadQuestions}
               disabled={loading}
-              className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-400 hover:bg-white/[0.08] transition disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-full border border-[var(--sp-border)] bg-[var(--sp-input-bg)] px-3 py-2 text-xs font-medium text-[var(--sp-text-2)] hover:bg-[var(--sp-bg-muted)] transition disabled:opacity-50"
             >
               <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
               Refresh
@@ -663,17 +659,14 @@ export default function AdminQuestionsPage() {
         {/* Error banner */}
         {error && (
           <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-            <p className="text-sm text-red-400">{error}</p>
-            <button
-              onClick={() => setError("")}
-              className="ml-auto text-slate-500 hover:text-slate-300 text-xs"
-            >✕</button>
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--admin-red)]" />
+            <p className="text-sm text-[var(--admin-red)]">{error}</p>
+            <button onClick={() => setError("")} className="ml-auto text-xs text-[var(--sp-text-2)] hover:text-[var(--sp-text)]">✕</button>
           </div>
         )}
 
         {/* Question list */}
-        <div className="rounded-2xl border border-white/[0.06] bg-[#0D1230] overflow-hidden">
+        <div className="rounded-2xl border border-[var(--sp-border)] bg-[var(--sp-bg-card)] overflow-hidden">
           {loading ? (
             <div className="flex justify-center py-20">
               <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
@@ -681,27 +674,27 @@ export default function AdminQuestionsPage() {
           ) : questions.length === 0 ? (
             <div className="flex flex-col items-center py-20 text-center">
               <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500/10">
-                <FileText className="h-5 w-5 text-blue-400" />
+                <FileText className="h-5 w-5 text-[var(--admin-blue)]" />
               </div>
-              <p className="text-sm font-semibold text-slate-400">
+              <p className="text-sm font-semibold text-[var(--sp-text-2)]">
                 No {activeTab || ""} past questions found.
               </p>
             </div>
           ) : (
             <>
               {/* Select all row */}
-              <div className="flex items-center gap-3 border-b border-white/[0.05] px-5 py-3">
+              <div className="flex items-center gap-3 border-b border-[var(--sp-border)] px-5 py-3">
                 <input
                   type="checkbox"
                   checked={selected.size === questions.length && questions.length > 0}
                   onChange={toggleSelectAll}
-                  className="h-4 w-4 rounded border-white/20 bg-white/5 accent-blue-500"
+                  className="h-4 w-4 rounded border-[var(--sp-border)] bg-[var(--sp-input-bg)] accent-blue-500"
                 />
-                <span className="text-xs font-medium text-slate-500">Select all</span>
-                <span className="ml-auto text-xs text-slate-600">{questions.length} papers</span>
+                <span className="text-xs font-medium text-[var(--sp-text-2)]">Select all</span>
+                <span className="ml-auto text-xs text-[var(--sp-text-2)]">{questions.length} papers</span>
               </div>
 
-              <div className="divide-y divide-white/[0.05]">
+              <div className="divide-y divide-[var(--sp-border)]">
                 {questions.map(q => {
                   const pState             = processingMap[q.id];
                   const isProcessingActive = pState?.active === true
@@ -722,20 +715,20 @@ export default function AdminQuestionsPage() {
                             type="checkbox"
                             checked={selected.has(q.id)}
                             onChange={() => toggleSelected(q.id)}
-                            className="mt-1 h-4 w-4 shrink-0 rounded border-white/20 bg-white/5 accent-blue-500"
+                            className="mt-1 h-4 w-4 shrink-0 rounded border-[var(--sp-border)] bg-[var(--sp-input-bg)] accent-blue-500"
                           />
                           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10">
-                            <FileText className="h-4.5 w-4.5 text-blue-400" size={18} />
+                            <FileText size={18} className="text-[var(--admin-blue)]" />
                           </div>
                           <div className="min-w-0">
-                            <p className="font-semibold text-white truncate">{q.title}</p>
-                            <p className="mt-0.5 text-sm text-slate-500">
+                            <p className="font-semibold text-[var(--sp-text)] truncate">{q.title}</p>
+                            <p className="mt-0.5 text-sm text-[var(--sp-text-2)]">
                               {q.course?.name ?? "No course"}
                               {q.semester?.name ? ` · ${q.semester.name}` : ""}
                               {q.year ? ` · ${q.year}` : ""}
                               {" · "}{q.uploader?.full_name ?? "Unknown"}
                             </p>
-                            <p className="mt-1 text-xs text-slate-600">
+                            <p className="mt-1 text-xs text-[var(--sp-text-2)]">
                               {new Date(q.created_at).toLocaleDateString("en-GB", {
                                 day: "numeric", month: "short", year: "numeric",
                               })}
@@ -750,13 +743,13 @@ export default function AdminQuestionsPage() {
                               processing={isProcessingActive}
                             />
 
-                            {/* Generate questions button (ready but not AI processed) */}
+                            {/* Generate questions button */}
                             {q.processing_status === "ready" && !q.ai_processed && (
                               <div className="mt-2">
                                 <button
                                   onClick={() => triggerProcessing(q.id)}
                                   disabled={isProcessingActive}
-                                  className="flex items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-400 transition hover:bg-violet-500/20 disabled:opacity-50"
+                                  className="flex items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-[var(--admin-violet)] transition hover:bg-violet-500/20 disabled:opacity-50"
                                 >
                                   {isProcessingActive
                                     ? <Loader2 size={12} className="animate-spin" />
@@ -768,7 +761,7 @@ export default function AdminQuestionsPage() {
 
                             {/* Low quality warning */}
                             {q.extraction_quality !== null && q.extraction_quality < 0.5 && (
-                              <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
+                              <div className="mt-2 flex items-center gap-1.5 text-xs text-[var(--admin-amber)]">
                                 <AlertCircle className="h-3.5 w-3.5 shrink-0" />
                                 Low extraction quality — review text before approving
                               </div>
@@ -777,7 +770,7 @@ export default function AdminQuestionsPage() {
                             {/* Preview watermarked file */}
                             <button
                               onClick={() => setPreviewId(q.id)}
-                              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+                              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[var(--admin-blue)] transition-colors hover:underline"
                             >
                               Preview watermarked file <ExternalLink size={11} />
                             </button>
@@ -788,7 +781,7 @@ export default function AdminQuestionsPage() {
                                 <button
                                   onClick={() => toggleExpand(q)}
                                   disabled={isLoadingText}
-                                  className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-50"
+                                  className="flex items-center gap-1 text-xs font-medium text-[var(--sp-text-2)] hover:text-[var(--sp-text)] transition-colors disabled:opacity-50"
                                 >
                                   {isLoadingText
                                     ? <Loader2 size={12} className="animate-spin" />
@@ -801,7 +794,7 @@ export default function AdminQuestionsPage() {
                                 <button
                                   onClick={() => startEditing(q)}
                                   disabled={isLoadingText}
-                                  className="flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50"
+                                  className="flex items-center gap-1 text-xs font-medium text-[var(--admin-blue)] hover:underline transition-colors disabled:opacity-50"
                                 >
                                   <Pencil size={11} /> Edit
                                 </button>
@@ -811,8 +804,8 @@ export default function AdminQuestionsPage() {
                             {/* Rejection reason */}
                             {q.status === "rejected" && q.rejection_reason && (
                               <div className="mt-2 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
-                                <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
-                                <p className="text-xs text-red-400">
+                                <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--admin-red)]" />
+                                <p className="text-xs text-[var(--admin-red)]">
                                   <span className="font-semibold">Rejected:</span> {q.rejection_reason}
                                 </p>
                               </div>
@@ -828,15 +821,15 @@ export default function AdminQuestionsPage() {
                       {isExpanded && editingId !== q.id && (
                         <div className="mt-4">
                           {isLoadingText ? (
-                            <div className="flex items-center gap-2 py-4 text-xs text-slate-500">
+                            <div className="flex items-center gap-2 py-4 text-xs text-[var(--sp-text-2)]">
                               <Loader2 size={13} className="animate-spin" /> Loading extracted text…
                             </div>
                           ) : cachedText ? (
-                            <div className="max-h-48 overflow-y-auto rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm leading-7 text-slate-400">
+                            <div className="max-h-48 overflow-y-auto rounded-xl border border-[var(--sp-border)] bg-[var(--sp-bg-muted)] p-4 text-sm leading-7 text-[var(--sp-text-2)]">
                               {cachedText}
                             </div>
                           ) : (
-                            <p className="text-xs text-slate-500 italic">No extracted text available.</p>
+                            <p className="text-xs text-[var(--sp-text-2)] italic">No extracted text available.</p>
                           )}
                         </div>
                       )}
@@ -848,12 +841,12 @@ export default function AdminQuestionsPage() {
                             value={editText}
                             onChange={e => setEditText(e.target.value)}
                             rows={10}
-                            className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                            className="w-full rounded-xl border border-[var(--sp-border)] bg-[var(--sp-input-bg)] px-4 py-3 text-sm text-[var(--sp-text)] outline-none placeholder:text-[var(--sp-text-3)] focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                           />
                           {textError && (
-                            <p className="mt-1.5 text-xs text-red-400">{textError}</p>
+                            <p className="mt-1.5 text-xs text-[var(--admin-red)]">{textError}</p>
                           )}
-                          <p className="mt-1.5 text-[11px] text-slate-600">
+                          <p className="mt-1.5 text-[11px] text-[var(--sp-text-2)]">
                             After saving, tap &quot;Generate questions&quot; to rebuild from the updated text.
                           </p>
                           <div className="mt-2 flex gap-2">
@@ -868,7 +861,7 @@ export default function AdminQuestionsPage() {
                             <button
                               onClick={cancelEditing}
                               disabled={savingTextId === q.id}
-                              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.08] disabled:opacity-60"
+                              className="rounded-lg border border-[var(--sp-border)] bg-[var(--sp-input-bg)] px-3 py-2 text-xs font-semibold text-[var(--sp-text-2)] transition hover:bg-[var(--sp-bg-muted)] disabled:opacity-60"
                             >
                               Cancel
                             </button>
@@ -882,7 +875,7 @@ export default function AdminQuestionsPage() {
                           <button
                             onClick={() => updateStatus(q.id, "approved")}
                             disabled={actioningId === q.id}
-                            className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                            className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-[var(--admin-green)] transition hover:bg-emerald-500/20 disabled:opacity-50"
                           >
                             <CheckCircle2 size={13} /> Approve
                           </button>
@@ -891,7 +884,7 @@ export default function AdminQuestionsPage() {
                           <button
                             onClick={() => { setRejectTarget(q); setRejectReason(""); }}
                             disabled={actioningId === q.id}
-                            className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-400 transition hover:bg-amber-500/20 disabled:opacity-50"
+                            className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-[var(--admin-amber)] transition hover:bg-amber-500/20 disabled:opacity-50"
                           >
                             <XCircle size={13} /> Reject
                           </button>
@@ -900,7 +893,7 @@ export default function AdminQuestionsPage() {
                           <button
                             onClick={() => updateStatus(q.id, "pending")}
                             disabled={actioningId === q.id}
-                            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.08] disabled:opacity-50"
+                            className="flex items-center gap-1.5 rounded-lg border border-[var(--sp-border)] bg-[var(--sp-input-bg)] px-3 py-2 text-xs font-semibold text-[var(--sp-text-2)] transition hover:bg-[var(--sp-bg-muted)] disabled:opacity-50"
                           >
                             Reset to Pending
                           </button>
@@ -908,7 +901,7 @@ export default function AdminQuestionsPage() {
                         <button
                           onClick={() => setDeleteTarget(q)}
                           disabled={actioningId === q.id}
-                          className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-400 transition hover:bg-red-500/20 disabled:opacity-50"
+                          className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-[var(--admin-red)] transition hover:bg-red-500/20 disabled:opacity-50"
                         >
                           <Trash2 size={13} /> Delete
                         </button>
@@ -916,16 +909,16 @@ export default function AdminQuestionsPage() {
 
                       {/* Review questions panel */}
                       {q.status !== "rejected" && (
-                        <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+                        <div className="mt-4 rounded-xl border border-[var(--sp-border)] bg-[var(--sp-bg-muted)] p-4">
                           <button
                             onClick={() => setReviewId(reviewId === q.id ? null : q.id)}
                             className="flex w-full items-center justify-between gap-3 text-left"
                           >
-                            <span className="flex items-center gap-2 text-xs font-semibold text-slate-300">
-                              <Sparkles className="h-4 w-4 text-violet-400" />
+                            <span className="flex items-center gap-2 text-xs font-semibold text-[var(--sp-text)]">
+                              <Sparkles className="h-4 w-4 text-[var(--admin-violet)]" />
                               Review questions
                             </span>
-                            <span className="flex items-center gap-2 text-xs text-slate-500">
+                            <span className="flex items-center gap-2 text-xs text-[var(--sp-text-2)]">
                               {q.ai_processed ? "AI drafts ready" : "No questions yet"}
                               <ChevronDown
                                 size={14}
@@ -988,9 +981,9 @@ export default function AdminQuestionsPage() {
       {/* Reject modal */}
       {rejectTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-          <div className="w-full max-w-sm rounded-2xl border border-white/[0.08] bg-[#0D1230] p-6 shadow-2xl">
-            <h2 className="text-base font-semibold text-white">Reject this upload?</h2>
-            <p className="mt-1 text-sm text-slate-400">
+          <div className="w-full max-w-sm rounded-2xl border border-[var(--sp-border)] bg-[var(--sp-search-popup)] p-6 shadow-2xl">
+            <h2 className="text-base font-semibold text-[var(--sp-text)]">Reject this upload?</h2>
+            <p className="mt-1 text-sm text-[var(--sp-text-2)]">
               Let the student know why &quot;{rejectTarget.title}&quot; was rejected.
             </p>
             <textarea
@@ -999,13 +992,13 @@ export default function AdminQuestionsPage() {
               placeholder="e.g. Blurry scan, wrong course, incomplete pages…"
               rows={3}
               maxLength={300}
-              className="mt-4 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              className="mt-4 w-full rounded-xl border border-[var(--sp-border)] bg-[var(--sp-input-bg)] px-4 py-3 text-sm text-[var(--sp-text)] outline-none placeholder:text-[var(--sp-text-3)] focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             />
             <div className="mt-4 flex gap-2">
               <button
                 onClick={() => setRejectTarget(null)}
                 disabled={actioningId === rejectTarget.id}
-                className="flex-1 rounded-xl border border-white/10 bg-white/[0.04] py-2.5 text-sm font-semibold text-slate-300 transition hover:bg-white/[0.08] disabled:opacity-60"
+                className="flex-1 rounded-xl border border-[var(--sp-border)] bg-[var(--sp-input-bg)] py-2.5 text-sm font-semibold text-[var(--sp-text)] transition hover:bg-[var(--sp-bg-muted)] disabled:opacity-60"
               >
                 Cancel
               </button>

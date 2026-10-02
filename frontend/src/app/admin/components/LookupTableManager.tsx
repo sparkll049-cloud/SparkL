@@ -58,11 +58,18 @@ export default function LookupTableManager({
           .map((f) => f.optionsTable as string)
       )
     );
+
     const results: Record<string, Row[]> = {};
+
     for (const refTable of uniqueRefTables) {
-      const { data } = await supabase.from(refTable).select("id, name").order("name");
+      const { data } = await supabase
+        .from(refTable)
+        .select("id, name")
+        .order("name");
+
       results[refTable] = data ?? [];
     }
+
     setRefTables(results);
   }
 
@@ -73,13 +80,21 @@ export default function LookupTableManager({
 
   async function handleAdd() {
     if (!newName.trim()) return;
+
     setSaving(true);
     setError("");
+
     const { error: insertError } = await supabase
       .from(table)
       .insert({ name: newName.trim(), ...newExtra });
+
     setSaving(false);
-    if (insertError) { setError(insertError.message); return; }
+
+    if (insertError) {
+      setError(insertError.message);
+      return;
+    }
+
     setNewName("");
     setNewExtra({});
     loadRows();
@@ -88,69 +103,100 @@ export default function LookupTableManager({
   function startEdit(row: Row) {
     setEditingId(row.id);
     setEditName(row.name);
+
     const extras: Record<string, string> = {};
-    extraFields.forEach((f) => { extras[f.key] = row[f.key] ?? ""; });
+
+    extraFields.forEach((f) => {
+      extras[f.key] = row[f.key] ?? "";
+    });
+
     setEditExtra(extras);
   }
 
   async function handleSaveEdit(id: string) {
     setSaving(true);
     setError("");
+
     const { error: updateError } = await supabase
       .from(table)
       .update({ name: editName.trim(), ...editExtra })
       .eq("id", id);
+
     setSaving(false);
-    if (updateError) { setError(updateError.message); return; }
+
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+
     setEditingId(null);
     loadRows();
   }
 
   async function handleDelete(id: string) {
     if (!confirm("Delete this item? This cannot be undone.")) return;
+
     setError("");
-    const { error: deleteError } = await supabase.from(table).delete().eq("id", id);
-    if (deleteError) { setError(deleteError.message); return; }
+
+    const { error: deleteError } = await supabase
+      .from(table)
+      .delete()
+      .eq("id", id);
+
+    if (deleteError) {
+      setError(deleteError.message);
+      return;
+    }
+
     loadRows();
   }
 
   const inputClass =
-    "h-11 w-full rounded-xl border border-white/10 bg-white/[0.06] px-4 text-sm text-white placeholder:text-slate-500 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition";
+    "h-11 w-full rounded-xl border border-[var(--sp-border)] bg-[var(--sp-input-bg)] px-4 text-sm text-[var(--sp-text)] placeholder:text-[var(--sp-text-3)] outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition";
 
   const selectClass =
-    "h-11 w-full rounded-xl border border-white/10 bg-[#0D1230] px-4 text-sm text-white outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition";
+    "h-11 w-full rounded-xl border border-[var(--sp-border)] bg-[var(--sp-search-popup)] px-4 text-sm text-[var(--sp-text)] outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition";
+
+  const optionClass =
+    "bg-[var(--sp-search-popup)] text-[var(--sp-text)]";
 
   return (
-    <div className="min-h-screen bg-[#07091A] px-4 py-8 sm:px-6 lg:px-10">
+    <div className="min-h-screen bg-[var(--sp-bg)] px-4 py-8 text-[var(--sp-text)] transition-colors sm:px-6 lg:px-10">
       <div className="mx-auto max-w-3xl">
-
         {/* Header */}
         <div className="mb-8">
-          <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-blue-500">
             Admin
           </p>
-          <h1 className="text-3xl font-extrabold text-white">{title}</h1>
-          <p className="mt-2 text-sm text-slate-500">{description}</p>
+          <h1 className="text-3xl font-extrabold text-[var(--sp-text)]">
+            {title}
+          </h1>
+          <p className="mt-2 text-sm text-[var(--sp-text-2)]">
+            {description}
+          </p>
         </div>
 
         {/* Error */}
         {error && (
           <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-            <p className="text-sm text-red-400">{error}</p>
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+            <p className="text-sm text-red-500">{error}</p>
           </div>
         )}
 
         {/* Add new */}
-        <div className="mb-6 rounded-2xl border border-white/[0.06] bg-[#0D1230] p-5">
-          <p className="mb-4 text-sm font-semibold text-slate-300">Add New</p>
+        <div className="mb-6 rounded-2xl border border-[var(--sp-border)] bg-[var(--sp-bg-card)] p-5">
+          <p className="mb-4 text-sm font-semibold text-[var(--sp-text)]">
+            Add New
+          </p>
+
           <div className="flex flex-wrap gap-3">
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleAdd()}
               placeholder="Name"
-              className={`flex-1 min-w-[180px] ${inputClass}`}
+              className={`min-w-[180px] flex-1 ${inputClass}`}
             />
 
             {extraFields.map((field) => (
@@ -159,13 +205,22 @@ export default function LookupTableManager({
                   <select
                     value={newExtra[field.key] ?? ""}
                     onChange={(e) =>
-                      setNewExtra((prev) => ({ ...prev, [field.key]: e.target.value }))
+                      setNewExtra((prev) => ({
+                        ...prev,
+                        [field.key]: e.target.value,
+                      }))
                     }
                     className={selectClass}
                   >
-                    <option value="" className="bg-[#0D1230]">{field.label}</option>
+                    <option value="" className={optionClass}>
+                      {field.label}
+                    </option>
                     {(refTables[field.optionsTable ?? ""] ?? []).map((opt) => (
-                      <option key={opt.id} value={opt.id} className="bg-[#0D1230]">
+                      <option
+                        key={opt.id}
+                        value={opt.id}
+                        className={optionClass}
+                      >
                         {opt.name}
                       </option>
                     ))}
@@ -174,7 +229,10 @@ export default function LookupTableManager({
                   <input
                     value={newExtra[field.key] ?? ""}
                     onChange={(e) =>
-                      setNewExtra((prev) => ({ ...prev, [field.key]: e.target.value }))
+                      setNewExtra((prev) => ({
+                        ...prev,
+                        [field.key]: e.target.value,
+                      }))
                     }
                     placeholder={field.label}
                     className={inputClass}
@@ -188,53 +246,76 @@ export default function LookupTableManager({
               disabled={saving || !newName.trim()}
               className="flex h-11 items-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-50"
             >
-              {saving ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+              {saving ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Plus size={15} />
+              )}
               Add
             </button>
           </div>
         </div>
 
         {/* List */}
-        <div className="rounded-2xl border border-white/[0.06] bg-[#0D1230] overflow-hidden">
+        <div className="overflow-hidden rounded-2xl border border-[var(--sp-border)] bg-[var(--sp-bg-card)]">
           {loading ? (
             <div className="flex justify-center py-16">
               <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
             </div>
           ) : rows.length === 0 ? (
-            <p className="py-16 text-center text-sm text-slate-500">
+            <p className="py-16 text-center text-sm text-[var(--sp-text-2)]">
               No entries yet. Add one above.
             </p>
           ) : (
             <>
-              <div className="border-b border-white/[0.05] px-5 py-3">
-                <span className="text-xs text-slate-600">{rows.length} {rows.length === 1 ? "entry" : "entries"}</span>
+              <div className="border-b border-[var(--sp-border)] px-5 py-3">
+                <span className="text-xs text-[var(--sp-text-2)]">
+                  {rows.length} {rows.length === 1 ? "entry" : "entries"}
+                </span>
               </div>
 
-              <div className="divide-y divide-white/[0.05]">
+              <div className="divide-y divide-[var(--sp-border)]">
                 {rows.map((row) => (
-                  <div key={row.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
-
+                  <div
+                    key={row.id}
+                    className="flex flex-wrap items-center justify-between gap-3 p-4"
+                  >
                     {editingId === row.id ? (
                       <>
                         <div className="flex flex-1 flex-wrap gap-3">
                           <input
                             value={editName}
                             onChange={(e) => setEditName(e.target.value)}
-                            className={`flex-1 min-w-[160px] ${inputClass}`}
+                            className={`min-w-[160px] flex-1 ${inputClass}`}
                           />
+
                           {extraFields.map((field) => (
-                            <div key={field.key} className="min-w-[160px] flex-1">
+                            <div
+                              key={field.key}
+                              className="min-w-[160px] flex-1"
+                            >
                               {field.type === "select" ? (
                                 <select
                                   value={editExtra[field.key] ?? ""}
                                   onChange={(e) =>
-                                    setEditExtra((prev) => ({ ...prev, [field.key]: e.target.value }))
+                                    setEditExtra((prev) => ({
+                                      ...prev,
+                                      [field.key]: e.target.value,
+                                    }))
                                   }
                                   className={selectClass}
                                 >
-                                  <option value="" className="bg-[#0D1230]">{field.label}</option>
-                                  {(refTables[field.optionsTable ?? ""] ?? []).map((opt) => (
-                                    <option key={opt.id} value={opt.id} className="bg-[#0D1230]">
+                                  <option value="" className={optionClass}>
+                                    {field.label}
+                                  </option>
+                                  {(
+                                    refTables[field.optionsTable ?? ""] ?? []
+                                  ).map((opt) => (
+                                    <option
+                                      key={opt.id}
+                                      value={opt.id}
+                                      className={optionClass}
+                                    >
                                       {opt.name}
                                     </option>
                                   ))}
@@ -243,7 +324,10 @@ export default function LookupTableManager({
                                 <input
                                   value={editExtra[field.key] ?? ""}
                                   onChange={(e) =>
-                                    setEditExtra((prev) => ({ ...prev, [field.key]: e.target.value }))
+                                    setEditExtra((prev) => ({
+                                      ...prev,
+                                      [field.key]: e.target.value,
+                                    }))
                                   }
                                   className={inputClass}
                                 />
@@ -256,14 +340,19 @@ export default function LookupTableManager({
                           <button
                             onClick={() => handleSaveEdit(row.id)}
                             disabled={saving}
-                            className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                            className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-600 transition hover:bg-emerald-500/20 disabled:opacity-50"
                           >
-                            {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                            {saving ? (
+                              <Loader2 size={13} className="animate-spin" />
+                            ) : (
+                              <Check size={13} />
+                            )}
                             Save
                           </button>
+
                           <button
                             onClick={() => setEditingId(null)}
-                            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.08]"
+                            className="flex items-center gap-1.5 rounded-lg border border-[var(--sp-border)] bg-[var(--sp-bg-muted)] px-3 py-2 text-xs font-semibold text-[var(--sp-text-2)] transition hover:border-[var(--sp-border-hover)] hover:text-[var(--sp-text)]"
                           >
                             <X size={13} />
                             Cancel
@@ -273,21 +362,38 @@ export default function LookupTableManager({
                     ) : (
                       <>
                         <div>
-                          <p className="font-medium text-white">{row.name}</p>
+                          <p className="font-medium text-[var(--sp-text)]">
+                            {row.name}
+                          </p>
+
                           {extraFields.map((field) => {
                             if (field.type === "select" && field.optionsTable) {
-                              const refRow = (refTables[field.optionsTable] ?? []).find(
-                                (r) => r.id === row[field.key]
-                              );
+                              const refRow = (
+                                refTables[field.optionsTable] ?? []
+                              ).find((r) => r.id === row[field.key]);
+
                               return (
-                                <p key={field.key} className="mt-0.5 text-xs text-slate-500">
-                                  {field.label}: <span className="text-slate-400">{refRow?.name ?? "—"}</span>
+                                <p
+                                  key={field.key}
+                                  className="mt-0.5 text-xs text-[var(--sp-text-2)]"
+                                >
+                                  {field.label}:{" "}
+                                  <span className="text-[var(--sp-text)]">
+                                    {refRow?.name ?? "—"}
+                                  </span>
                                 </p>
                               );
                             }
+
                             return (
-                              <p key={field.key} className="mt-0.5 text-xs text-slate-500">
-                                {field.label}: <span className="text-slate-400">{row[field.key] ?? "—"}</span>
+                              <p
+                                key={field.key}
+                                className="mt-0.5 text-xs text-[var(--sp-text-2)]"
+                              >
+                                {field.label}:{" "}
+                                <span className="text-[var(--sp-text)]">
+                                  {row[field.key] ?? "—"}
+                                </span>
                               </p>
                             );
                           })}
@@ -296,14 +402,15 @@ export default function LookupTableManager({
                         <div className="flex gap-2">
                           <button
                             onClick={() => startEdit(row)}
-                            className="flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-400 transition hover:bg-blue-500/20"
+                            className="flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-500 transition hover:bg-blue-500/20"
                           >
                             <Pencil size={13} />
                             Edit
                           </button>
+
                           <button
                             onClick={() => handleDelete(row.id)}
-                            className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-400 transition hover:bg-red-500/20"
+                            className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-500 transition hover:bg-red-500/20"
                           >
                             <Trash2 size={13} />
                             Delete
@@ -320,4 +427,4 @@ export default function LookupTableManager({
       </div>
     </div>
   );
-}
+        }
