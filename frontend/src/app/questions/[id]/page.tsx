@@ -513,44 +513,46 @@ function PracticeModal({
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
-        <SecureWrap userEmail={userEmail} enabled={isPaid}>
-          <div
-            className="rounded-2xl border p-5"
-            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-          >
-            {/* Question meta */}
-            <div className="flex items-center gap-2 mb-4 flex-wrap">
-              <span className="text-xs font-bold text-indigo-500">
-                Question {q.question_number ?? index + 1}
-              </span>
-              <span
-                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                  q.question_type === "mcq"
-                    ? "border-blue-500/20 bg-blue-500/10 text-blue-500"
-                    : "border-slate-500/20 bg-slate-500/10 text-slate-500"
-                }`}
-              >
-                {q.question_type === "mcq" ? "MCQ" : "Theory"}
-              </span>
-              {q.topic_tag && (
-                <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-500">
-                  {q.topic_tag}
+        {q && (
+          <SecureWrap userEmail={userEmail} enabled={isPaid}>
+            <div
+              className="rounded-2xl border p-5"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+            >
+              {/* Question meta */}
+              <div className="flex items-center gap-2 mb-4 flex-wrap">
+                <span className="text-xs font-bold text-indigo-500">
+                  Question {q.question_number ?? index + 1}
                 </span>
-              )}
-              {q.marks && (
-                <span className="ml-auto text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-                  {q.marks} marks
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                    q.question_type === "mcq"
+                      ? "border-blue-500/20 bg-blue-500/10 text-blue-500"
+                      : "border-slate-500/20 bg-slate-500/10 text-slate-500"
+                  }`}
+                >
+                  {q.question_type === "mcq" ? "MCQ" : "Theory"}
                 </span>
-              )}
+                {q.topic_tag && (
+                  <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-500">
+                    {q.topic_tag}
+                  </span>
+                )}
+                {q.marks && (
+                  <span className="ml-auto text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+                    {q.marks} marks
+                  </span>
+                )}
+              </div>
+
+              <p className="text-sm leading-7 whitespace-pre-wrap mb-4" style={{ color: "var(--sp-text)" }}>
+                {q.question_text}
+              </p>
+
+              {q.question_type === "mcq" ? <PracticeMCQ q={q} /> : <PracticeTheory q={q} />}
             </div>
-
-            <p className="text-sm leading-7 whitespace-pre-wrap mb-4" style={{ color: "var(--sp-text)" }}>
-              {q.question_text}
-            </p>
-
-            {q.question_type === "mcq" ? <PracticeMCQ q={q} /> : <PracticeTheory q={q} />}
-          </div>
-        </SecureWrap>
+          </SecureWrap>
+        )}
 
         {/* Gate banner */}
         {isGated && index === visible.length - 1 && (
