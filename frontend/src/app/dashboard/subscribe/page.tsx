@@ -1,4 +1,3 @@
-// src/app/dashboard/subscribe/page.tsx
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
@@ -9,9 +8,8 @@ import {
   Trophy, Infinity,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
-import { Checkout } from "payvessel-checkout";
 
-const SERVICE_FEE = 100; // ₦100 flat service fee added to all plans
+const SERVICE_FEE = 100;
 
 const PLANS = [
   {
@@ -72,7 +70,6 @@ const PLANS = [
 
 const PAID_PLANS = ["basic", "pro", "premium"];
 const PLAN_RANK: Record<string, number> = { free: 0, basic: 1, pro: 2, premium: 3 };
-const PAYVESSEL_CHANNELS = ["BANK_TRANSFER", "CARD"];
 
 const planAccent: Record<string, {
   ring: string; badge: string; btn: string; glow: string;
@@ -107,125 +104,20 @@ const planAccent: Record<string, {
   },
 };
 
-// ─── Congratulations modal ───────────────────────────────────────────────────
-
-interface CongratsModalProps {
-  planName: string;
-  planSlug: string;
-  expiresAt: string | null;
-  onDone: () => void;
-}
-
-function CongratsModal({ planName, planSlug, expiresAt, onDone }: CongratsModalProps) {
-  const [countdown, setCountdown] = useState(4);
-  const accent = planAccent[planSlug] ?? planAccent.pro;
-
-  const formatExpiry = (iso: string | null) => {
-    if (!iso) return null;
-    try {
-      return new Date(iso).toLocaleDateString("en-NG", {
-        day: "numeric", month: "long", year: "numeric",
-      });
-    } catch { return null; }
-  };
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      setCountdown((c) => {
-        if (c <= 1) { clearInterval(t); onDone(); return 0; }
-        return c - 1;
-      });
-    }, 1000);
-    return () => clearInterval(t);
-  }, [onDone]);
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 backdrop-blur-md px-5">
-      <div
-        className="w-full max-w-sm rounded-3xl border overflow-hidden shadow-2xl"
-        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-      >
-        <div className={`h-1 w-full bg-gradient-to-r ${accent.gradient}`} />
-
-        <div className="px-7 py-8 text-center">
-          <div className="flex justify-center mb-5">
-            <div className={`relative flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br ${accent.gradient}`}>
-              <PartyPopper className="h-9 w-9 text-white" />
-              <div className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-emerald-500 border-2 border-[var(--sp-bg-card)] animate-bounce" />
-            </div>
-          </div>
-
-          <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-emerald-500 mb-2">
-            Payment Confirmed
-          </p>
-          <h2 className="text-2xl font-extrabold tracking-tight mb-2" style={{ color: "var(--sp-text)" }}>
-            You&apos;re on SparkL {planName}! 🎉
-          </h2>
-          <p className="text-sm mb-5 leading-relaxed" style={{ color: "var(--sp-text-3)" }}>
-            Full access is now active for this semester. Go ace those exams.
-          </p>
-
-          <div
-            className="inline-flex items-center gap-2.5 rounded-2xl border px-4 py-2.5 mb-4"
-            style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}
-          >
-            <Crown className="h-4 w-4 text-amber-500" />
-            <span className="text-sm font-bold capitalize" style={{ color: "var(--sp-text)" }}>
-              {planName} Plan — Active
-            </span>
-            <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-          </div>
-
-          {expiresAt && (
-            <p className="text-xs mb-5" style={{ color: "var(--sp-text-3)" }}>
-              Valid until{" "}
-              <span className="font-semibold" style={{ color: "var(--sp-text-2)" }}>
-                {formatExpiry(expiresAt)}
-              </span>
-            </p>
-          )}
-
-          <div
-            className="rounded-2xl border p-4 mb-6 text-left space-y-2.5"
-            style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}
-          >
-            {(PLANS.find((p) => p.slug === planSlug)?.perks ?? []).map((perk) => (
-              <div key={perk} className="flex items-center gap-2.5">
-                <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500/15">
-                  <Check className="h-2.5 w-2.5 text-emerald-500" />
-                </div>
-                <span className="text-xs" style={{ color: "var(--sp-text-2)" }}>{perk}</span>
-              </div>
-            ))}
-          </div>
-
-          <button
-            onClick={onDone}
-            className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold text-white bg-gradient-to-r ${accent.gradient} transition-opacity hover:opacity-90 active:scale-[0.98]`}
-          >
-            Go to Dashboard
-          </button>
-          <p className="mt-3 text-xs" style={{ color: "var(--sp-text-3)" }}>
-            Redirecting in {countdown}s…
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Checkout summary modal ──────────────────────────────────────────────────
 
 interface CheckoutSummaryProps {
   plan: typeof PLANS[0];
-  user: { name: string; email: string; phone: string };
+  user: { name: string; email: string };
   onConfirm: () => void;
   onCancel: () => void;
   loading: boolean;
   isUpgrade: boolean;
 }
 
-function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }: CheckoutSummaryProps) {
+function CheckoutSummary({
+  plan, user, onConfirm, onCancel, loading, isUpgrade,
+}: CheckoutSummaryProps) {
   const accent = planAccent[plan.slug];
   const total = plan.price + SERVICE_FEE;
 
@@ -355,14 +247,14 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }
             className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] ${accent.btn}`}
           >
             {loading ? (
-              <><Loader2 className="h-4 w-4 animate-spin" />Opening payment…</>
+              <><Loader2 className="h-4 w-4 animate-spin" />Redirecting to payment…</>
             ) : (
-              <><CreditCard className="h-4 w-4" />Pay ₦{total.toLocaleString()} with PayVessel</>
+              <><CreditCard className="h-4 w-4" />Pay ₦{total.toLocaleString()} securely</>
             )}
           </button>
 
           <p className="mt-3 text-center text-xs" style={{ color: "var(--sp-text-3)" }}>
-            🔒 Secured by PayVessel · Card details never stored
+            🔒 Secured by PayVessel · You will be redirected to complete payment
           </p>
         </div>
       </div>
@@ -377,17 +269,15 @@ function SubscribePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const justSubscribed = searchParams.get("subscribed") === "true";
+  const paymentError = searchParams.get("error");
 
-  const [user, setUser] = useState<{ name: string; email: string; phone: string } | null>(null);
+  const [user, setUser] = useState<{ name: string; email: string } | null>(null);
   const [currentPlan, setCurrentPlan] = useState<string>("free");
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
   const [processingPlan, setProcessingPlan] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [checkoutPlan, setCheckoutPlan] = useState<typeof PLANS[0] | null>(null);
-  const [congratsData, setCongratsData] = useState<{
-    planName: string; planSlug: string; expiresAt: string | null;
-  } | null>(null);
 
   useEffect(() => {
     async function loadUser() {
@@ -398,7 +288,7 @@ function SubscribePageInner() {
         const [profileRes, subRes] = await Promise.all([
           supabaseClient
             .from("profiles")
-            .select("full_name, phone, subscription_plan")
+            .select("full_name, subscription_plan")
             .eq("id", session.user.id)
             .single(),
           fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`, {
@@ -407,9 +297,8 @@ function SubscribePageInner() {
         ]);
 
         setUser({
-          name: profileRes.data?.full_name ?? "Student",
+          name:  profileRes.data?.full_name ?? "Student",
           email: session.user.email ?? "",
-          phone: profileRes.data?.phone ?? "",
         });
 
         if (subRes.ok) {
@@ -420,8 +309,8 @@ function SubscribePageInner() {
           setCurrentPlan(profileRes.data?.subscription_plan ?? "free");
         }
       } catch (err) {
-        console.error("[loadUser error]", err);
-        setUser({ name: "Student", email: "", phone: "" });
+        console.error("[loadUser]", err);
+        setUser({ name: "Student", email: "" });
       } finally {
         setLoadingUser(false);
       }
@@ -429,31 +318,33 @@ function SubscribePageInner() {
     loadUser();
   }, [router, supabaseClient]);
 
+  // Show error from callback redirect
+  useEffect(() => {
+    if (paymentError === "verification_failed") {
+      setError("Payment verification failed. If you were charged, please contact support.");
+    } else if (paymentError === "missing_reference") {
+      setError("Something went wrong with the payment redirect. Please try again.");
+    } else if (paymentError === "amount_mismatch") {
+      setError("Payment amount mismatch. Please contact support.");
+    }
+  }, [paymentError]);
+
   async function handleConfirmCheckout() {
     if (!user || !checkoutPlan) return;
 
     setError("");
     setProcessingPlan(checkoutPlan.slug);
 
-    // Snapshot the plan now — state may change while async work is in flight
     const plan = checkoutPlan;
     const chargeAmount = plan.price + SERVICE_FEE;
 
     try {
-      // Step 1 — Refresh the session so the token is fresh
       const { data: { session } } = await supabaseClient.auth.refreshSession();
-      if (!session) {
-        router.push("/auth/login");
-        return;
-      }
+      if (!session) { router.push("/auth/login"); return; }
 
-      // Step 2 — Create a pending transaction on the backend.
-      //
-      // FIX: We now send `total_amount` (plan price + service fee) to the backend
-      // so it stores the correct amount_kobo. Previously only the plan price was
-      // stored, so when PayVessel returned the real charged amount (plan + fee)
-      // the backend's amount check always failed with "amount mismatch" and marked
-      // every payment as failed — even when the user actually paid successfully.
+      // Close modal before async work
+      setCheckoutPlan(null);
+
       const initiateRes = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`,
         {
@@ -463,8 +354,8 @@ function SubscribePageInner() {
             Authorization: `Bearer ${session.access_token}`,
           },
           body: JSON.stringify({
-            plan: plan.slug,
-            total_amount: chargeAmount, // ← plan price + ₦100 service fee
+            plan:         plan.slug,
+            total_amount: chargeAmount,
           }),
         }
       );
@@ -474,105 +365,16 @@ function SubscribePageInner() {
         throw new Error(e.detail ?? "Failed to initiate payment");
       }
 
-      const { reference: ourReference } = await initiateRes.json();
+      const { authorization_url } = await initiateRes.json();
 
-      // Step 3 — Close the summary modal before opening PayVessel modal
-      setCheckoutPlan(null);
-
-      // Step 4 — Open PayVessel checkout
-      const init = Checkout({
-        api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
-      });
-
-      init.initializeCheckout({
-        amount: String(chargeAmount),
-        currency: "NGN",
-        customer_name: user.name,
-        customer_email: user.email,
-        // REQUIRED by PayVessel docs — must always be present.
-        // Users with no stored phone get a safe placeholder so the SDK
-        // doesn't silently refuse to open the modal.
-        customer_phone_number: user.phone || "00000000000",
-        reference: ourReference,
-        channels: PAYVESSEL_CHANNELS,
-        // REQUIRED by PayVessel docs — attach order context.
-        metadata: {
-          plan: plan.slug,
-          name: user.name,
-          reference: ourReference,
-        },
-
-        // Fires when the checkout session opens successfully (modal is visible)
-        onSuccess: (response: unknown) => {
-          console.log("[PayVessel] checkout session opened", response);
-        },
-
-        // Fires when the customer actually completes payment
-        onSuccessfulOrder: async (response: unknown) => {
-          const r = response as Record<string, unknown>;
-          const ref =
-            (r?.reference as string) ??
-            (r?.transactionReference as string) ??
-            ((r?.data as Record<string, unknown>)?.reference as string) ??
-            ourReference;
-
-          try {
-            const verifyRes = await fetch("/api/payments/verify", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                reference: ref,
-                our_reference: ourReference,
-                access_token: session.access_token,
-              }),
-            });
-
-            const data = await verifyRes.json();
-
-            if (data.status === "success" || data.status === "already_verified") {
-              const planInfo = PLANS.find((p) => p.slug === plan.slug);
-              setCurrentPlan(plan.slug);
-              setCongratsData({
-                planName: planInfo?.name ?? plan.slug,
-                planSlug: plan.slug,
-                expiresAt: data.expires_at ?? null,
-              });
-            } else {
-              setError(data.detail ?? "Verification failed. Please contact support.");
-            }
-          } catch {
-            setError("Network error during verification. Please contact support.");
-          } finally {
-            setProcessingPlan(null);
-          }
-        },
-
-        onError: (err: unknown) => {
-          console.error("[PayVessel error]", err);
-          setError("Payment failed. Please try again.");
-          setProcessingPlan(null);
-        },
-
-        onClose: () => {
-          // User dismissed the modal — stop the spinner, not an error
-          setProcessingPlan(null);
-        },
-      });
-
-      // Intentionally NOT calling setProcessingPlan(null) here.
-      // The spinner stays on until one of the three callbacks above fires.
-      // This prevents the user from clicking "Pay" again while PayVessel is open.
+      // Redirect to PayVessel hosted checkout — no SDK, no unpkg
+      window.location.href = authorization_url;
 
     } catch (err: unknown) {
-      console.error("[handleConfirmCheckout error]", err);
+      console.error("[handleConfirmCheckout]", err);
       setError(err instanceof Error ? err.message : "Something went wrong.");
       setProcessingPlan(null);
     }
-  }
-
-  function handleCongratsClose() {
-    setCongratsData(null);
-    router.push("/dashboard");
   }
 
   if (loadingUser) {
@@ -597,15 +399,6 @@ function SubscribePageInner() {
 
   return (
     <div className="min-h-screen pb-20" style={{ background: "var(--sp-bg)" }}>
-
-      {congratsData && (
-        <CongratsModal
-          planName={congratsData.planName}
-          planSlug={congratsData.planSlug}
-          expiresAt={congratsData.expiresAt}
-          onDone={handleCongratsClose}
-        />
-      )}
 
       {checkoutPlan && user && (
         <CheckoutSummary
@@ -640,7 +433,7 @@ function SubscribePageInner() {
             Back
           </button>
 
-          {justSubscribed && !congratsData && (
+          {justSubscribed && (
             <div className="mb-6 flex items-center gap-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] px-5 py-4">
               <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
               <div>
@@ -693,7 +486,6 @@ function SubscribePageInner() {
 
       <div className="mx-auto max-w-4xl px-5 pt-8">
 
-        {/* Free plan current limits */}
         {!isPaid && (
           <div
             className="mb-8 rounded-2xl border p-5"
@@ -754,7 +546,6 @@ function SubscribePageInner() {
                   borderColor: plan.popular ? undefined : "var(--sp-border)",
                 }}
               >
-                {/* Badge */}
                 {(plan.popular && !isCurrentPlan) && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2">
                     <span className={`inline-flex items-center gap-1 rounded-full ${accent.badge} px-3 py-1 text-[10px] font-bold text-white uppercase tracking-wide shadow-lg`}>
@@ -772,7 +563,6 @@ function SubscribePageInner() {
                   </div>
                 )}
 
-                {/* Plan header */}
                 <div className="flex items-start justify-between mb-4 mt-2">
                   <div>
                     <div className={`flex h-9 w-9 items-center justify-center rounded-xl mb-3 ${accent.light}`}>
@@ -787,7 +577,6 @@ function SubscribePageInner() {
                   </div>
                 </div>
 
-                {/* Price */}
                 <div className="mb-1">
                   <p className="text-3xl font-extrabold tracking-tight" style={{ color: "var(--sp-text)" }}>
                     {plan.priceLabel}
@@ -798,10 +587,8 @@ function SubscribePageInner() {
                   </p>
                 </div>
 
-                {/* Divider */}
                 <div className="my-4 border-t" style={{ borderColor: "var(--sp-border)" }} />
 
-                {/* Perks */}
                 <ul className="flex-1 space-y-2.5 mb-5">
                   {plan.perks.map((perk) => (
                     <li key={perk} className="flex items-start gap-2.5 text-xs" style={{ color: "var(--sp-text-2)" }}>
@@ -813,7 +600,6 @@ function SubscribePageInner() {
                   ))}
                 </ul>
 
-                {/* CTA */}
                 {isCurrentPlan ? (
                   <div className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.08] py-2.5 text-xs font-semibold text-emerald-600">
                     <CheckCircle2 className="h-3.5 w-3.5" />
@@ -829,7 +615,7 @@ function SubscribePageInner() {
                     className={`flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] ${accent.btn}`}
                   >
                     {isProcessing ? (
-                      <><Loader2 className="h-4 w-4 animate-spin" />Processing…</>
+                      <><Loader2 className="h-4 w-4 animate-spin" />Redirecting…</>
                     ) : isUpgrade ? (
                       <><Star className="h-3.5 w-3.5" />Upgrade · ₦{total.toLocaleString()}</>
                     ) : isDowngrade ? (
@@ -844,7 +630,6 @@ function SubscribePageInner() {
           })}
         </div>
 
-        {/* Footer note */}
         <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 text-xs" style={{ color: "var(--sp-text-3)" }}>
           <span className="flex items-center gap-1.5">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
