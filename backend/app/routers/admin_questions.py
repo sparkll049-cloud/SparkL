@@ -5,6 +5,8 @@ Changes:
 - retry: actually triggers GitHub Actions workflow
 - process: proper timeout handling
 - _is_admin: removed redundant DB calls
+- get_question_detail: removed ai_processed from the SELECT (computed from the
+  questions table instead, same as the list endpoint)
 """
 from __future__ import annotations
 
@@ -56,6 +58,14 @@ LIST_COLUMNS = (
     "id, title, year, status, processing_status, processing_error, created_at, "
     "extraction_quality, rejection_reason, uploaded_by, mime_type, "
     "course:courses(name), semester:semesters(name)"
+)
+
+# Columns returned in detail — includes extracted_text, NO ai_processed
+DETAIL_COLUMNS = (
+    "id, title, year, status, processing_status, processing_error, "
+    "created_at, extracted_text, extraction_quality, rejection_reason, "
+    "mime_type, uploaded_by, "
+    "course:courses(id, name), semester:semesters(id, name)"
 )
 
 
@@ -349,12 +359,7 @@ async def get_question_detail(
     _check_uuid(question_id, "question id")
     result = (
         supabase.table("past_questions")
-        .select(
-            "id, title, year, status, processing_status, processing_error, "
-            "created_at, extracted_text, extraction_quality, rejection_reason, "
-            "mime_type, uploaded_by, ai_processed, "
-            "course:courses(id, name), semester:semesters(id, name)"
-        )
+        .select(DETAIL_COLUMNS)
         .eq("id", question_id)
         .maybe_single()
         .execute()
@@ -376,6 +381,16 @@ async def get_question_detail(
         row["uploader"] = {"full_name": (profile.data or {}).get("full_name")} if profile.data else None
     else:
         row["uploader"] = None
+
+    # Compute ai_processed the same way the list endpoint does
+    processed = (
+        supabase.table("questions")
+        .select("id")
+        .eq("past_question_id", question_id)
+        .limit(1)
+        .execute()
+    )
+    row["ai_processed"] = bool(processed.data)
 
     row.pop("uploaded_by", None)
     row.pop("file_url",    None)
