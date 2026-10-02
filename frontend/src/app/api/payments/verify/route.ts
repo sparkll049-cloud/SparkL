@@ -1,6 +1,9 @@
+// src/app/api/payments/verify/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 
 const PAYVESSEL_SECRET_KEY = process.env.PAYVESSEL_SECRET_KEY!;
+const PAYVESSEL_PUBLIC_KEY = process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!;
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL!;
 
 export async function POST(req: NextRequest) {
@@ -14,13 +17,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Step 1 — verify with PayVessel from server (avoids CORS)
+    // Step 1 — verify with PayVessel from server side (avoids CORS)
+    // ✅ FIXED: correct endpoint (was /api/externals/transactions/verify/{ref})
     const pvRes = await fetch(
-      `https://api.payvessel.com/api/externals/transactions/verify/${reference}`,
+      `https://api.payvessel.com/pms/transactions/${reference}/confirm/`,
       {
         method: "GET",
+        // ✅ FIXED: correct auth headers (was Authorization: Bearer)
         headers: {
-          Authorization: `Bearer ${PAYVESSEL_SECRET_KEY}`,
+          "api-key": PAYVESSEL_PUBLIC_KEY,
+          "api-secret": PAYVESSEL_SECRET_KEY,
           "Content-Type": "application/json",
         },
       }
@@ -29,7 +35,8 @@ export async function POST(req: NextRequest) {
     const pvData = await pvRes.json();
     console.log("[Verify] PayVessel response:", JSON.stringify(pvData));
 
-    if (!pvRes.ok || pvData.requestSuccessful === false) {
+    // ✅ FIXED: correct success check (was pvData.requestSuccessful === false)
+    if (!pvRes.ok || pvData.status !== "success") {
       return NextResponse.json(
         { detail: pvData.message ?? "PayVessel verification failed" },
         { status: 400 }
@@ -46,7 +53,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         reference,
         our_reference: our_reference ?? reference,
-        pv_data: pvData.data ?? pvData, // pass PayVessel response data to backend
+        pv_data: pvData.data ?? pvData,
       }),
     });
 
