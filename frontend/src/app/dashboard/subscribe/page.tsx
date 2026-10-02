@@ -250,7 +250,8 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }
           </div>
           <button
             onClick={onCancel}
-            className="flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-red-500/10"
+            disabled={loading}
+            className="flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-red-500/10 disabled:opacity-50"
             style={{ background: "var(--sp-input-bg)" }}
             aria-label="Close"
           >
@@ -321,7 +322,7 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }
             </div>
           </div>
 
-          {/* Fee breakdown — the important bit */}
+          {/* Fee breakdown */}
           <div
             className="rounded-xl border px-4 py-3 mb-5"
             style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)" }}
@@ -426,7 +427,7 @@ function SubscribePageInner() {
       }
     }
     loadUser();
-  }, []);
+  }, [router, supabaseClient]);
 
   function handleConfirmCheckout() {
     if (!user || !checkoutPlan) return;
@@ -434,13 +435,13 @@ function SubscribePageInner() {
     setProcessingPlan(checkoutPlan.slug);
 
     const plan = checkoutPlan;
-    setCheckoutPlan(null);
-
-    // Total charged = plan price + service fee
     const chargeAmount = plan.price + SERVICE_FEE;
 
     supabaseClient.auth.refreshSession().then(({ data: { session } }) => {
-      if (!session) { router.push("/auth/login"); return; }
+      if (!session) { 
+        router.push("/auth/login"); 
+        return; 
+      }
 
       const accessToken = session.access_token;
       const planSlug = plan.slug;
@@ -465,10 +466,13 @@ function SubscribePageInner() {
           return res.json();
         })
         .then(({ reference: ourReference }) => {
+          // Hide summary modal right before initializing PayVessel checkout
+          setCheckoutPlan(null);
+
           const init = Checkout({ api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY! });
 
           init.initializeCheckout({
-            amount: String(chargeAmount), // ← total with service fee
+            amount: String(chargeAmount),
             currency: "NGN",
             customer_name: userName,
             customer_email: userEmail,
@@ -480,9 +484,9 @@ function SubscribePageInner() {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             onSuccessfulOrder: (response: any) => {
               const ref =
-                response.reference ??
-                response.transactionReference ??
-                response.data?.reference ??
+                response?.reference ??
+                response?.transactionReference ??
+                response?.data?.reference ??
                 ourReference;
 
               fetch("/api/payments/verify", {
@@ -518,7 +522,9 @@ function SubscribePageInner() {
               setProcessingPlan(null);
             },
 
-            onClose: () => setProcessingPlan(null),
+            onClose: () => {
+              setProcessingPlan(null);
+            },
           });
         })
         .catch((err: Error) => {
@@ -581,7 +587,6 @@ function SubscribePageInner() {
         className="relative px-5 pt-8 pb-10 border-b overflow-hidden"
         style={{ borderColor: "var(--sp-border)" }}
       >
-        {/* Subtle background glow */}
         <div className="pointer-events-none absolute inset-0 overflow-hidden">
           <div className="absolute -top-24 left-1/2 -translate-x-1/2 h-64 w-64 rounded-full bg-indigo-500/10 blur-3xl" />
         </div>
