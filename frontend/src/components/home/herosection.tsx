@@ -395,4 +395,36 @@ export default function HeroSection() {
                     }
                     className="rounded-2xl bg-blue-600 p-4 shadow-[0_12px_30px_-15px_rgba(37,99,235,0.65)]"
                   >
-                    <div className="flex
+                    <div className="flex items-center justify-between">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/15">
+                        <Users className="h-4 w-4 text-white" />
+                      </div>
+
+                      <span className="text-[10px] font-semibold text-blue-100">
+                        Active
+                      </span>
+                    </div>
+
+                    <p className="mt-5 text-xl font-black text-white">
+                      Community
+                    </p>
+
+                    <p className="mt-1 max-w-[180px] text-xs leading-5 text-blue-100/80">
+                      Ask questions and discuss topics with peers.
+                    </p>
+
+                    <div className="mt-5 flex items-center gap-1.5 text-[10px] font-medium text-white">
+                      <span>Join discussion</span>
+
+                      <ArrowRight className="h-3 w-3" />
+                    </div>
+                  </motion.div>
+                </motion.div>
+              </div>
+            </motion.div>
+          </div>
+        </motion.div>
+      </div>
+    </section>
+  );
+}
