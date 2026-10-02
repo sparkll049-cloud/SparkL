@@ -20,6 +20,13 @@ router = APIRouter(prefix="/api/payments", tags=["payments"])
 PAYVESSEL_SECRET_KEY = os.getenv("PAYVESSEL_SECRET_KEY")
 PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/api/externals/transactions/verify/{reference}"
 
+# ₦100 service fee in kobo — must match SERVICE_FEE on the frontend exactly.
+# The frontend charges (plan price + SERVICE_FEE) to PayVessel, so we store
+# (plan price_kobo + SERVICE_FEE_KOBO) as amount_kobo in payment_transactions.
+# Without this the amount-mismatch check in /verify always fires and marks
+# every successful payment as failed.
+SERVICE_FEE_KOBO = 10_000  # 100 naira × 100
+
 
 # ─── POST /api/payments/initiate ────────────────────────────────────────────
 
@@ -31,6 +38,11 @@ async def initiate_payment(
     plan_slug = body.get("plan")
     if not plan_slug or plan_slug == "free":
         raise HTTPException(status_code=400, detail="Invalid plan")
+
+    # `total_amount` is sent by the frontend: plan price (naira) + ₦100 service fee.
+    # We convert to kobo and store it so the verify step can compare it against
+    # what PayVessel actually charged.
+    total_amount_naira = body.get("total_amount")
 
     try:
         plan_res = (
@@ -48,6 +60,18 @@ async def initiate_payment(
         raise HTTPException(status_code=404, detail="Plan not found")
 
     plan = plan_res.data
+
+    # Prefer the total amount sent by the frontend (plan + service fee).
+    # Fall back to plan price_kobo + SERVICE_FEE_KOBO if the frontend did not
+    # send total_amount (e.g. old client versions).
+    if total_amount_naira is not None:
+        try:
+            amount_kobo = int(float(total_amount_naira) * 100)
+        except (ValueError, TypeError):
+            amount_kobo = plan["price_kobo"] + SERVICE_FEE_KOBO
+    else:
+        amount_kobo = plan["price_kobo"] + SERVICE_FEE_KOBO
+
     reference = f"SPARKL-{uuid4().hex[:12].upper()}"
 
     supabase.table("payment_transactions").insert({
@@ -55,15 +79,15 @@ async def initiate_payment(
         "plan": plan_slug,
         "gateway": "payvessel",
         "gateway_ref": reference,
-        "amount_kobo": plan["price_kobo"],
+        "amount_kobo": amount_kobo,   # ← now includes the service fee
         "currency": plan["currency"],
         "status": "pending",
     }).execute()
 
     return {
         "reference": reference,
-        "amount": plan["price_kobo"] / 100,
-        "amount_kobo": plan["price_kobo"],
+        "amount": amount_kobo / 100,
+        "amount_kobo": amount_kobo,
         "plan": plan["plan"],
         "display_name": plan["display_name"],
         "currency": plan["currency"],
@@ -80,7 +104,6 @@ async def payvessel_webhook(request: Request):
     if not PAYVESSEL_SECRET_KEY:
         raise HTTPException(status_code=500, detail="Payment secret not configured")
 
-    # ✅ Fixed: hmac.new does not exist in Python 3 — use hmac.HMAC
     expected = hmac.HMAC(
         key=PAYVESSEL_SECRET_KEY.encode("utf-8"),
         msg=body,
