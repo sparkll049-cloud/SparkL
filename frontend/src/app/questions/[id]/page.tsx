@@ -70,45 +70,24 @@ const FREE_TEXT_LINES       = 10;
 
 type Tab = "text" | "paper" | "submit" | "practice";
 
-
 // ══════════════════════════════════════════════════════════════════════════════
 // ── SECURITY LAYER ────────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
-/**
- * useHardSecurity — aggressive multi-vector content protection.
- *
- * Vectors covered:
- *   1. Visibility / blur events  → hides content when tab loses focus
- *   2. Print stylesheet          → blurs all protected content
- *   3. CSS user-select: none     → blocks text selection / copy
- *   4. context-menu block        → disables right-click on protected zones
- *   5. keyboard shortcut block   → PrintScreen, Ctrl+P, Ctrl+S, Ctrl+U,
- *                                   Ctrl+Shift+I/J/C (devtools)
- *   6. Drag-start block          → prevents drag-to-copy
- *   7. Tiled email watermark     → visible deterrent + attribution
- *
- * What can NOT be blocked in a browser:
- *   - OS-level screenshot tools (Print Screen key at OS level,
- *     macOS Cmd+Shift+3/4, phone button combos).
- *   - Screen recording software running outside the browser.
- * The watermark ensures attribution even if a screenshot is taken.
- */
 function useHardSecurity(enabled: boolean) {
   const [obscured, setObscured] = useState(false);
 
   useEffect(() => {
     if (!enabled) return;
 
-    // ── 1. Visibility / blur ──────────────────────────────────────────────
     const onVisibility = () => setObscured(document.visibilityState === "hidden");
     const onBlur       = () => setObscured(true);
     const onFocus      = () => setObscured(false);
+
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("blur",  onBlur);
     window.addEventListener("focus", onFocus);
 
-    // ── 2. Print stylesheet ───────────────────────────────────────────────
     const printStyle = document.createElement("style");
     printStyle.id = "__sp_print__";
     printStyle.textContent = `
@@ -119,16 +98,15 @@ function useHardSecurity(enabled: boolean) {
     `;
     document.head.appendChild(printStyle);
 
-    // ── 5. Keyboard shortcuts ─────────────────────────────────────────────
     const onKey = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
       const blocked = [
-        ctrl && e.key === "p",           // print
-        ctrl && e.key === "s",           // save page
-        ctrl && e.key === "u",           // view source
+        ctrl && e.key === "p",
+        ctrl && e.key === "s",
+        ctrl && e.key === "u",
         ctrl && e.shiftKey && (e.key === "i" || e.key === "j" || e.key === "c"),
         e.key === "PrintScreen",
-        ctrl && e.shiftKey && e.key === "s", // Windows snip shortcut
+        ctrl && e.shiftKey && e.key === "s",
       ];
       if (blocked.some(Boolean)) {
         e.preventDefault();
@@ -160,12 +138,10 @@ interface SecureWrapProps {
 function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
   const obscured = useHardSecurity(enabled);
 
-  // ── 4. Context-menu block ─────────────────────────────────────────────
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     if (enabled) e.preventDefault();
   }, [enabled]);
 
-  // ── 6. Drag-start block ───────────────────────────────────────────────
   const onDragStart = useCallback((e: React.DragEvent) => {
     if (enabled) e.preventDefault();
   }, [enabled]);
@@ -178,7 +154,6 @@ function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
       onContextMenu={onContextMenu}
       onDragStart={onDragStart}
       style={{
-        // ── 3. user-select block ──────────────────────────────────────
         userSelect:          "none",
         WebkitUserSelect:    "none",
         MozUserSelect:       "none" as React.CSSProperties["MozUserSelect"],
@@ -186,7 +161,6 @@ function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
         WebkitTouchCallout: "none",
       }}
     >
-      {/* Obscure overlay — shown when focus is lost */}
       {obscured && (
         <div
           className="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-2xl"
@@ -202,7 +176,6 @@ function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
         </div>
       )}
 
-      {/* ── 7. Tiled watermark ────────────────────────────────────────── */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 z-10 overflow-hidden rounded-2xl"
@@ -234,7 +207,6 @@ function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
   );
 }
 
-
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Extracted text (hero) ─────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
@@ -260,7 +232,6 @@ function ExtractedTextHero({
           className="rounded-2xl border"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
         >
-          {/* Header strip */}
           <div
             className="flex items-center gap-2 px-5 py-3.5 border-b"
             style={{ borderColor: "var(--sp-border)" }}
@@ -283,10 +254,8 @@ function ExtractedTextHero({
             )}
           </div>
 
-          {/* Body */}
           <div className="px-5 py-5 space-y-0 relative">
             {visible.map((line, i) => {
-              // Detect section headers (short, ends with colon or all-caps-ish)
               const isHeader = line.length < 80 && /^[A-Z\d]/.test(line) &&
                 (line.endsWith(":") || /^[A-Z\s\d]{4,}$/.test(line));
 
@@ -307,7 +276,6 @@ function ExtractedTextHero({
               );
             })}
 
-            {/* Fade-out for gated content */}
             {isGated && (
               <div
                 className="absolute bottom-0 left-0 right-0 h-24 pointer-events-none"
@@ -320,7 +288,6 @@ function ExtractedTextHero({
         </div>
       </SecureWrap>
 
-      {/* Gate banner */}
       {isGated && (
         <div
           className="rounded-2xl border p-6 text-center"
@@ -354,7 +321,6 @@ function ExtractedTextHero({
     </div>
   );
 }
-
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Practice modal (quiz) ─────────────────────────────────────────────────────
@@ -464,7 +430,6 @@ function PracticeModal({
   const mcqCount  = visible.filter(q => q.question_type === "mcq").length;
   const theoryCount = visible.filter(q => q.question_type === "theory").length;
 
-  // Lock body scroll while modal is open
   useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = ""; };
@@ -475,7 +440,6 @@ function PracticeModal({
       className="fixed inset-0 z-50 flex flex-col"
       style={{ background: "var(--sp-bg)" }}
     >
-      {/* Modal header */}
       <div
         className="flex items-center gap-3 px-4 py-3.5 border-b shrink-0"
         style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
@@ -497,13 +461,11 @@ function PracticeModal({
             {theoryCount > 0 && ` · ${theoryCount} Theory`}
           </p>
         </div>
-        {/* Progress */}
         <span className="text-xs font-semibold shrink-0" style={{ color: "var(--sp-text-3)" }}>
           {index + 1} / {visible.length}
         </span>
       </div>
 
-      {/* Progress bar */}
       <div className="h-1 shrink-0" style={{ background: "var(--sp-bg-muted)" }}>
         <div
           className="h-full bg-indigo-500 transition-all duration-300"
@@ -511,7 +473,6 @@ function PracticeModal({
         />
       </div>
 
-      {/* Body */}
       <div className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
         {q && (
           <SecureWrap userEmail={userEmail} enabled={isPaid}>
@@ -519,7 +480,6 @@ function PracticeModal({
               className="rounded-2xl border p-5"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
             >
-              {/* Question meta */}
               <div className="flex items-center gap-2 mb-4 flex-wrap">
                 <span className="text-xs font-bold text-indigo-500">
                   Question {q.question_number ?? index + 1}
@@ -554,7 +514,6 @@ function PracticeModal({
           </SecureWrap>
         )}
 
-        {/* Gate banner */}
         {isGated && index === visible.length - 1 && (
           <div
             className="rounded-2xl border p-6 text-center"
@@ -584,7 +543,6 @@ function PracticeModal({
         )}
       </div>
 
-      {/* Navigation footer */}
       <div
         className="flex items-center gap-3 px-4 py-3.5 border-t shrink-0"
         style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
@@ -624,7 +582,6 @@ function PracticeModal({
     </div>
   );
 }
-
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Submit solution section ───────────────────────────────────────────────────
@@ -744,7 +701,7 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
                 <div className="flex items-center gap-2 rounded-xl p-3 text-xs"
                   style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}>
                   <Paperclip size={12} />
-                  File attached ({sub.mime_type.split("/")[1].toUpperCase()}
+                  File attached ({sub.mime_type.split("/")[1]?.toUpperCase() ?? "FILE"}
                   {sub.file_size ? ` · ${(sub.file_size / 1024).toFixed(0)} KB` : ""})
                 </div>
               )}
@@ -833,7 +790,6 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
   );
 }
 
-
 // ══════════════════════════════════════════════════════════════════════════════
 // ── MAIN PAGE ─────────────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
@@ -860,7 +816,6 @@ export default function QuestionDetailPage() {
   const [showPractice, setShowPractice] = useState(false);
   const [showPreview, setShowPreview]   = useState(false);
 
-  // ── Data load ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!questionId) return;
     async function load() {
@@ -878,7 +833,9 @@ export default function QuestionDetailPage() {
         ]);
         if (detailRes.status === 404) throw new Error("This past question wasn't found.");
         if (!detailRes.ok) throw new Error("Failed to load this past question.");
-        setData(await detailRes.json());
+        
+        const detailData = await detailRes.json();
+        setData(detailData);
 
         if (limitsRes.ok) {
           const d = await limitsRes.json();
@@ -908,7 +865,6 @@ export default function QuestionDetailPage() {
     load();
   }, [questionId]);
 
-  // ── Global print/copy block ────────────────────────────────────────────────
   useEffect(() => {
     const style = document.createElement("style");
     style.id    = "sp-global-sec";
@@ -922,7 +878,6 @@ export default function QuestionDetailPage() {
     return () => { document.getElementById("sp-global-sec")?.remove(); };
   }, []);
 
-  // ── Guards ─────────────────────────────────────────────────────────────────
   if (loading) return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <Loader2 className="h-7 w-7 animate-spin text-indigo-500" />
@@ -940,14 +895,13 @@ export default function QuestionDetailPage() {
 
   const isPdf        = data.mime_type?.startsWith("application/pdf");
   const isLowQuality = data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
-  const hasText      = !!(data.extracted_text?.trim());
+  const hasText      = Boolean(data.extracted_text && data.extracted_text.trim().length > 0);
   const hasProcessed = processedQuestions.length > 0;
   const mcqCount     = processedQuestions.filter(q => q.question_type === "mcq").length;
   const theoryCount  = processedQuestions.filter(q => q.question_type === "theory").length;
 
   return (
     <>
-      {/* ── Practice full-screen modal ─────────────────────────────────── */}
       {showPractice && hasProcessed && (
         <PracticeModal
           questions={processedQuestions}
@@ -962,8 +916,6 @@ export default function QuestionDetailPage() {
         style={{ background: "var(--sp-bg)" }}
       >
         <div className="mx-auto max-w-3xl">
-
-          {/* Back link */}
           <Link
             href={data.course ? `/dashboard/courses/${data.course.id}` : "/dashboard"}
             className="inline-flex items-center gap-1.5 text-sm font-medium transition-colors"
@@ -972,7 +924,6 @@ export default function QuestionDetailPage() {
             <ArrowLeft size={15} /> Back
           </Link>
 
-          {/* ── Paper header card ──────────────────────────────────────── */}
           <div
             className="mt-4 rounded-2xl border p-5"
             style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
@@ -1006,7 +957,6 @@ export default function QuestionDetailPage() {
               </div>
             )}
 
-            {/* ── Tab bar ─────────────────────────────────────────────── */}
             <div
               className="mt-5 flex items-center gap-1 flex-wrap border-t pt-4"
               style={{ borderColor: "var(--sp-border)" }}
@@ -1038,7 +988,6 @@ export default function QuestionDetailPage() {
                 <Send size={12} /> Submit solution
               </TabBtn>
 
-              {/* Question type stats — right aligned */}
               {hasProcessed && (
                 <div className="ml-auto flex items-center gap-3">
                   {mcqCount > 0 && (
@@ -1056,10 +1005,7 @@ export default function QuestionDetailPage() {
             </div>
           </div>
 
-          {/* ── Tab content ────────────────────────────────────────────── */}
           <div className="mt-4 space-y-4">
-
-            {/* TEXT TAB — hero */}
             {tab === "text" && (
               hasText ? (
                 <ExtractedTextHero
@@ -1076,7 +1022,6 @@ export default function QuestionDetailPage() {
               )
             )}
 
-            {/* PAPER TAB */}
             {tab === "paper" && isPdf && (
               <div
                 className="rounded-2xl border p-5"
@@ -1117,16 +1062,13 @@ export default function QuestionDetailPage() {
               />
             )}
 
-            {/* SUBMIT TAB */}
             {tab === "submit" && (
               <SubmitSolutionSection questionId={questionId} />
             )}
-
           </div>
         </div>
       </div>
 
-      {/* ── Floating Practice Bubble ──────────────────────────────────── */}
       {(hasProcessed || questionsLoading) && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 px-4 w-full max-w-xs">
           {questionsLoading ? (
