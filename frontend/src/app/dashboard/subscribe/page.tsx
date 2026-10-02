@@ -5,7 +5,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Check, Sparkles, Zap, ArrowLeft, Loader2, CheckCircle2, Crown,
-  ShieldCheck, CreditCard, X, Star, Clock,
+  ShieldCheck, CreditCard, X, Star, Clock, PartyPopper,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { Checkout } from "payvessel-checkout";
@@ -67,37 +67,157 @@ const PLANS = [
 const PAID_PLANS = ["basic", "pro", "premium"];
 const PLAN_RANK: Record<string, number> = { free: 0, basic: 1, pro: 2, premium: 3 };
 
-// PayVessel channels must be UPPERCASE. Valid values: "BANK_TRANSFER", "CARD".
-// Add "CARD" here once card payments are enabled on your PayVessel account.
-const PAYVESSEL_CHANNELS = ["BANK_TRANSFER","CARD"];
+const PAYVESSEL_CHANNELS = ["BANK_TRANSFER", "CARD"];
 
-const planAccent: Record<string, { ring: string; badge: string; btn: string; glow: string }> = {
+const planAccent: Record<string, { ring: string; badge: string; btn: string; glow: string; gradient: string }> = {
   basic: {
     ring: "ring-blue-500/30",
     badge: "bg-blue-600",
     btn: "bg-blue-600 hover:bg-blue-500",
     glow: "shadow-blue-500/10",
+    gradient: "from-blue-600 to-blue-400",
   },
   pro: {
     ring: "ring-indigo-500/30",
     badge: "bg-indigo-600",
     btn: "bg-indigo-600 hover:bg-indigo-500",
     glow: "shadow-indigo-500/20",
+    gradient: "from-indigo-600 to-violet-500",
   },
   premium: {
     ring: "ring-violet-500/30",
     badge: "bg-violet-600",
     btn: "bg-violet-600 hover:bg-violet-500",
     glow: "shadow-violet-500/10",
+    gradient: "from-violet-600 to-fuchsia-500",
   },
 };
 
-/*
-  Theme note: colours that change between light and dark use the same CSS
-  variables as the dashboard page (--sp-bg, --sp-bg-card, --sp-border,
-  --sp-text, --sp-text-2, --sp-text-3), which ThemeProvider defines.
-  Accent colours (indigo, emerald, amber) work on both themes.
-*/
+// ─── Congratulations modal ───────────────────────────────────────────────────
+
+interface CongratsModalProps {
+  planName: string;
+  planSlug: string;
+  expiresAt: string | null;
+  onDone: () => void;
+}
+
+function CongratsModal({ planName, planSlug, expiresAt, onDone }: CongratsModalProps) {
+  const [countdown, setCountdown] = useState(4);
+  const accent = planAccent[planSlug] ?? planAccent.pro;
+
+  const formatExpiry = (iso: string | null) => {
+    if (!iso) return null;
+    try {
+      return new Date(iso).toLocaleDateString("en-NG", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  // Count down then redirect
+  useEffect(() => {
+    const t = setInterval(() => {
+      setCountdown((c) => {
+        if (c <= 1) { clearInterval(t); onDone(); return 0; }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [onDone]);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm px-5">
+      <div
+        className="w-full max-w-sm rounded-3xl border overflow-hidden shadow-2xl"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+      >
+        {/* Top gradient bar */}
+        <div className={`h-1.5 w-full bg-gradient-to-r ${accent.gradient}`} />
+
+        <div className="px-7 py-8 text-center">
+          {/* Icon */}
+          <div className="flex justify-center mb-5">
+            <div className={`flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br ${accent.gradient}`}>
+              <PartyPopper className="h-7 w-7 text-white" />
+            </div>
+          </div>
+
+          <p className="text-xs font-bold uppercase tracking-widest text-emerald-500 mb-1">
+            Payment Successful
+          </p>
+
+          <h2
+            className="text-2xl font-extrabold tracking-tight mb-1"
+            style={{ color: "var(--sp-text)" }}
+          >
+            You levelled up! 🎉
+          </h2>
+
+          <p className="text-sm mb-5" style={{ color: "var(--sp-text-3)" }}>
+            Welcome to{" "}
+            <span className="font-bold" style={{ color: "var(--sp-text)" }}>
+              SparkL {planName}
+            </span>
+            . You now have full access for this semester.
+          </p>
+
+          {/* Plan badge */}
+          <div
+            className="inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 mb-5"
+            style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}
+          >
+            <Crown className="h-4 w-4 text-indigo-500" />
+            <span className="text-sm font-bold capitalize" style={{ color: "var(--sp-text)" }}>
+              {planName} Plan — Active
+            </span>
+            <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          </div>
+
+          {expiresAt && (
+            <p className="text-xs mb-6" style={{ color: "var(--sp-text-3)" }}>
+              Valid until{" "}
+              <span className="font-semibold" style={{ color: "var(--sp-text-2)" }}>
+                {formatExpiry(expiresAt)}
+              </span>
+            </p>
+          )}
+
+          {/* Perks quick list */}
+          <div
+            className="rounded-2xl border p-4 mb-6 text-left space-y-2"
+            style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}
+          >
+            {(PLANS.find((p) => p.slug === planSlug)?.perks ?? []).map((perk) => (
+              <div key={perk} className="flex items-center gap-2">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                <span className="text-xs" style={{ color: "var(--sp-text-2)" }}>{perk}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* CTA + countdown */}
+          <button
+            onClick={onDone}
+            className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold text-white bg-gradient-to-r ${accent.gradient} transition-opacity hover:opacity-90`}
+          >
+            Go to Dashboard
+          </button>
+
+          <p className="mt-3 text-xs" style={{ color: "var(--sp-text-3)" }}>
+            Redirecting automatically in {countdown}s…
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Checkout summary modal ──────────────────────────────────────────────────
 
 interface CheckoutSummaryProps {
   plan: typeof PLANS[0];
@@ -123,7 +243,6 @@ function CheckoutSummary({
         className="w-full max-w-md rounded-3xl border shadow-2xl overflow-hidden"
         style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
       >
-
         <div
           className="flex items-center justify-between px-6 pt-6 pb-4 border-b"
           style={{ borderColor: "var(--sp-border)" }}
@@ -259,8 +378,10 @@ function CheckoutSummary({
   );
 }
 
+// ─── Main page ───────────────────────────────────────────────────────────────
+
 function SubscribePageInner() {
-  const supabase = createClient();
+  const supabaseClient = createClient();
   const router = useRouter();
   const searchParams = useSearchParams();
   const justSubscribed = searchParams.get("subscribed") === "true";
@@ -273,14 +394,21 @@ function SubscribePageInner() {
   const [error, setError] = useState("");
   const [checkoutPlan, setCheckoutPlan] = useState<typeof PLANS[0] | null>(null);
 
+  // Congrats modal state
+  const [congratsData, setCongratsData] = useState<{
+    planName: string;
+    planSlug: string;
+    expiresAt: string | null;
+  } | null>(null);
+
   useEffect(() => {
     async function loadUser() {
       try {
-        const { data: { session } } = await supabase.auth.refreshSession();
+        const { data: { session } } = await supabaseClient.auth.refreshSession();
         if (!session) { router.push("/auth/login"); return; }
 
         const [profileRes, subRes] = await Promise.all([
-          supabase
+          supabaseClient
             .from("profiles")
             .select("full_name, phone, subscription_plan")
             .eq("id", session.user.id)
@@ -317,7 +445,6 @@ function SubscribePageInner() {
     loadUser();
   }, []);
 
-  // Plain function — NOT async, NO await on initializeCheckout
   function handleConfirmCheckout() {
     if (!user || !checkoutPlan) return;
     setError("");
@@ -326,7 +453,7 @@ function SubscribePageInner() {
     const plan = checkoutPlan;
     setCheckoutPlan(null);
 
-    supabase.auth.refreshSession().then(({ data: { session } }) => {
+    supabaseClient.auth.refreshSession().then(({ data: { session } }) => {
       if (!session) {
         router.push("/auth/login");
         return;
@@ -359,16 +486,14 @@ function SubscribePageInner() {
             api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
           });
 
-          // NOT awaited — initializeCheckout is callback-based, not a Promise
           init.initializeCheckout({
             amount: String(plan.price),
             currency: "NGN",
             customer_name: userName,
             customer_email: userEmail,
-            // Only send phone if we have one (remove this line if PayVessel rejects it)
             ...(userPhone ? { customer_phone_number: userPhone } : {}),
             reference: ourReference,
-            channels: PAYVESSEL_CHANNELS, // UPPERCASE: "BANK_TRANSFER" | "CARD"
+            channels: PAYVESSEL_CHANNELS,
             metadata: { plan: planSlug, name: userName },
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -394,8 +519,14 @@ function SubscribePageInner() {
                     data.status === "success" ||
                     data.status === "already_verified"
                   ) {
+                    // ✅ Show congrats modal instead of pushing a URL
+                    const planInfo = PLANS.find((p) => p.slug === planSlug);
                     setCurrentPlan(planSlug);
-                    router.push("/dashboard/subscribe?subscribed=true");
+                    setCongratsData({
+                      planName: planInfo?.name ?? planSlug,
+                      planSlug,
+                      expiresAt: data.expires_at ?? null,
+                    });
                   } else {
                     setError(
                       data.detail ?? "Verification failed. Please contact support."
@@ -424,6 +555,12 @@ function SubscribePageInner() {
           setProcessingPlan(null);
         });
     });
+  }
+
+  // ✅ When user clicks "Go to Dashboard" or countdown ends
+  function handleCongratsClose() {
+    setCongratsData(null);
+    router.push("/dashboard");
   }
 
   if (loadingUser) {
@@ -456,6 +593,16 @@ function SubscribePageInner() {
   return (
     <div className="min-h-screen px-5 pb-20 pt-8" style={{ background: "var(--sp-bg)" }}>
 
+      {/* ✅ Congrats modal — shown after successful payment + verify */}
+      {congratsData && (
+        <CongratsModal
+          planName={congratsData.planName}
+          planSlug={congratsData.planSlug}
+          expiresAt={congratsData.expiresAt}
+          onDone={handleCongratsClose}
+        />
+      )}
+
       {checkoutPlan && user && (
         <CheckoutSummary
           plan={checkoutPlan}
@@ -481,7 +628,8 @@ function SubscribePageInner() {
           Back
         </button>
 
-        {justSubscribed && (
+        {/* Legacy query-param banner (kept for safety — won't normally show now) */}
+        {justSubscribed && !congratsData && (
           <div className="mb-8 flex items-center gap-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] px-5 py-4">
             <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
             <div>
@@ -588,9 +736,7 @@ function SubscribePageInner() {
               <div
                 key={plan.slug}
                 className={`relative flex flex-col rounded-2xl border p-5 transition-all shadow-lg ${
-                  plan.popular
-                    ? `border-indigo-500/40 ${accent.glow}`
-                    : ""
+                  plan.popular ? `border-indigo-500/40 ${accent.glow}` : ""
                 } ${isCurrentPlan ? `ring-2 ${accent.ring}` : ""}`}
                 style={{
                   background: plan.popular ? "rgba(99,102,241,0.07)" : "var(--sp-bg-card)",
@@ -680,7 +826,6 @@ function SubscribePageInner() {
         <p className="mt-8 text-center text-xs" style={{ color: "var(--sp-text-3)" }}>
           Secure payments via PayVessel · NGN only · 3-month access per subscription
         </p>
-
       </div>
     </div>
   );
