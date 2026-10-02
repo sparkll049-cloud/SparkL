@@ -14,6 +14,11 @@ import {
 import InlinePaperViewer from "@/components/InlinePaperViewer";
 import { createClient } from "@/utils/supabase/client";
 
+// Import KaTeX styles and rendering components
+import "katex/dist/katex.min.css";
+import InlineMath from "react-katex";
+import BlockMath from "react-katex";
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface QuestionDetail {
@@ -65,6 +70,43 @@ interface Submission {
 const LOW_QUALITY_THRESHOLD = 0.5;
 
 type Tab = "paper" | "submit";
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── MATH RENDERER COMPONENT ───────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+function MathRenderer({ content, className = "" }: { content: string | null; className?: string }) {
+  if (!content) return null;
+
+  // Split by block math ($$...$$), inline math ($...$), or LaTeX bracket notation \[...\] / \(...\)
+  const normalized = content
+    .replace(/\\\[/g, "$$")
+    .replace(/\\\]/g, "$$")
+    .replace(/\\\(/g, "$")
+    .replace(/\\\)/g, "$");
+
+  const parts = normalized.split(/(\$\$.*?\$\$|\$.*?\$)/gs);
+
+  return (
+    <span className={className}>
+      {parts.map((part, index) => {
+        if (part.startsWith("$$") && part.endsWith("$$")) {
+          const math = part.slice(2, -2).trim();
+          return (
+            <span key={index} className="my-2 block overflow-x-auto">
+              <BlockMath math={math} />
+            </span>
+          );
+        }
+        if (part.startsWith("$") && part.endsWith("$")) {
+          const math = part.slice(1, -1).trim();
+          return <InlineMath key={index} math={math} />;
+        }
+        return <span key={index}>{part}</span>;
+      })}
+    </span>
+  );
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ── SECURITY LAYER ────────────────────────────────────────────────────────────
@@ -233,10 +275,11 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
             key={opt}
             onClick={() => { if (!revealed) setSelected(opt); }}
             disabled={revealed}
-            className="w-full rounded-xl border px-4 py-3 text-left text-sm transition-all disabled:cursor-default"
+            className="w-full rounded-xl border px-4 py-3 text-left text-sm transition-all disabled:cursor-default flex items-start gap-2"
             style={style(opt)}
           >
-            <span className="font-bold uppercase mr-2">{opt}.</span>{text}
+            <span className="font-bold uppercase shrink-0 mt-0.5">{opt}.</span>
+            <MathRenderer content={text} className="flex-1" />
           </button>
         );
       })}
@@ -257,7 +300,9 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
             {selected === q.correct_answer ? "✓ Correct!" : `✗ Incorrect — answer is ${q.correct_answer?.toUpperCase()}`}
           </p>
           {q.explanation && (
-            <p className="text-sm leading-6" style={{ color: "var(--sp-text-3)" }}>{q.explanation}</p>
+            <div className="text-sm leading-6" style={{ color: "var(--sp-text-3)" }}>
+              <MathRenderer content={q.explanation} />
+            </div>
           )}
         </div>
       )}
@@ -283,9 +328,9 @@ function PracticeTheory({ q }: { q: ProcessedQuestion }) {
           style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.05)" }}
         >
           <p className="text-[10px] font-semibold text-emerald-500 mb-2">Model Answer</p>
-          <p className="text-sm leading-7 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
-            {q.model_answer}
-          </p>
+          <div className="text-sm leading-7 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
+            <MathRenderer content={q.model_answer} />
+          </div>
         </div>
       )}
     </div>
@@ -390,9 +435,9 @@ function PracticeModal({
                 )}
               </div>
 
-              <p className="text-sm leading-7 whitespace-pre-wrap mb-4" style={{ color: "var(--sp-text)" }}>
-                {q.question_text}
-              </p>
+              <div className="text-sm leading-7 whitespace-pre-wrap mb-4" style={{ color: "var(--sp-text)" }}>
+                <MathRenderer content={q.question_text} />
+              </div>
 
               {q.question_type === "mcq" ? <PracticeMCQ q={q} /> : <PracticeTheory q={q} />}
             </div>
@@ -579,7 +624,7 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
               {sub.extracted_text && (
                 <div className="rounded-xl p-3 text-sm leading-relaxed whitespace-pre-wrap"
                   style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
-                  {sub.extracted_text.length > 400 ? sub.extracted_text.slice(0, 400) + "…" : sub.extracted_text}
+                  <MathRenderer content={sub.extracted_text.length > 400 ? sub.extracted_text.slice(0, 400) + "…" : sub.extracted_text} />
                 </div>
               )}
               {sub.mime_type && !sub.extracted_text && (
@@ -594,9 +639,9 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
                 <div className="rounded-xl border p-3 space-y-1"
                   style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.05)" }}>
                   <p className="text-[10px] font-semibold text-emerald-500">Feedback from SparkL</p>
-                  <p className="text-sm leading-6 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
-                    {sub.feedback}
-                  </p>
+                  <div className="text-sm leading-6 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
+                    <MathRenderer content={sub.feedback} />
+                  </div>
                 </div>
               )}
               {sub.status === "pending" && (
