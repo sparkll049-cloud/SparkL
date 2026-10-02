@@ -1,28 +1,14 @@
-# uploads.py
-"""Student-facing past-question upload feature.
-Files are stored in Backblaze B2 (private bucket).
-Signed URLs are generated on demand for viewing — no permanent public URLs.
-
-Flow:
-    1. Verify Supabase auth token → get real user_id
-    2. Require the upload declaration (stored with a timestamp)
-    3. Validate file size and actual file content (magic bytes)
-    4. Hash the file → reject duplicates before spending any extraction calls
-    5. Pre-extract text NOW — reject file immediately if completely unreadable
-    6. Upload to Backblaze B2 under past-questions/{user_id}/{uuid}.ext
-    7. Save record (processing_status = 'uploaded'); extracted_text is already
-       populated, or None if Gemini was rate-limited — worker retries later
-    8. Render pages to Backblaze at upload time — no rendering at view time
-    9. Stays invisible until admin approves via /api/admin/questions
-"""
-
+# app/routers/uploads.py
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
 from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
 
+import httpx
 from fastapi import (
     APIRouter,
     Depends,
@@ -37,24 +23,24 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.supabase_client import supabase
 from app.storage import upload_file, delete_file
-from app.services.text_extractor import (
-    extract_text,
-    EmptyExtractionError,
-    UnsupportedFileTypeError,
-)
 
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
 
+logger = logging.getLogger("uploads")
+
 TABLE_NAME       = "past_questions"
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_TITLE_LENGTH = 150
 MIN_YEAR         = 1990
 CONSENT_VERSION  = "2026-09"
 
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO  = os.getenv("GITHUB_REPO", "sparkll049-cloud/SparkL.git")
+
 FILE_SIGNATURES = {
     b"%PDF-":               ("application/pdf", "pdf"),
-    b"\xff\xd8\xff":       ("image/jpeg",       "jpg"),
-    b"\x89PNG\r\n\x1a\n": ("image/png",        "png"),
+    b"\xff\xd8\xff":        ("image/jpeg",      "jpg"),
+    b"\x89PNG\r\n\x1a\n":  ("image/png",       "png"),
 }
 
 
@@ -121,6 +107,24 @@ def _course_exists(course_id: str) -> bool:
     return bool(res and res.data)
 
 
+def _load_course_context(course_id: str) -> tuple[str, str]:
+    try:
+        res = (
+            supabase.table("courses")
+            .select("name, department:departments(institution:institutions(name))")
+            .eq("id", course_id)
+            .limit(1)
+            .execute()
+        )
+        row = (res.data or [None])[0] or {}
+        course_name = row.get("name") or ""
+        dept = row.get("department") or {}
+        inst = dept.get("institution") or {}
+        return course_name, inst.get("name") or ""
+    except Exception:
+        return "", ""
+
+
 async def get_current_user_id(
     authorization: Optional[str] = Header(None),
 ) -> UUID:
@@ -137,12 +141,50 @@ async def get_current_user_id(
     return UUID(user.id)
 
 
+async def trigger_github_extraction(
+    record_id: str,
+    file_key: str,
+    mime_type: str,
+    course_name: str = "",
+    institution: str = "",
+):
+    if not GITHUB_TOKEN:
+        logger.warning("GITHUB_TOKEN not set — skipping GitHub trigger")
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(
+                f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/extract.yml/dispatches",
+                headers={
+                    "Authorization": f"Bearer {GITHUB_TOKEN}",
+                    "Accept": "application/vnd.github+json",
+                },
+                json={
+                    "ref": "main",
+                    "inputs": {
+                        "record_id":   record_id,
+                        "file_key":    file_key,
+                        "mime_type":   mime_type,
+                        "course_name": course_name,
+                        "institution": institution,
+                    },
+                },
+                timeout=10,
+            )
+            if res.status_code != 204:
+                logger.error("GitHub trigger failed: %s %s", res.status_code, res.text)
+            else:
+                logger.info("GitHub extraction triggered for %s", record_id)
+    except Exception as e:
+        logger.error("GitHub trigger error: %s", e)
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    summary="Upload a past question — dedupes, pre-extracts text, renders pages",
+    summary="Upload a single-course past question",
 )
 async def upload_past_question(
     title: str = Form(...),
@@ -154,14 +196,12 @@ async def upload_past_question(
     file: UploadFile = File(...),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    # ── Consent ───────────────────────────────────────────────────────
     if not declaration_accepted:
         raise HTTPException(
             status_code=400,
             detail="You must accept the upload declaration.",
         )
 
-    # ── Validate title ────────────────────────────────────────────────
     title = title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Title is required.")
@@ -173,7 +213,6 @@ async def upload_past_question(
 
     year = validate_year(year)
 
-    # ── Validate IDs ──────────────────────────────────────────────────
     validate_uuid(course_id, "course_id")
     if semester_id:
         validate_uuid(semester_id, "semester_id")
@@ -183,7 +222,6 @@ async def upload_past_question(
     if not await run_in_threadpool(_course_exists, course_id):
         raise HTTPException(status_code=400, detail="Course not found.")
 
-    # ── Read and size-check file ──────────────────────────────────────
     declared_size = getattr(file, "size", None)
     if declared_size and declared_size > MAX_UPLOAD_BYTES:
         raise HTTPException(
@@ -200,10 +238,8 @@ async def upload_past_question(
             detail=f"File too large. Max size is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB.",
         )
 
-    # ── Detect real file type from magic bytes ────────────────────────
     mime_type, ext = detect_file_type(file_bytes)
 
-    # ── Duplicate check ───────────────────────────────────────────────
     file_hash = hashlib.sha256(file_bytes).hexdigest()
     duplicate = await run_in_threadpool(_find_duplicate, file_hash)
     if duplicate:
@@ -215,31 +251,6 @@ async def upload_past_question(
             ),
         )
 
-    # ── Pre-extraction ────────────────────────────────────────────────
-    pre_extract_text    = None
-    pre_extract_quality = None
-    fake_filename       = f"file.{ext}"
-
-    try:
-        pre_result          = await run_in_threadpool(extract_text, fake_filename, file_bytes)
-        pre_extract_text    = pre_result.text
-        pre_extract_quality = pre_result.quality
-    except EmptyExtractionError as e:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"We couldn't read text from your file: {str(e)} "
-                "Please upload a clearer scan or a text-based PDF."
-            ),
-        )
-    except UnsupportedFileTypeError as e:
-        raise HTTPException(status_code=415, detail=str(e))
-    except Exception:
-        # Gemini rate-limited or unavailable — don't block the upload
-        pre_extract_text    = None
-        pre_extract_quality = None
-
-    # ── Upload original file to Backblaze ─────────────────────────────
     storage_key = await run_in_threadpool(
         lambda: upload_file(
             file_bytes=file_bytes,
@@ -249,7 +260,6 @@ async def upload_past_question(
         )
     )
 
-    # ── Save record to Supabase ───────────────────────────────────────
     record = {
         "title":              title,
         "year":               year,
@@ -262,8 +272,8 @@ async def upload_past_question(
         "file_hash":          file_hash,
         "mime_type":          mime_type,
         "file_size":          len(file_bytes),
-        "extracted_text":     pre_extract_text,
-        "extraction_quality": pre_extract_quality,
+        "extracted_text":     None,
+        "extraction_quality": None,
         "uploaded_by":        str(user_id),
         "consent_at":         datetime.now(timezone.utc).isoformat(),
         "consent_version":    CONSENT_VERSION,
@@ -274,7 +284,6 @@ async def upload_past_question(
             lambda: supabase.table(TABLE_NAME).insert(record).execute()
         )
     except Exception as exc:
-        # Clean up orphaned B2 file if DB insert fails
         await run_in_threadpool(delete_file, storage_key)
         if _is_duplicate_error(exc):
             raise HTTPException(
@@ -287,24 +296,28 @@ async def upload_past_question(
         await run_in_threadpool(delete_file, storage_key)
         raise HTTPException(status_code=500, detail="Failed to save upload.")
 
-    # ── Render pages to Backblaze ─────────────────────────────────────
-    # Done at upload time so viewer.py never has to render PDFs.
-    # Failures are non-critical — admin can re-trigger if needed.
-    question_id = response.data[0]["id"]
-    try:
-        from app.services.page_renderer import render_and_store_pages
-        await run_in_threadpool(
-            render_and_store_pages, question_id, file_bytes, mime_type
-        )
-    except Exception:
-        pass
+    inserted = response.data[0]
+    record_id = inserted["id"]
 
-    return response.data[0]
+    # Load course context for GitHub worker
+    course_name, institution = await run_in_threadpool(_load_course_context, course_id)
+
+    # Trigger GitHub Actions — fire and forget
+    import asyncio
+    asyncio.create_task(trigger_github_extraction(
+        record_id=record_id,
+        file_key=storage_key,
+        mime_type=mime_type,
+        course_name=course_name,
+        institution=institution,
+    ))
+
+    return inserted
 
 
 @router.get(
     "/mine",
-    summary="The logged-in user's own uploads, any status",
+    summary="The logged-in user's own uploads",
 )
 async def list_my_uploads(user_id: UUID = Depends(get_current_user_id)):
     def _query():
@@ -323,3 +336,48 @@ async def list_my_uploads(user_id: UUID = Depends(get_current_user_id)):
 
     response = await run_in_threadpool(_query)
     return response.data or []
+
+
+@router.post(
+    "/{question_id}/retry",
+    summary="Re-queue a failed single-course upload for processing",
+)
+async def retry_upload_processing(
+    question_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    try:
+        UUID(question_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid question id.")
+
+    row = (
+        supabase.table(TABLE_NAME)
+        .select("id, uploaded_by, processing_status, file_url, mime_type, course_id")
+        .eq("id", question_id)
+        .maybe_single()
+        .execute()
+    ).data
+    if not row:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    if row["uploaded_by"] != str(user_id):
+        raise HTTPException(status_code=403, detail="Not your upload.")
+
+    supabase.table(TABLE_NAME).update(
+        {"processing_status": "uploaded", "processing_error": None}
+    ).eq("id", question_id).execute()
+
+    # Re-trigger GitHub extraction
+    course_name, institution = await run_in_threadpool(
+        _load_course_context, row["course_id"]
+    )
+    import asyncio
+    asyncio.create_task(trigger_github_extraction(
+        record_id=question_id,
+        file_key=row["file_url"],
+        mime_type=row["mime_type"],
+        course_name=course_name,
+        institution=institution,
+    ))
+
+    return {"ok": True}

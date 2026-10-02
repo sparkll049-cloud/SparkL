@@ -7,11 +7,10 @@ import {
   ArrowLeft, ArrowRight, FileText, Loader2, AlertCircle,
   BookOpen, Zap, Play, RotateCcw, Lock, Sparkles,
   ChevronDown, Send, CheckCircle2,
-  Paperclip, X, Clock,
+  Paperclip, X, Clock, Eye, EyeOff, Crown,
 } from "lucide-react";
 
 import InlinePaperViewer from "@/components/InlinePaperViewer";
-
 import { createClient } from "@/utils/supabase/client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -48,6 +47,7 @@ interface ProcessedQuestion {
 
 interface QuestionLimits {
   is_paid: boolean;
+  plan: string; // free | basic | pro | premium
   read_mode_percent: number;
   practice_mode_max: number | null;
 }
@@ -65,9 +65,186 @@ interface Submission {
 
 const LOW_QUALITY_THRESHOLD = 0.5;
 const FREE_PRACTICE_CAP     = 5;
+const FREE_TEXT_LINES       = 10;
 
-type Tab = "view" | "practice" | "submit";
+type Tab = "view" | "read" | "practice" | "submit";
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Anti-screenshot overlay ───────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+function useAntiCapture(enabled: boolean) {
+  const [hidden, setHidden] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    function onVisibility() {
+      setHidden(document.visibilityState === "hidden");
+    }
+    function onBlur()  { setHidden(true);  }
+    function onFocus() { setHidden(false); }
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur",  onBlur);
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur",  onBlur);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [enabled]);
+
+  return hidden;
+}
+
+interface ProtectedWrapProps {
+  userEmail: string | null;
+  children: React.ReactNode;
+  enabled?: boolean;
+}
+
+function ProtectedWrap({ userEmail, children, enabled = true }: ProtectedWrapProps) {
+  const hidden = useAntiCapture(enabled);
+
+  if (!enabled) return <>{children}</>;
+
+  return (
+    <div className="relative select-none">
+      {hidden && (
+        <div
+          className="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-2xl"
+          style={{ background: "var(--sp-bg-card)", backdropFilter: "blur(20px)" }}
+        >
+          <Lock className="h-8 w-8 text-indigo-500 mb-2" />
+          <p className="text-sm font-bold" style={{ color: "var(--sp-text)" }}>
+            Content hidden
+          </p>
+          <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>
+            Return to SparkL to continue reading
+          </p>
+        </div>
+      )}
+
+      <div
+        className="pointer-events-none absolute inset-0 z-10 overflow-hidden rounded-2xl"
+        aria-hidden
+        style={{ userSelect: "none" }}
+      >
+        {Array.from({ length: 30 }).map((_, i) => (
+          <span
+            key={i}
+            className="absolute text-[10px] font-bold opacity-[0.07] whitespace-nowrap"
+            style={{
+              top:       `${(i * 7) % 100}%`,
+              left:      `${(i * 13) % 100}%`,
+              transform: "rotate(-30deg)",
+              color:     "var(--sp-text)",
+              userSelect: "none",
+              pointerEvents: "none",
+            }}
+          >
+            SparkL · {userEmail ?? "protected"}
+          </span>
+        ))}
+      </div>
+
+      <div style={{ userSelect: "none", WebkitUserSelect: "none" }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Extracted text (Read) tab ─────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+function ExtractedTextView({
+  text,
+  isPaid,
+  userEmail,
+}: {
+  text: string;
+  isPaid: boolean;
+  userEmail: string | null;
+}) {
+  const lines    = text.split("\n").filter(l => l.trim());
+  const visible  = isPaid ? lines : lines.slice(0, FREE_TEXT_LINES);
+  const hidden   = lines.length - visible.length;
+  const isGated  = !isPaid && hidden > 0;
+
+  return (
+    <div className="space-y-3">
+      <ProtectedWrap userEmail={userEmail} enabled={isPaid}>
+        <div
+          className="rounded-2xl border p-5 space-y-3"
+          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+        >
+          <div className="flex items-center gap-2 pb-2 border-b" style={{ borderColor: "var(--sp-border)" }}>
+            <FileText size={14} className="text-indigo-400" />
+            <p className="text-xs font-bold" style={{ color: "var(--sp-text-2)" }}>
+              Extracted paper text
+            </p>
+            {!isPaid && (
+              <span className="ml-auto rounded-full bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-500">
+                Preview only — {FREE_TEXT_LINES} lines
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            {visible.map((line, i) => (
+              <p
+                key={i}
+                className="text-sm leading-7 whitespace-pre-wrap"
+                style={{ color: "var(--sp-text-2)" }}
+              >
+                {line}
+              </p>
+            ))}
+          </div>
+
+          {isGated && (
+            <div
+              className="relative -mt-10 pt-10"
+              style={{
+                background: "linear-gradient(to bottom, transparent, var(--sp-bg-card) 70%)",
+              }}
+            />
+          )}
+        </div>
+      </ProtectedWrap>
+
+      {isGated && (
+        <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-6 text-center">
+          <div className="flex justify-center mb-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/15">
+              <Crown className="h-4 w-4 text-indigo-500" />
+            </div>
+          </div>
+          <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+            {hidden} more line{hidden !== 1 ? "s" : ""} hidden
+          </p>
+          <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+            Upgrade to Basic, Pro or Premium to read the full extracted text
+          </p>
+          <Link
+            href="/dashboard/subscribe"
+            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
+          >
+            <Crown className="h-3.5 w-3.5" />
+            Unlock full text
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
 
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -194,7 +371,7 @@ function PracticeQuestion({ q, index }: { q: ProcessedQuestion; index: number })
   );
 }
 
-function GateBanner({ hiddenCount }: { hiddenCount: number }) {
+function GateBanner({ hiddenCount, type }: { hiddenCount: number; type: "practice" | "preview" }) {
   return (
     <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-6 text-center">
       <div className="flex justify-center mb-3">
@@ -203,17 +380,21 @@ function GateBanner({ hiddenCount }: { hiddenCount: number }) {
         </div>
       </div>
       <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-        {hiddenCount} more question{hiddenCount !== 1 ? "s" : ""} locked
+        {type === "practice"
+          ? `${hiddenCount} more question${hiddenCount !== 1 ? "s" : ""} locked`
+          : "Paper preview locked"}
       </p>
       <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-        Free plan limits practice to {FREE_PRACTICE_CAP} questions
+        {type === "practice"
+          ? `Free plan limits practice to ${FREE_PRACTICE_CAP} questions`
+          : "Upgrade to view and download the original paper"}
       </p>
       <Link
         href="/dashboard/subscribe"
         className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
       >
-        <Sparkles className="h-3.5 w-3.5" />
-        Unlock all questions
+        <Crown className="h-3.5 w-3.5" />
+        Unlock — Basic, Pro or Premium
         <ArrowRight className="h-3.5 w-3.5" />
       </Link>
     </div>
@@ -221,9 +402,8 @@ function GateBanner({ hiddenCount }: { hiddenCount: number }) {
 }
 
 
-
 // ══════════════════════════════════════════════════════════════════════════════
-// ── SUBMIT SOLUTION SECTION (with history) ────────────────────────────────────
+// ── Submit solution section ───────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
 function SubmitSolutionSection({ questionId }: { questionId: string }) {
@@ -232,14 +412,12 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
 
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [subsLoading, setSubsLoading] = useState(true);
-
-  const [text, setText]             = useState("");
-  const [file, setFile]             = useState<File | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [text, setText]               = useState("");
+  const [file, setFile]               = useState<File | null>(null);
+  const [submitting, setSubmitting]   = useState(false);
   const [submitError, setSubmitError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Load past submissions on mount
   useEffect(() => {
     async function load() {
       setSubsLoading(true);
@@ -262,7 +440,6 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
     if (!text.trim() && !file) return;
     setSubmitting(true);
     setSubmitError("");
-
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { router.push("/auth/login"); return; }
 
@@ -274,22 +451,17 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
 
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/answers/submit`,
-        {
-          method: "POST",
-          headers: { Authorization: `Bearer ${session.access_token}` },
-          body: formData,
-        }
+        { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, body: formData }
       );
-
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.detail || "Failed to submit. Please try again.");
       }
 
+      // ── FIX: resolve JSON before entering setState ──
       const newSub = await res.json();
 
-      // Optimistically prepend to history
-      setSubmissions((prev) => [{
+      setSubmissions(prev => [{
         id: newSub.id,
         status: "pending",
         feedback: null,
@@ -300,10 +472,8 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         reviewed_at: null,
       }, ...prev]);
 
-      // Reset form
       setText("");
       setFile(null);
-
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
@@ -313,8 +483,6 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
 
   return (
     <div className="space-y-4">
-
-      {/* ── Past submissions ── */}
       {subsLoading ? (
         <div className="flex items-center justify-center py-8">
           <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
@@ -324,21 +492,13 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
           <p className="text-xs font-semibold px-1" style={{ color: "var(--sp-text-3)" }}>
             Your submissions ({submissions.length})
           </p>
-
           {submissions.map((sub) => (
-            <div
-              key={sub.id}
-              className="rounded-2xl border p-4 space-y-3"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-            >
-              {/* Header row */}
+            <div key={sub.id} className="rounded-2xl border p-4 space-y-3"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-xs" style={{ color: "var(--sp-text-3)" }}>
-                  {new Date(sub.created_at).toLocaleDateString("en-NG", {
-                    day: "numeric", month: "short", year: "numeric",
-                  })}
+                  {new Date(sub.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}
                 </span>
-
                 {sub.status === "reviewed" ? (
                   <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-[10px] font-semibold text-emerald-500">
                     <CheckCircle2 size={10} /> Reviewed
@@ -349,42 +509,28 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
                   </span>
                 )}
               </div>
-
-              {/* What they submitted */}
               {sub.extracted_text && (
-                <div
-                  className="rounded-xl p-3 text-sm leading-relaxed whitespace-pre-wrap"
-                  style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
-                >
-                  {sub.extracted_text.length > 400
-                    ? sub.extracted_text.slice(0, 400) + "…"
-                    : sub.extracted_text}
+                <div className="rounded-xl p-3 text-sm leading-relaxed whitespace-pre-wrap"
+                  style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
+                  {sub.extracted_text.length > 400 ? sub.extracted_text.slice(0, 400) + "…" : sub.extracted_text}
                 </div>
               )}
-
               {sub.mime_type && !sub.extracted_text && (
-                <div
-                  className="flex items-center gap-2 rounded-xl p-3 text-xs"
-                  style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}
-                >
+                <div className="flex items-center gap-2 rounded-xl p-3 text-xs"
+                  style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}>
                   <Paperclip size={12} />
                   File attached ({sub.mime_type.split("/")[1].toUpperCase()}
                   {sub.file_size ? ` · ${(sub.file_size / 1024).toFixed(0)} KB` : ""})
                 </div>
               )}
-
-              {/* Admin feedback */}
               {sub.status === "reviewed" && sub.feedback && (
                 <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1">
-                  <p className="text-[10px] font-semibold text-emerald-500">
-                    Feedback from SparkL
-                  </p>
+                  <p className="text-[10px] font-semibold text-emerald-500">Feedback from SparkL</p>
                   <p className="text-sm leading-6 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
                     {sub.feedback}
                   </p>
                 </div>
               )}
-
               {sub.status === "pending" && (
                 <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
                   Your submission is being reviewed. Check back soon.
@@ -395,11 +541,8 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         </div>
       )}
 
-      {/* ── New submission form ── */}
-      <div
-        className="rounded-2xl border p-5 space-y-4"
-        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-      >
+      <div className="rounded-2xl border p-5 space-y-4"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
         <div>
           <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
             {submissions.length > 0 ? "Submit another solution" : "Submit your solution"}
@@ -410,49 +553,28 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         </div>
 
         <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Type your solution or answers here…"
-          rows={5}
+          value={text} onChange={(e) => setText(e.target.value)}
+          placeholder="Type your solution or answers here…" rows={5}
           className="w-full rounded-xl border px-4 py-3 text-sm outline-none transition resize-none"
-          style={{
-            borderColor: "var(--sp-border)",
-            background: "var(--sp-bg-muted)",
-            color: "var(--sp-text)",
-          }}
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text)" }}
         />
 
         <div className="flex items-center gap-3 flex-wrap">
-          <button
-            onClick={() => fileRef.current?.click()}
+          <button onClick={() => fileRef.current?.click()}
             className="flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition"
-            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
-          >
+            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
             <Paperclip size={13} />
             {file ? "Change file" : "Attach file"}
           </button>
-
           {file && (
-            <div
-              className="flex items-center gap-2 rounded-xl border px-3 py-1.5"
-              style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}
-            >
-              <span className="text-xs truncate max-w-[160px]" style={{ color: "var(--sp-text-2)" }}>
-                {file.name}
-              </span>
-              <button onClick={() => setFile(null)}>
-                <X size={12} style={{ color: "var(--sp-text-3)" }} />
-              </button>
+            <div className="flex items-center gap-2 rounded-xl border px-3 py-1.5"
+              style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
+              <span className="text-xs truncate max-w-[160px]" style={{ color: "var(--sp-text-2)" }}>{file.name}</span>
+              <button onClick={() => setFile(null)}><X size={12} style={{ color: "var(--sp-text-3)" }} /></button>
             </div>
           )}
-
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*,application/pdf"
-            className="hidden"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          />
+          <input ref={fileRef} type="file" accept="image/*,application/pdf"
+            className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         </div>
 
         {submitError && (
@@ -462,11 +584,8 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
           </div>
         )}
 
-        <button
-          onClick={handleSubmit}
-          disabled={(!text.trim() && !file) || submitting}
-          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
-        >
+        <button onClick={handleSubmit} disabled={(!text.trim() && !file) || submitting}
+          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed">
           {submitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
           {submitting ? "Submitting…" : "Submit solution"}
         </button>
@@ -489,28 +608,24 @@ export default function QuestionDetailPage() {
   const [data, setData]       = useState<QuestionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState("");
-
-  // Track logged-in user email for watermark
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   const [processedQuestions, setProcessedQuestions] = useState<ProcessedQuestion[]>([]);
   const [questionsLoading, setQuestionsLoading]     = useState(false);
 
   const [limits, setLimits] = useState<QuestionLimits>({
-    is_paid: true, read_mode_percent: 100, practice_mode_max: null,
+    is_paid: false, plan: "free", read_mode_percent: 100, practice_mode_max: null,
   });
 
   const [tab, setTab] = useState<Tab>("view");
+  const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
     if (!questionId) return;
     async function load() {
-      setLoading(true);
-      setError("");
+      setLoading(true); setError("");
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.push("/auth/login"); return; }
-
-      // Capture email for watermark
       setUserEmail(session.user?.email ?? null);
 
       try {
@@ -523,14 +638,19 @@ export default function QuestionDetailPage() {
         if (detailRes.status === 404) throw new Error("This past question wasn't found.");
         if (!detailRes.ok) throw new Error("Failed to load this past question.");
         setData(await detailRes.json());
+
         if (limitsRes.ok) {
           const d = await limitsRes.json();
+          const plan = (d.effective_plan ?? d.plan ?? "free").toLowerCase();
+          const isPaid = d.is_paid === true || d.is_trial === true;
           setLimits({
-            is_paid: d.is_paid ?? false,
+            is_paid: isPaid,
+            plan,
             read_mode_percent: d.read_mode_percent ?? 100,
             practice_mode_max: d.practice_mode_max ?? null,
           });
         }
+
         setQuestionsLoading(true);
         fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/questions/${questionId}/processed`,
           { headers: { Authorization: `Bearer ${session.access_token}` } })
@@ -546,6 +666,17 @@ export default function QuestionDetailPage() {
     }
     load();
   }, [questionId]);
+
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.id    = "sp-anticap";
+    style.textContent = `
+      .sp-protected { user-select: none; -webkit-user-select: none; }
+      @media print { .sp-protected { filter: blur(20px) !important; } }
+    `;
+    document.head.appendChild(style);
+    return () => { document.getElementById("sp-anticap")?.remove(); };
+  }, []);
 
   if (loading) return (
     <div className="flex min-h-[60vh] items-center justify-center">
@@ -567,9 +698,11 @@ export default function QuestionDetailPage() {
   const hasProcessed = processedQuestions.length > 0;
   const mcqCount     = processedQuestions.filter(q => q.question_type === "mcq").length;
   const theoryCount  = processedQuestions.filter(q => q.question_type === "theory").length;
+  const hasText      = !!(data.extracted_text?.trim());
 
+  const practiceCap      = FREE_PRACTICE_CAP;
   const visibleQuestions = !limits.is_paid
-    ? processedQuestions.slice(0, FREE_PRACTICE_CAP)
+    ? processedQuestions.slice(0, practiceCap)
     : processedQuestions;
   const hiddenCount = processedQuestions.length - visibleQuestions.length;
   const isGated     = !limits.is_paid && hiddenCount > 0;
@@ -578,7 +711,6 @@ export default function QuestionDetailPage() {
     <div className="min-h-screen px-4 py-8 sm:px-6" style={{ background: "var(--sp-bg)" }}>
       <div className="mx-auto max-w-3xl">
 
-        {/* Back */}
         <Link
           href={data.course ? `/dashboard/courses/${data.course.id}` : "/dashboard"}
           className="inline-flex items-center gap-1.5 text-sm font-medium transition-colors"
@@ -587,19 +719,14 @@ export default function QuestionDetailPage() {
           <ArrowLeft size={15} /> Back
         </Link>
 
-        {/* Header card */}
-        <div
-          className="mt-4 rounded-2xl border p-5"
-          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-        >
+        <div className="mt-4 rounded-2xl border p-5"
+          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
           <div className="flex items-start gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-500/10">
               <FileText size={20} className="text-indigo-500" />
             </div>
             <div className="min-w-0 flex-1">
-              <h1 className="text-lg font-bold" style={{ color: "var(--sp-text)" }}>
-                {data.title}
-              </h1>
+              <h1 className="text-lg font-bold" style={{ color: "var(--sp-text)" }}>{data.title}</h1>
               <p className="mt-0.5 text-sm" style={{ color: "var(--sp-text-3)" }}>
                 {data.course?.name ?? "—"}
                 {data.semester?.name ? ` · ${data.semester.name}` : ""}
@@ -617,11 +744,9 @@ export default function QuestionDetailPage() {
             </div>
           )}
 
-          {/* Tabs */}
-          <div
-            className="mt-5 flex items-center gap-1 border-t pt-4"
-            style={{ borderColor: "var(--sp-border)" }}
-          >
+          <div className="mt-5 flex items-center gap-1 flex-wrap border-t pt-4"
+            style={{ borderColor: "var(--sp-border)" }}>
+
             {isPdf && (
               <button
                 onClick={() => setTab("view")}
@@ -631,6 +756,23 @@ export default function QuestionDetailPage() {
                 style={tab !== "view" ? { color: "var(--sp-text-3)", background: "var(--sp-bg-muted)" } : {}}
               >
                 <FileText size={12} /> View paper
+              </button>
+            )}
+
+            {hasText && (
+              <button
+                onClick={() => setTab("read")}
+                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+                  tab === "read" ? "bg-indigo-600 text-white" : ""
+                }`}
+                style={tab !== "read" ? { color: "var(--sp-text-3)", background: "var(--sp-bg-muted)" } : {}}
+              >
+                <BookOpen size={12} /> Read text
+                {!limits.is_paid && (
+                  <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[8px] font-bold text-amber-400">
+                    Preview
+                  </span>
+                )}
               </button>
             )}
 
@@ -683,39 +825,62 @@ export default function QuestionDetailPage() {
           </div>
         </div>
 
-        {/* Tab content */}
         <div className="mt-4 space-y-4">
 
-          {/* VIEW */}
           {tab === "view" && isPdf && (
-            <div
-              className="rounded-2xl border p-5"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-            >
-              <InlinePaperViewer
-                questionId={questionId}
-                isPaid={limits.is_paid}
-                userEmail={userEmail}
-              />
+            <div className="space-y-3">
+              {limits.is_paid ? (
+                <div className="rounded-2xl border p-5"
+                  style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+                  <button
+                    onClick={() => setShowPreview(v => !v)}
+                    className="flex items-center gap-2 mb-4 rounded-xl border px-4 py-2.5 text-sm font-semibold transition w-full justify-center"
+                    style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+                  >
+                    {showPreview
+                      ? <><EyeOff size={14} /> Hide paper preview</>
+                      : <><Eye size={14} /> Show paper preview</>}
+                  </button>
+
+                  {showPreview && (
+                    <ProtectedWrap userEmail={userEmail} enabled>
+                      <div className="sp-protected">
+                        <InlinePaperViewer
+                          questionId={questionId}
+                          isPaid={limits.is_paid}
+                          userEmail={userEmail}
+                        />
+                      </div>
+                    </ProtectedWrap>
+                  )}
+                </div>
+              ) : (
+                <GateBanner hiddenCount={0} type="preview" />
+              )}
             </div>
           )}
 
           {tab === "view" && !isPdf && (
-            <div
-              className="rounded-2xl border p-8 text-center"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-            >
+            <div className="rounded-2xl border p-8 text-center"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               <FileText size={24} className="mx-auto mb-3 text-indigo-400" />
               <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
                 No viewer for this file type
               </p>
               <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                Switch to Practice to interact with extracted questions.
+                Switch to Read or Practice to access the content.
               </p>
             </div>
           )}
 
-          {/* PRACTICE */}
+          {tab === "read" && hasText && (
+            <ExtractedTextView
+              text={data.extracted_text!}
+              isPaid={limits.is_paid}
+              userEmail={userEmail}
+            />
+          )}
+
           {tab === "practice" && (
             <div className="space-y-4">
               {hasProcessed ? (
@@ -733,29 +898,32 @@ export default function QuestionDetailPage() {
                       <RotateCcw size={11} /> Back to paper
                     </button>
                   </div>
-                  {visibleQuestions.map((q, i) => (
-                    <PracticeQuestion key={q.id} q={q} index={i} />
-                  ))}
-                  {isGated && <GateBanner hiddenCount={hiddenCount} />}
+
+                  <ProtectedWrap userEmail={userEmail} enabled>
+                    <div className="sp-protected space-y-4">
+                      {visibleQuestions.map((q, i) => (
+                        <PracticeQuestion key={q.id} q={q} index={i} />
+                      ))}
+                    </div>
+                  </ProtectedWrap>
+
+                  {isGated && <GateBanner hiddenCount={hiddenCount} type="practice" />}
                 </>
               ) : (
-                <div
-                  className="rounded-2xl border p-10 text-center"
-                  style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-                >
+                <div className="rounded-2xl border p-10 text-center"
+                  style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
                   <Sparkles size={24} className="mx-auto mb-3 text-violet-400" />
                   <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
                     Practice questions not ready yet
                   </p>
                   <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                    Our Team are currently processing this paper. Check back shortly.
+                    Our team are currently processing this paper. Check back shortly.
                   </p>
                 </div>
               )}
             </div>
           )}
 
-          {/* SUBMIT SOLUTION */}
           {tab === "submit" && (
             <SubmitSolutionSection questionId={questionId} />
           )}

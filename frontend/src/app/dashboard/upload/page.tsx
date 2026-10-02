@@ -1,16 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Upload as UploadIcon, FileText, Loader2, CheckCircle2,
   XCircle, Clock, AlertCircle, CloudUpload, RotateCcw,
+  ChevronRight, BookOpen,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
-interface Option { id: string; name: string; }
+// ── Types ─────────────────────────────────────────────────────────────────────
 
+interface Option { id: string; name: string; }
 type ProcessingStatus = "uploaded" | "extracting" | "ready" | "failed";
 
 interface MyUpload {
@@ -23,58 +25,50 @@ interface MyUpload {
   semester: { name: string } | null;
 }
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png"];
-const MIN_YEAR = 1990;
-const LOW_QUALITY_THRESHOLD = 0.5;
-const POLL_INTERVAL_MS = 10_000;
+const MIN_YEAR      = 1990;
+const LOW_QUALITY   = 0.5;
+const POLL_MS       = 10_000;
 
-// ── Image compression ─────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function compressImage(file: File): Promise<File> {
   return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
-
     img.onload = () => {
       URL.revokeObjectURL(url);
-      const MAX_DIMENSION = 1920;
+      const MAX = 1920;
       let { width, height } = img;
-      if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
-        if (width > height) { height = Math.round((height * MAX_DIMENSION) / width); width = MAX_DIMENSION; }
-        else { width = Math.round((width * MAX_DIMENSION) / height); height = MAX_DIMENSION; }
+      if (width > MAX || height > MAX) {
+        if (width > height) { height = Math.round((height * MAX) / width); width = MAX; }
+        else { width = Math.round((width * MAX) / height); height = MAX; }
       }
       const canvas = document.createElement("canvas");
       canvas.width = width; canvas.height = height;
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, width, height);
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) { resolve(file); return; }
-          if (blob.size < file.size) {
-            resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
-          } else { resolve(file); }
-        },
-        "image/jpeg",
-        0.82,
-      );
+      canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
+      canvas.toBlob((blob) => {
+        if (!blob) { resolve(file); return; }
+        resolve(blob.size < file.size
+          ? new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" })
+          : file);
+      }, "image/jpeg", 0.82);
     };
-
     img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
     img.src = url;
   });
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function isValidYear(y: string, currentYear: number) {
+function isValidYear(y: string, cur: number) {
   if (!y) return true;
-  return /^\d{4}$/.test(y) && Number(y) >= MIN_YEAR && Number(y) <= currentYear + 1;
+  return /^\d{4}$/.test(y) && +y >= MIN_YEAR && +y <= cur + 1;
 }
 
-function formatBytes(bytes: number) {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+function fmtBytes(b: number) {
+  return b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(2)} MB`;
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -89,9 +83,7 @@ function SelectField({ label, value, onChange, disabled, placeholder, options, r
         {label}{required && <span className="ml-0.5 text-blue-400">*</span>}
       </label>
       <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
+        value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}
         className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-40 appearance-none"
         style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }}
       >
@@ -119,33 +111,21 @@ function StatusPill({ status }: { status: string }) {
 }
 
 function ProcessingRow({ status, retrying, onRetry }: {
-  status?: ProcessingStatus;
-  retrying: boolean;
-  onRetry: () => void;
+  status?: ProcessingStatus; retrying: boolean; onRetry: () => void;
 }) {
   if (!status || status === "ready") return null;
-
-  if (status === "failed") {
-    return (
-      <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5">
-        <p className="flex items-center gap-2 text-xs text-red-400">
-          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-          We couldn&apos;t process this file.
-        </p>
-        <button
-          onClick={onRetry}
-          disabled={retrying}
-          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-red-500/30 px-2.5 py-1 text-[11px] font-semibold text-red-400 transition hover:bg-red-500/10 disabled:opacity-50"
-        >
-          {retrying
-            ? <Loader2 className="h-3 w-3 animate-spin" />
-            : <RotateCcw className="h-3 w-3" />}
-          Retry
-        </button>
-      </div>
-    );
-  }
-
+  if (status === "failed") return (
+    <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5">
+      <p className="flex items-center gap-2 text-xs text-red-400">
+        <AlertCircle className="h-3.5 w-3.5 shrink-0" />We couldn&apos;t process this file.
+      </p>
+      <button onClick={onRetry} disabled={retrying}
+        className="flex shrink-0 items-center gap-1.5 rounded-lg border border-red-500/30 px-2.5 py-1 text-[11px] font-semibold text-red-400 transition hover:bg-red-500/10 disabled:opacity-50">
+        {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+        Retry
+      </button>
+    </div>
+  );
   return (
     <p className="mt-3 flex items-center gap-2 text-xs" style={{ color: "var(--sp-text-3)" }}>
       <Loader2 className="h-3 w-3 animate-spin text-blue-400" />
@@ -154,12 +134,12 @@ function ProcessingRow({ status, retrying, onRetry }: {
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
   const supabase = createClient();
-  const router = useRouter();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const router   = useRouter();
+  const fileRef  = useRef<HTMLInputElement>(null);
 
   const [institutions, setInstitutions] = useState<Option[]>([]);
   const [departments,  setDepartments]  = useState<Option[]>([]);
@@ -175,77 +155,75 @@ export default function UploadPage() {
   const [levelId,       setLevelId]       = useState("");
   const [courseId,      setCourseId]      = useState("");
   const [semesterId,    setSemesterId]    = useState("");
-  const [file,          setFile]          = useState<File | null>(null);
-  const [compressedFile,setCompressedFile]= useState<File | null>(null);
-  const [compressing,   setCompressing]   = useState(false);
 
-  // Upload declaration checkbox
+  const [file,           setFile]           = useState<File | null>(null);
+  const [compressedFile, setCompressedFile] = useState<File | null>(null);
+  const [compressing,    setCompressing]    = useState(false);
+  const [fileError,      setFileError]      = useState("");
+  const [dragOver,       setDragOver]       = useState(false);
+
   const [declarationChecked, setDeclarationChecked] = useState(false);
-
-  const [fetching,           setFetching]           = useState(true);
-  const [loadingDepartments, setLoadingDepartments] = useState(false);
-  const [loadingCourses,     setLoadingCourses]     = useState(false);
-  const [submitting,         setSubmitting]         = useState(false);
-  const [dragOver,           setDragOver]           = useState(false);
-  const [error,              setError]              = useState("");
-  const [success,            setSuccess]            = useState(false);
-  const [fileError,          setFileError]          = useState("");
-  const [retryingId,         setRetryingId]         = useState<string | null>(null);
+  const [fetching,   setFetching]   = useState(true);
+  const [loadingDep, setLoadingDep] = useState(false);
+  const [loadingCou, setLoadingCou] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error,      setError]      = useState("");
+  const [success,    setSuccess]    = useState(false);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const currentYear = new Date().getFullYear();
+  const apiBase     = process.env.NEXT_PUBLIC_API_URL;
 
   useEffect(() => {
-    async function loadInitial() {
-      setFetching(true);
+    async function init() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.push("/auth/login"); return; }
-      const [{ data: instData }, { data: levData }, { data: semData }] = await Promise.all([
+      const [{ data: inst }, { data: lev }, { data: sem }] = await Promise.all([
         supabase.from("institutions").select("id, name").order("name"),
         supabase.from("levels").select("id, name").order("name"),
         supabase.from("semesters").select("id, name").order("name"),
       ]);
-      setInstitutions(instData ?? []);
-      setLevels(levData ?? []);
-      setSemesters(semData ?? []);
+      setInstitutions(inst ?? []);
+      setLevels(lev ?? []);
+      setSemesters(sem ?? []);
       await loadMyUploads(session.access_token);
       setFetching(false);
     }
-    loadInitial();
+    init();
   }, []);
 
   useEffect(() => {
     setDepartmentId(""); setDepartments([]); setCourseId(""); setCourses([]);
     if (!institutionId) return;
-    setLoadingDepartments(true);
+    setLoadingDep(true);
     supabase.from("departments").select("id, name").eq("institution_id", institutionId).order("name")
-      .then(({ data }) => { setDepartments(data ?? []); setLoadingDepartments(false); });
+      .then(({ data }) => { setDepartments(data ?? []); setLoadingDep(false); });
   }, [institutionId]);
 
   useEffect(() => {
     setCourseId(""); setCourses([]);
     if (!departmentId) return;
-    setLoadingCourses(true);
+    setLoadingCou(true);
     supabase.from("courses").select("id, name").eq("department_id", departmentId).order("name")
-      .then(({ data }) => { setCourses(data ?? []); setLoadingCourses(false); });
+      .then(({ data }) => { setCourses(data ?? []); setLoadingCou(false); });
   }, [departmentId]);
 
-  // Poll while any upload is still being processed
   useEffect(() => {
     const active = myUploads.some(
-      (u) => u.processing_status === "uploaded" || u.processing_status === "extracting",
+      u => u.processing_status === "uploaded" || u.processing_status === "extracting"
     );
     if (!active) return;
-    const timer = setInterval(async () => {
+    const t = setInterval(async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) loadMyUploads(session.access_token);
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
+    }, POLL_MS);
+    return () => clearInterval(t);
   }, [myUploads]);
 
-  async function loadMyUploads(token: string) {
+  async function loadMyUploads(tok: string) {
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/upload/mine`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await fetch(`${apiBase}/api/upload/mine`, {
+        headers: { Authorization: `Bearer ${tok}` },
       });
       if (res.status === 401) { router.push("/auth/login"); return; }
       if (res.ok) setMyUploads(await res.json());
@@ -256,8 +234,8 @@ export default function UploadPage() {
     setRetryingId(id);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { router.push("/auth/login"); return; }
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/upload/${id}/retry`, {
+      if (!session) return;
+      const res = await fetch(`${apiBase}/api/upload/${id}/retry`, {
         method: "POST",
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
@@ -266,85 +244,74 @@ export default function UploadPage() {
     finally { setRetryingId(null); }
   }
 
-  function validateFile(selected: File): boolean {
+  function validateFile(f: File): boolean {
     setFileError("");
-    if (!ALLOWED_TYPES.includes(selected.type)) {
-      setFileError("Only PDF, JPG, and PNG files are allowed.");
-      return false;
-    }
-    if (selected.size > MAX_FILE_SIZE) {
-      setFileError("File too large — max size is 20MB.");
-      return false;
-    }
+    if (!ALLOWED_TYPES.includes(f.type)) { setFileError("Only PDF, JPG, and PNG files are allowed."); return false; }
+    if (f.size > MAX_FILE_SIZE) { setFileError("File too large — max size is 20MB."); return false; }
     return true;
   }
 
-  async function processFile(selected: File) {
-    setFile(selected);
-    setCompressedFile(null);
-    if (selected.type === "application/pdf") { setCompressedFile(selected); return; }
+  async function processFile(f: File) {
+    setFile(f); setCompressedFile(null);
+    if (f.type === "application/pdf") { setCompressedFile(f); return; }
     setCompressing(true);
-    try {
-      const compressed = await compressImage(selected);
-      setCompressedFile(compressed);
-    } catch { setCompressedFile(selected); }
+    try { setCompressedFile(await compressImage(f)); }
+    catch { setCompressedFile(f); }
     finally { setCompressing(false); }
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const selected = e.target.files?.[0] ?? null;
-    if (!selected) { setFile(null); setCompressedFile(null); return; }
-    if (validateFile(selected)) processFile(selected);
+    const f = e.target.files?.[0] ?? null;
+    if (!f) { setFile(null); setCompressedFile(null); return; }
+    if (validateFile(f)) processFile(f);
     else { setFile(null); setCompressedFile(null); }
   }
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault(); setDragOver(false);
-    const dropped = e.dataTransfer.files?.[0];
-    if (!dropped) return;
-    if (validateFile(dropped)) processFile(dropped);
+    const f = e.dataTransfer.files?.[0];
+    if (!f) return;
+    if (validateFile(f)) processFile(f);
     else { setFile(null); setCompressedFile(null); }
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setError(""); setSuccess(false);
     if (!compressedFile) { setError("Please choose a file."); return; }
-    if (!declarationChecked) { setError("Please confirm the upload declaration before submitting."); return; }
+    if (!declarationChecked) { setError("Please confirm the upload declaration."); return; }
     if (year && !isValidYear(year, currentYear)) {
-      setError(`Year must be between ${MIN_YEAR} and ${currentYear + 1}.`);
-      return;
+      setError(`Year must be between ${MIN_YEAR} and ${currentYear + 1}.`); return;
     }
+    if (!courseId) { setError("Please select a course."); return; }
+
     setSubmitting(true);
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { setSubmitting(false); router.push("/auth/login"); return; }
 
-    const formData = new FormData();
-    formData.append("title", title);
-    if (year) formData.append("year", year);
-    formData.append("course_id", courseId);
-    if (semesterId) formData.append("semester_id", semesterId);
-    if (levelId) formData.append("level_id", levelId);
-    formData.append("declaration_accepted", "true");
-    formData.append("file", compressedFile);
-
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/upload`, {
-        method: "POST",
+      const fd = new FormData();
+      fd.append("title", title);
+      if (year)       fd.append("year",        year);
+      fd.append("course_id",            courseId);
+      if (semesterId) fd.append("semester_id", semesterId);
+      if (levelId)    fd.append("level_id",    levelId);
+      fd.append("declaration_accepted", "true");
+      fd.append("file",                 compressedFile);
+
+      const res = await fetch(`${apiBase}/api/upload`, {
+        method:  "POST",
         headers: { Authorization: `Bearer ${session.access_token}` },
-        body: formData,
+        body:    fd,
       });
-      if (res.status === 401) { setSubmitting(false); router.push("/auth/login"); return; }
+      if (res.status === 401) { router.push("/auth/login"); return; }
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? "Upload failed.");
       }
       setSuccess(true);
-      setTitle(""); setYear(""); setInstitutionId(""); setDepartmentId("");
-      setLevelId(""); setCourseId(""); setSemesterId("");
-      setFile(null); setCompressedFile(null);
-      setDeclarationChecked(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      resetForm();
       await loadMyUploads(session.access_token);
+
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -352,98 +319,87 @@ export default function UploadPage() {
     }
   }
 
-  const formValid =
-    title.trim() &&
-    courseId &&
-    compressedFile &&
-    !fileError &&
-    !compressing &&
-    declarationChecked &&
-    isValidYear(year, currentYear);
+  function resetForm() {
+    setTitle(""); setYear(""); setInstitutionId(""); setDepartmentId("");
+    setLevelId(""); setCourseId(""); setSemesterId("");
+    setFile(null); setCompressedFile(null);
+    setDeclarationChecked(false);
+    if (fileRef.current) fileRef.current.value = "";
+  }
 
   const savedBytes = file && compressedFile && compressedFile.size < file.size
-    ? file.size - compressedFile.size
-    : 0;
+    ? file.size - compressedFile.size : 0;
 
-  if (fetching) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center" style={{ background: "var(--sp-bg)" }}>
-        <Loader2 className="h-7 w-7 animate-spin text-blue-500" />
-      </div>
-    );
-  }
+  const formValid =
+    title.trim() &&
+    compressedFile && !fileError && !compressing &&
+    declarationChecked &&
+    isValidYear(year, currentYear) &&
+    !!courseId;
+
+  if (fetching) return (
+    <div className="flex min-h-[60vh] items-center justify-center" style={{ background: "var(--sp-bg)" }}>
+      <Loader2 className="h-7 w-7 animate-spin text-blue-500" />
+    </div>
+  );
 
   return (
     <div className="min-h-screen px-4 py-8 sm:px-6 lg:px-10 transition-colors" style={{ background: "var(--sp-bg)" }}>
       <div className="mx-auto max-w-2xl">
 
-        {/* Header */}
         <div className="mb-8">
           <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">Contribute</p>
           <h1 className="text-3xl font-extrabold" style={{ color: "var(--sp-text)" }}>Upload a past question</h1>
           <p className="mt-2 text-sm" style={{ color: "var(--sp-text-3)" }}>
-            Reviewed by our team before students can access it. You earn points when it&apos;s approved.
+            Reviewed by our team before students can access it.
           </p>
         </div>
 
-        {institutions.length === 0 && (
-          <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
-            <p className="text-sm text-amber-300">No institutions are set up yet. Check back once your school has been added.</p>
-          </div>
-        )}
-
-        {/* Form */}
-        <form
-          onSubmit={handleSubmit}
+        <form onSubmit={handleSubmit}
           className="rounded-2xl border p-6 space-y-5 transition-colors"
-          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-        >
+          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+
           {/* Title */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
               Title <span className="text-blue-400">*</span>
             </label>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              maxLength={150}
+            <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={150}
               placeholder="e.g. CSC 301 — First Semester 2023"
               className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-              style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }}
-            />
+              style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }} />
           </div>
 
+          {/* Institution + Department */}
           <div className="grid grid-cols-2 gap-4">
             <SelectField label="Institution" value={institutionId} onChange={setInstitutionId}
               disabled={institutions.length === 0} placeholder="Select institution" options={institutions} />
             <SelectField label="Department" value={departmentId} onChange={setDepartmentId}
-              disabled={!institutionId || loadingDepartments}
-              placeholder={loadingDepartments ? "Loading…" : "Select department"} options={departments} />
+              disabled={!institutionId || loadingDep}
+              placeholder={loadingDep ? "Loading…" : "Select department"} options={departments} />
           </div>
 
+          {/* Level + Course */}
           <div className="grid grid-cols-2 gap-4">
             <SelectField label="Level" value={levelId} onChange={setLevelId}
               disabled={levels.length === 0} placeholder="Select level" options={levels} />
             <SelectField label="Course" value={courseId} onChange={setCourseId}
-              disabled={!departmentId || loadingCourses}
-              placeholder={loadingCourses ? "Loading…" : "Select course"} options={courses} required />
+              disabled={!departmentId || loadingCou}
+              placeholder={loadingCou ? "Loading…" : "Select course"}
+              options={courses} required />
           </div>
 
+          {/* Semester + Year */}
           <div className="grid grid-cols-2 gap-4">
             <SelectField label="Semester" value={semesterId} onChange={setSemesterId}
               placeholder="Not specified" options={semesters} />
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>Year</label>
-              <input
-                value={year}
+              <input value={year}
                 onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder="e.g. 2023"
-                inputMode="numeric"
-                maxLength={4}
+                placeholder="e.g. 2023" inputMode="numeric" maxLength={4}
                 className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }}
-              />
+                style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }} />
               {year && !isValidYear(year, currentYear) && (
                 <p className="text-xs text-red-400">Enter a year between {MIN_YEAR} and {currentYear + 1}.</p>
               )}
@@ -464,58 +420,35 @@ export default function UploadPage() {
                 : file    ? "border-emerald-500/40 bg-emerald-500/5"
                 :           "hover:border-blue-500/40 hover:bg-blue-500/5"
               }`}
-              style={!dragOver && !file ? { borderColor: "var(--sp-border)" } : {}}
-            >
+              style={!dragOver && !file ? { borderColor: "var(--sp-border)" } : {}}>
               {compressing ? (
-                <>
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
-                    <Loader2 className="h-5 w-5 animate-spin text-blue-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Compressing image…</p>
-                    <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>Optimising for faster upload</p>
-                  </div>
+                <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
+                  <Loader2 className="h-5 w-5 animate-spin text-blue-400" /></div>
+                  <div><p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Compressing image…</p></div>
                 </>
               ) : file ? (
-                <>
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10">
-                    <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-                  </div>
+                <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-400" /></div>
                   <div>
                     <p className="text-sm font-semibold text-emerald-400">{compressedFile?.name ?? file.name}</p>
                     <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
-                      {formatBytes(compressedFile?.size ?? file.size)}
-                      {savedBytes > 0 && (
-                        <span className="ml-1.5 text-emerald-400 font-medium">
-                          (saved {formatBytes(savedBytes)})
-                        </span>
-                      )}
+                      {fmtBytes(compressedFile?.size ?? file.size)}
+                      {savedBytes > 0 && <span className="ml-1.5 text-emerald-400 font-medium">(saved {fmtBytes(savedBytes)})</span>}
                       {" · tap to change"}
                     </p>
                   </div>
                 </>
               ) : (
-                <>
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
-                    <CloudUpload className="h-5 w-5 text-blue-400" />
-                  </div>
+                <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
+                  <CloudUpload className="h-5 w-5 text-blue-400" /></div>
                   <div>
-                    <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>
-                      Drop your file here, or tap to browse
-                    </p>
-                    <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>
-                      PDF, JPG, PNG — max 20MB · images auto-compressed
-                    </p>
+                    <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Drop your file here, or tap to browse</p>
+                    <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>PDF, JPG, PNG — max 20MB</p>
                   </div>
                 </>
               )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.jpg,.jpeg,.png"
-                onChange={handleFileChange}
-                className="hidden"
-              />
+              <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png"
+                onChange={handleFileChange} className="hidden" />
             </label>
             {fileError && (
               <p className="flex items-center gap-1.5 text-xs text-red-400">
@@ -524,41 +457,28 @@ export default function UploadPage() {
             )}
           </div>
 
-          {/* ── Upload declaration ── */}
-          <div
-            className="rounded-xl border p-4 space-y-3"
-            style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}
-          >
+          {/* Declaration */}
+          <div className="rounded-xl border p-4 space-y-3"
+            style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}>
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
               Upload declaration
             </p>
-            <label className="flex items-start gap-3 cursor-pointer group">
-              <input
-                type="checkbox"
-                checked={declarationChecked}
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={declarationChecked}
                 onChange={(e) => setDeclarationChecked(e.target.checked)}
-                className="mt-0.5 shrink-0 rounded accent-blue-500"
-              />
+                className="mt-0.5 shrink-0 rounded accent-blue-500" />
               <span className="text-sm leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
-                I confirm that I have the right or permission to upload and share this material. I have not included
-                confidential personal information or unlawfully obtained examination content. I understand that SparkL
-                may review, watermark, remove, or restrict this upload in line with the{" "}
-                <Link
-                  href="/content-guidelines"
-                  target="_blank"
-                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium"
-                >
-                  Content &amp; Upload Guidelines
-                </Link>
-                {" "}and{" "}
-                <Link
-                  href="/terms"
-                  target="_blank"
-                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium"
-                >
+                I confirm I have the right to share this material and have not included confidential
+                or unlawfully obtained content. I understand SparkL may review, watermark, or remove
+                this upload per the{" "}
+                <Link href="/content-guidelines" target="_blank"
+                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium">
+                  Content Guidelines
+                </Link>{" "}and{" "}
+                <Link href="/terms" target="_blank"
+                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium">
                   Terms of Service
-                </Link>
-                .
+                </Link>.
               </span>
             </label>
           </div>
@@ -569,30 +489,20 @@ export default function UploadPage() {
               <p className="text-sm text-red-400">{error}</p>
             </div>
           )}
-
           {success && (
             <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
               <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-              <p className="text-sm text-emerald-400">
-                Uploaded — pending admin review. You&apos;ll be notified when it&apos;s approved.
-              </p>
+              <p className="text-sm text-emerald-400">Uploaded — pending admin review.</p>
             </div>
           )}
 
-          <button
-            type="submit"
-            disabled={!formValid || submitting}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#2563EB] py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
-          >
+          <button type="submit" disabled={!formValid || submitting}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40">
             {submitting
               ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</>
               : <><UploadIcon className="h-4 w-4" /> Submit for review</>
             }
           </button>
-
-          <p className="text-center text-xs" style={{ color: "var(--sp-text-3)" }}>
-            We extract text from your file to make it searchable. Images are compressed automatically before upload.
-          </p>
         </form>
 
         {/* My Uploads */}
@@ -603,10 +513,8 @@ export default function UploadPage() {
           </div>
 
           {myUploads.length === 0 ? (
-            <div
-              className="flex flex-col items-center rounded-2xl border border-dashed px-6 py-12 text-center"
-              style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
-            >
+            <div className="flex flex-col items-center rounded-2xl border border-dashed px-6 py-12 text-center"
+              style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
               <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500/10">
                 <FileText className="h-5 w-5 text-blue-400" />
               </div>
@@ -616,16 +524,12 @@ export default function UploadPage() {
               </p>
             </div>
           ) : (
-            <div
-              className="rounded-2xl border overflow-hidden transition-colors"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-            >
+            <div className="rounded-2xl border overflow-hidden transition-colors"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               {myUploads.map((u, i) => (
-                <div
-                  key={u.id}
+                <div key={u.id}
                   className={`p-4 ${i !== myUploads.length - 1 ? "border-b" : ""}`}
-                  style={i !== myUploads.length - 1 ? { borderColor: "var(--sp-border)" } : {}}
-                >
+                  style={i !== myUploads.length - 1 ? { borderColor: "var(--sp-border)" } : {}}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500/10">
@@ -646,15 +550,10 @@ export default function UploadPage() {
                     </div>
                     <StatusPill status={u.status} />
                   </div>
-
                   {u.status !== "rejected" && (
-                    <ProcessingRow
-                      status={u.processing_status}
-                      retrying={retryingId === u.id}
-                      onRetry={() => handleRetry(u.id)}
-                    />
+                    <ProcessingRow status={u.processing_status}
+                      retrying={retryingId === u.id} onRetry={() => handleRetry(u.id)} />
                   )}
-
                   {u.status === "rejected" && u.rejection_reason && (
                     <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5">
                       <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
@@ -663,13 +562,10 @@ export default function UploadPage() {
                       </p>
                     </div>
                   )}
-
-                  {u.extraction_quality !== null && u.extraction_quality < LOW_QUALITY_THRESHOLD && u.status !== "rejected" && (
+                  {u.extraction_quality !== null && u.extraction_quality < LOW_QUALITY && u.status !== "rejected" && (
                     <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
                       <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-                      <p className="text-xs text-amber-400">
-                        Text extraction was unclear. An admin may request a clearer scan.
-                      </p>
+                      <p className="text-xs text-amber-400">Text extraction was unclear. An admin may request a clearer scan.</p>
                     </div>
                   )}
                 </div>
