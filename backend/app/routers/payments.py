@@ -9,7 +9,6 @@ from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse
 
 from app.auth import get_current_user
 from app.admin_auth import get_current_admin
@@ -19,11 +18,7 @@ from app.services.subscription import get_plan_limits
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
 PAYVESSEL_SECRET_KEY = os.getenv("PAYVESSEL_SECRET_KEY")
-PAYVESSEL_BASE_URL = "https://api.payvessel.com"
-PAYVESSEL_VERIFY_URL = f"{PAYVESSEL_BASE_URL}/api/externals/transactions/verify/{{reference}}"
-INTERNAL_SECRET = os.getenv("INTERNAL_SECRET", "")
-
-SERVICE_FEE_KOBO = 10_000  # ₦100 × 100
+PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/api/externals/transactions/verify/{reference}"
 
 
 # ─── POST /api/payments/initiate ────────────────────────────────────────────
@@ -36,8 +31,6 @@ async def initiate_payment(
     plan_slug = body.get("plan")
     if not plan_slug or plan_slug == "free":
         raise HTTPException(status_code=400, detail="Invalid plan")
-
-    total_amount_naira = body.get("total_amount")
 
     try:
         plan_res = (
@@ -55,268 +48,26 @@ async def initiate_payment(
         raise HTTPException(status_code=404, detail="Plan not found")
 
     plan = plan_res.data
-
-    if total_amount_naira is not None:
-        try:
-            amount_kobo = int(float(total_amount_naira) * 100)
-        except (ValueError, TypeError):
-            amount_kobo = plan["price_kobo"] + SERVICE_FEE_KOBO
-    else:
-        amount_kobo = plan["price_kobo"] + SERVICE_FEE_KOBO
-
     reference = f"SPARKL-{uuid4().hex[:12].upper()}"
 
-    # Get user email for PayVessel
-    try:
-        profile_res = (
-            supabase.table("profiles")
-            .select("email")
-            .eq("id", user_id)
-            .single()
-            .execute()
-        )
-        user_email = profile_res.data.get("email", "")
-    except Exception:
-        user_email = ""
-
-    # Store pending transaction BEFORE calling PayVessel
     supabase.table("payment_transactions").insert({
-        "user_id":     user_id,
-        "plan":        plan_slug,
-        "gateway":     "payvessel",
+        "user_id": user_id,
+        "plan": plan_slug,
+        "gateway": "payvessel",
         "gateway_ref": reference,
-        "amount_kobo": amount_kobo,
-        "currency":    plan["currency"],
-        "status":      "pending",
+        "amount_kobo": plan["price_kobo"],
+        "currency": plan["currency"],
+        "status": "pending",
     }).execute()
 
-    # Call PayVessel initialize — server-side with secret key
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{PAYVESSEL_BASE_URL}/api/transact/initializePayment",
-            headers={
-                "Authorization": f"Bearer {PAYVESSEL_SECRET_KEY}",
-                "Content-Type":  "application/json",
-            },
-            json={
-                "amount":       str(amount_kobo / 100),
-                "currency":     plan["currency"],
-                "email":        user_email,
-                "reference":    reference,
-                "callback_url": f"{os.getenv('APP_URL')}/api/payments/callback",
-                "metadata": {
-                    "plan":      plan_slug,
-                    "user_id":   user_id,
-                    "reference": reference,
-                },
-            },
-        )
-
-    if resp.status_code != 200:
-        # Clean up so user can retry
-        supabase.table("payment_transactions").delete()\
-            .eq("gateway_ref", reference).execute()
-        detail = resp.json().get("message", "PayVessel error")
-        raise HTTPException(status_code=502, detail=detail)
-
-    pv_json = resp.json()
-    authorization_url = (
-        pv_json.get("data", {}).get("authorization_url")
-        or pv_json.get("authorization_url")
-    )
-
-    if not authorization_url:
-        supabase.table("payment_transactions").delete()\
-            .eq("gateway_ref", reference).execute()
-        raise HTTPException(status_code=502, detail="No authorization_url in PayVessel response")
-
     return {
-        "reference":         reference,
-        "authorization_url": authorization_url,
+        "reference": reference,
+        "amount": plan["price_kobo"] / 100,
+        "amount_kobo": plan["price_kobo"],
+        "plan": plan["plan"],
+        "display_name": plan["display_name"],
+        "currency": plan["currency"],
     }
-
-
-# ─── GET /api/payments/callback ─────────────────────────────────────────────
-
-@router.get("/callback")
-async def payment_callback(request: Request):
-    """
-    PayVessel redirects the user's browser here after payment.
-    Verify server-side, activate subscription, redirect to frontend.
-    """
-    reference = (
-        request.query_params.get("reference")
-        or request.query_params.get("trxref")
-    )
-    app_url = os.getenv("APP_URL", "https://sparkl.com.ng")
-
-    if not reference:
-        return RedirectResponse(
-            f"{app_url}/dashboard/subscribe?error=missing_reference",
-            status_code=302,
-        )
-
-    # Already verified? Just redirect success
-    txn_res = (
-        supabase.table("payment_transactions")
-        .select("*")
-        .eq("gateway_ref", reference)
-        .maybe_single()
-        .execute()
-    )
-
-    if not txn_res.data:
-        return RedirectResponse(
-            f"{app_url}/dashboard/subscribe?error=verification_failed",
-            status_code=302,
-        )
-
-    txn = txn_res.data
-
-    if txn["status"] == "success":
-        return RedirectResponse(
-            f"{app_url}/dashboard/subscribe?subscribed=true",
-            status_code=302,
-        )
-
-    # Verify with PayVessel
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            pv_res = await client.get(
-                PAYVESSEL_VERIFY_URL.format(reference=reference),
-                headers={"Authorization": f"Bearer {PAYVESSEL_SECRET_KEY}"},
-            )
-
-        pv_json = pv_res.json()
-        print(f"[Callback] verify status={pv_res.status_code} ref={reference} body={pv_json}")
-
-        if not pv_json.get("requestSuccessful"):
-            return RedirectResponse(
-                f"{app_url}/dashboard/subscribe?error=verification_failed",
-                status_code=302,
-            )
-
-        pv_data = pv_json.get("data", {})
-        pv_status = str(pv_data.get("status", "")).lower()
-
-        if pv_status not in ("success", "successful"):
-            supabase.table("payment_transactions").update({
-                "status":        "failed",
-                "failed_reason": f"PayVessel status: {pv_status}",
-            }).eq("gateway_ref", reference).execute()
-            return RedirectResponse(
-                f"{app_url}/dashboard/subscribe?error=verification_failed",
-                status_code=302,
-            )
-
-        # Amount check
-        pv_amount = pv_data.get("amount")
-        if pv_amount:
-            try:
-                pv_amount_kobo = int(float(pv_amount) * 100)
-                if pv_amount_kobo != txn["amount_kobo"]:
-                    supabase.table("payment_transactions").update({
-                        "status":        "failed",
-                        "failed_reason": (
-                            f"Amount mismatch: got {pv_amount_kobo} kobo, "
-                            f"expected {txn['amount_kobo']}"
-                        ),
-                    }).eq("gateway_ref", reference).execute()
-                    return RedirectResponse(
-                        f"{app_url}/dashboard/subscribe?error=amount_mismatch",
-                        status_code=302,
-                    )
-            except (ValueError, TypeError):
-                pass
-
-        await _activate_subscription(
-            user_id=txn["user_id"],
-            plan_slug=txn["plan"],
-            pv_data=pv_data,
-            reference=reference,
-        )
-
-        return RedirectResponse(
-            f"{app_url}/dashboard/subscribe?subscribed=true",
-            status_code=302,
-        )
-
-    except Exception as e:
-        print(f"[Callback] error ref={reference}: {e}")
-        return RedirectResponse(
-            f"{app_url}/dashboard/subscribe?error=verification_failed",
-            status_code=302,
-        )
-
-
-# ─── POST /api/payments/verify-reference ────────────────────────────────────
-
-@router.post("/verify-reference")
-async def verify_reference(body: dict, request: Request):
-    """Server-to-server endpoint called by Next.js callback route."""
-    if request.headers.get("X-Internal-Key") != INTERNAL_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    reference = body.get("reference")
-    if not reference:
-        raise HTTPException(status_code=400, detail="Reference required")
-
-    txn_res = (
-        supabase.table("payment_transactions")
-        .select("*")
-        .eq("gateway_ref", reference)
-        .maybe_single()
-        .execute()
-    )
-
-    if not txn_res.data:
-        return {"status": "not_found"}
-
-    txn = txn_res.data
-
-    if txn["status"] == "success":
-        return {"status": "already_verified", "expires_at": None}
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        pv_res = await client.get(
-            PAYVESSEL_VERIFY_URL.format(reference=reference),
-            headers={"Authorization": f"Bearer {PAYVESSEL_SECRET_KEY}"},
-        )
-
-    pv_json = pv_res.json()
-    if not pv_json.get("requestSuccessful"):
-        return {"status": "failed", "detail": "PayVessel verify failed"}
-
-    pv_data = pv_json.get("data", {})
-    pv_status = str(pv_data.get("status", "")).lower()
-
-    if pv_status not in ("success", "successful"):
-        supabase.table("payment_transactions").update({
-            "status":        "failed",
-            "failed_reason": f"PayVessel status: {pv_status}",
-        }).eq("gateway_ref", reference).execute()
-        return {"status": "failed", "detail": f"Payment status: {pv_status}"}
-
-    pv_amount = pv_data.get("amount")
-    if pv_amount:
-        try:
-            pv_amount_kobo = int(float(pv_amount) * 100)
-            if pv_amount_kobo != txn["amount_kobo"]:
-                supabase.table("payment_transactions").update({
-                    "status":        "failed",
-                    "failed_reason": f"Amount mismatch: got {pv_amount_kobo}, expected {txn['amount_kobo']}",
-                }).eq("gateway_ref", reference).execute()
-                return {"status": "failed", "detail": "Amount mismatch"}
-        except (ValueError, TypeError):
-            pass
-
-    result = await _activate_subscription(
-        user_id=txn["user_id"],
-        plan_slug=txn["plan"],
-        pv_data=pv_data,
-        reference=reference,
-    )
-    return result
 
 
 # ─── POST /api/payments/webhook ─────────────────────────────────────────────
@@ -329,7 +80,7 @@ async def payvessel_webhook(request: Request):
     if not PAYVESSEL_SECRET_KEY:
         raise HTTPException(status_code=500, detail="Payment secret not configured")
 
-    expected = hmac.HMAC(
+    expected = hmac.new(
         key=PAYVESSEL_SECRET_KEY.encode("utf-8"),
         msg=body,
         digestmod=hashlib.sha512,
@@ -387,7 +138,7 @@ async def payvessel_webhook(request: Request):
             pv_amount_kobo = int(float(pv_amount) * 100)
             if pv_amount_kobo != txn["amount_kobo"]:
                 supabase.table("payment_transactions").update({
-                    "status":        "failed",
+                    "status": "failed",
                     "failed_reason": (
                         f"Webhook amount mismatch: got {pv_amount_kobo} kobo, "
                         f"expected {txn['amount_kobo']}"
@@ -462,11 +213,11 @@ async def verify_payment(
                     PAYVESSEL_VERIFY_URL.format(reference=reference),
                     headers={
                         "Authorization": f"Bearer {PAYVESSEL_SECRET_KEY}",
-                        "Content-Type":  "application/json",
+                        "Content-Type": "application/json",
                     },
                     timeout=15.0,
                 )
-            print(f"[Verify] status={pv_res.status_code} body={pv_res.text}")
+            print(f"[PayVessel direct] status={pv_res.status_code} body={pv_res.text}")
             pv_json = pv_res.json()
 
             if not pv_json.get("requestSuccessful"):
@@ -480,7 +231,7 @@ async def verify_payment(
         except HTTPException:
             raise
         except Exception as e:
-            print(f"[Verify direct error] {str(e)}")
+            print(f"[PayVessel direct error] {str(e)}")
             raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
 
     pv_status = str(pv_data.get("status", "")).lower()
@@ -490,7 +241,7 @@ async def verify_payment(
 
     if pv_status not in ("success", "successful"):
         supabase.table("payment_transactions").update({
-            "status":        "failed",
+            "status": "failed",
             "failed_reason": f"PayVessel status: {pv_status}",
         }).eq("gateway_ref", txn["gateway_ref"]).execute()
         raise HTTPException(status_code=400, detail=f"Payment not successful: {pv_status}")
@@ -500,7 +251,7 @@ async def verify_payment(
             pv_amount_kobo = int(float(pv_amount) * 100)
             if pv_amount_kobo != txn["amount_kobo"]:
                 supabase.table("payment_transactions").update({
-                    "status":        "failed",
+                    "status": "failed",
                     "failed_reason": (
                         f"Amount mismatch: got {pv_amount_kobo} kobo, "
                         f"expected {txn['amount_kobo']} kobo"
@@ -549,13 +300,13 @@ async def admin_grant_subscription(
     reference = f"MANUAL-{uuid4().hex[:12].upper()}"
 
     supabase.table("payment_transactions").insert({
-        "user_id":     target_user_id,
-        "plan":        plan_slug,
-        "gateway":     "manual",
+        "user_id": target_user_id,
+        "plan": plan_slug,
+        "gateway": "manual",
         "gateway_ref": reference,
         "amount_kobo": 0,
-        "currency":    "NGN",
-        "status":      "pending",
+        "currency": "NGN",
+        "status": "pending",
     }).execute()
 
     result = await _activate_subscription(
@@ -584,14 +335,16 @@ async def admin_revoke_subscription(
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    # End any active subscription row
     supabase.table("subscriptions").update({
-        "status":     "cancelled",
+        "status": "cancelled",   # change if your status column uses another value
         "expires_at": now_iso,
         "auto_renew": False,
     }).eq("user_id", target_user_id).eq("status", "active").execute()
 
+    # Drop the profile back to free
     supabase.table("profiles").update({
-        "subscription_plan":  "free",
+        "subscription_plan": "free",
         "subscription_expic": None,
     }).eq("id", target_user_id).execute()
 
@@ -620,6 +373,7 @@ async def _activate_subscription(
     plan = plan_res.data
     now = datetime.now(timezone.utc)
 
+    # Carry over remaining days if user already has an active subscription
     existing_sub_res = (
         supabase.table("subscriptions")
         .select("id, expires_at")
@@ -641,25 +395,25 @@ async def _activate_subscription(
         except Exception:
             base = now
 
-        expires_at  = base + timedelta(days=plan["duration_days"])
+        expires_at = base + timedelta(days=plan["duration_days"])
         expires_iso = expires_at.isoformat()
 
         supabase.table("subscriptions").update({
-            "plan":       plan_slug,
-            "status":     "active",
+            "plan": plan_slug,
+            "status": "active",
             "expires_at": expires_iso,
             "auto_renew": True,
         }).eq("id", existing_sub["id"]).execute()
 
         subscription_id = existing_sub["id"]
     else:
-        expires_at  = now + timedelta(days=plan["duration_days"])
+        expires_at = now + timedelta(days=plan["duration_days"])
         expires_iso = expires_at.isoformat()
 
         sub_res = supabase.table("subscriptions").insert({
-            "user_id":    user_id,
-            "plan":       plan_slug,
-            "status":     "active",
+            "user_id": user_id,
+            "plan": plan_slug,
+            "status": "active",
             "started_at": now.isoformat(),
             "expires_at": expires_iso,
             "auto_renew": True,
@@ -668,24 +422,24 @@ async def _activate_subscription(
         subscription_id = (sub_res.data or [{}])[0].get("id")
 
     supabase.table("payment_transactions").update({
-        "status":          "success",
-        "paid_at":         now.isoformat(),
+        "status": "success",
+        "paid_at": now.isoformat(),
         "subscription_id": subscription_id,
         "gateway_payload": pv_data,
     }).eq("gateway_ref", reference).execute()
 
     profile_update = supabase.table("profiles").update({
-        "subscription_plan":  plan_slug,
+        "subscription_plan": plan_slug,
         "subscription_expic": expires_iso,
     }).eq("id", user_id).execute()
 
     print(f"[Activate] user={user_id} plan={plan_slug} expires={expires_iso} profile={profile_update.data}")
 
     return {
-        "status":       "success",
-        "plan":         plan_slug,
+        "status": "success",
+        "plan": plan_slug,
         "display_name": plan["display_name"],
-        "expires_at":   expires_iso,
+        "expires_at": expires_iso,
     }
 
 
@@ -704,8 +458,8 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
     except Exception:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    data       = profile_res.data or {}
-    plan       = data.get("subscription_plan") or "free"
+    data = profile_res.data or {}
+    plan = data.get("subscription_plan") or "free"
     expires_at = data.get("subscription_expic")
     created_at = data.get("created_at")
 
@@ -718,7 +472,7 @@ async def get_subscription_status(user_id: str = Depends(get_current_user)):
 
     return {
         **limits,
-        "plan":           effective_plan,
+        "plan": effective_plan,
         "effective_plan": effective_plan,
-        "expires_at":     expires_at,
+        "expires_at": expires_at,
     }
