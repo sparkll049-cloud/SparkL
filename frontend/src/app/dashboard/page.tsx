@@ -230,32 +230,32 @@ function PageSkeleton() {
     <div className="min-h-screen" style={{ background: "var(--sp-bg)" }}>
       <div className="h-16 border-b" style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
         <div className="mx-auto flex h-full max-w-7xl items-center justify-between px-6">
-          <Bone className="h-7 w-24" />
-          <Bone className="h-9 w-56 rounded-full" />
-          <Bone className="h-9 w-9 rounded-full" />
+          <Bone className="h-7 w-24"/>
+          <Bone className="h-9 w-56 rounded-full"/>
+          <Bone className="h-9 w-9 rounded-full"/>
         </div>
       </div>
       <div className="mx-auto max-w-7xl px-4 py-8 lg:px-6">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
           <div className="space-y-4">
-            <Bone className="h-48 rounded-2xl" />
-            <Bone className="h-32 rounded-2xl" />
-            <Bone className="h-40 rounded-2xl" />
+            <Bone className="h-48 rounded-2xl"/>
+            <Bone className="h-32 rounded-2xl"/>
+            <Bone className="h-40 rounded-2xl"/>
           </div>
           <div className="space-y-6 lg:col-span-2">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {[...Array(4)].map((_, i) => <Bone key={i} className="h-24 rounded-2xl" />)}
+              {[...Array(4)].map((_, i) => <Bone className="h-24 rounded-2xl" key="{i}"/>)}
             </div>
-            <Bone className="h-10 rounded-full" />
+            <Bone className="h-10 rounded-full"/>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {[...Array(6)].map((_, i) => <Bone key={i} className="h-40 rounded-2xl" />)}
+              {[...Array(6)].map((_, i) => <Bone className="h-40 rounded-2xl" key="{i}"/>)}
             </div>
-            <Bone className="h-48 rounded-2xl" />
+            <Bone className="h-48 rounded-2xl"/>
           </div>
           <div className="space-y-4">
-            <Bone className="h-52 rounded-2xl" />
-            <Bone className="h-36 rounded-2xl" />
-            <Bone className="h-28 rounded-2xl" />
+            <Bone className="h-52 rounded-2xl"/>
+            <Bone className="h-36 rounded-2xl"/>
+            <Bone className="h-28 rounded-2xl"/>
           </div>
         </div>
       </div>
@@ -279,7 +279,7 @@ function StreakRing({ streak = 0, size = 80 }: { streak: number; size?: number }
           style={{ transition: "stroke-dasharray 1.2s cubic-bezier(0.34,1.56,0.64,1)" }} />
       </svg>
       <div className="absolute flex flex-col items-center">
-        <Flame className="h-4 w-4" style={{ color }} />
+        <Flame className="h-4 w-4" color style="{{" }}/>
         <span className="text-sm font-black" style={{ color: "var(--sp-text)" }}>{streak}</span>
       </div>
     </div>
@@ -298,7 +298,7 @@ function LevelBadge({ xp = 0 }: { xp: number }) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500 text-white shadow-lg shadow-indigo-500/30">
-            <Zap className="h-3.5 w-3.5" fill="white" />
+            <Zap className="h-3.5 w-3.5" fill="white"/>
           </div>
           <div>
             <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>Level {level} · {name}</p>
@@ -321,21 +321,16 @@ function LevelBadge({ xp = 0 }: { xp: number }) {
 
 function TierPill({ tier }: { tier: Tier }) {
   return (
-    <Link
-      href="/dashboard/subscribe"
-      title="View or manage your plan"
-      className="flex shrink-0 items-center gap-2 rounded-xl border px-2 py-1.5 transition-all hover:-translate-y-0.5 hover:shadow-md sm:px-2.5"
-      style={{ background: `${tier.color}12`, borderColor: `${tier.color}38` }}
-    >
+    <Link `${tier.color}12`, `${tier.color}38` background: borderColor: className="flex shrink-0 items-center gap-2 rounded-xl border px-2 py-1.5 transition-all hover:-translate-y-0.5 hover:shadow-md sm:px-2.5" href="/dashboard/subscribe" style="{{" title="View or manage your plan" }}>
       <span
         className="flex h-6 w-6 items-center justify-center rounded-lg text-white"
         style={{ background: tier.color }}
       >
         {tier.isPaid
-          ? <Crown className="h-3 w-3" fill="currentColor" />
+          ? <Crown className="h-3 w-3" fill="currentColor"/>
           : tier.isTrial
-          ? <Timer className="h-3 w-3" />
-          : <Sparkles className="h-3 w-3" />}
+          ? <Timer className="h-3 w-3"/>
+          : <Sparkles className="h-3 w-3"/>}
       </span>
       <span className="hidden leading-tight sm:block">
         <span className="block text-[11px] font-black" style={{ color: tier.color }}>{tier.label}</span>
@@ -363,7 +358,7 @@ function StatCard({ icon, label, value, accent, delta }: {
         </div>
         {delta && (
           <span className="flex items-center gap-0.5 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-500">
-            <ChevronUp className="h-2.5 w-2.5" />{delta}
+            <ChevronUp className="h-2.5 w-2.5"/>{delta}
           </span>
         )}
       </div>
@@ -377,18 +372,14 @@ function StatCard({ icon, label, value, accent, delta }: {
 
 function PlanTile({ tier }: { tier: Tier }) {
   return (
-    <Link
-      href="/dashboard/subscribe"
-      className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
-      style={{ background: "var(--sp-bg-card)", borderColor: `${tier.color}45` }}
-    >
+    <Link "var(--sp-bg-card)", `${tier.color}45` background: borderColor: className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg" href="/dashboard/subscribe" style="{{" }}>
       <div className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-25 blur-xl transition-opacity group-hover:opacity-50"
         style={{ background: tier.color }} />
       <div className="mb-3 flex items-center justify-between">
         <div className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ background: `${tier.color}20` }}>
-          <Crown className="h-4 w-4" style={{ color: tier.color }} />
+          <Crown className="h-4 w-4" color: style="{{" tier.color }}/>
         </div>
-        <ChevronRight className="h-3.5 w-3.5 opacity-40 transition-opacity group-hover:opacity-90" style={{ color: tier.color }} />
+        <ChevronRight className="h-3.5 w-3.5 opacity-40 transition-opacity group-hover:opacity-90" color: style="{{" tier.color }}/>
       </div>
       <p className="truncate text-xl font-black leading-tight" style={{ color: tier.color }}>{tier.label}</p>
       <p className="mt-0.5 truncate text-[11px] font-medium" style={{ color: "var(--sp-text-3)" }}>{tier.detail}</p>
@@ -403,11 +394,7 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
   const { code, title } = splitCourseName(course.name);
   const initials = courseInitials(course.name);
   return (
-    <Link
-      href={`/dashboard/courses/${course.id}`}
-      className="group flex w-[152px] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border transition-all duration-200 hover:-translate-y-1 hover:shadow-xl sm:w-auto"
-      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-    >
+    <Link "var(--sp-bg-card)", "var(--sp-border)" background: borderColor: className="group flex w-[152px] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border transition-all duration-200 hover:-translate-y-1 hover:shadow-xl sm:w-auto" href="{`/dashboard/courses/${course.id}`}" style="{{" }}>
       {/* Thumbnail */}
       <div
         className="relative h-24 overflow-hidden"
@@ -447,7 +434,7 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
           style={{ color: p.accent }}
         >
           Study now
-          <ArrowRight className="h-2.5 w-2.5 transition-transform group-hover:translate-x-0.5" />
+          <ArrowRight className="h-2.5 w-2.5 transition-transform group-hover:translate-x-0.5"/>
         </div>
       </div>
     </Link>
@@ -460,17 +447,13 @@ function ActivityItem({ q, index }: { q: RecentQuestion; index: number }) {
   const p = COURSE_PALETTE[index % COURSE_PALETTE.length];
   const courseCode = q.course?.name ? splitCourseName(q.course.name).code : null;
   return (
-    <Link
-      href={`/questions/${q.id}`}
-      className="group block rounded-xl border p-3 transition-all hover:border-indigo-500/30 hover:shadow-md"
-      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-    >
+    <Link "var(--sp-bg-card)", "var(--sp-border)" background: borderColor: className="group block rounded-xl border p-3 transition-all hover:border-indigo-500/30 hover:shadow-md" href="{`/questions/${q.id}`}" style="{{" }}>
       <div className="flex items-start gap-3">
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white"
           style={{ background: p.accent, boxShadow: `0 3px 10px ${p.accent}35` }}
         >
-          <FileText className="h-4 w-4" />
+          <FileText className="h-4 w-4"/>
         </div>
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex items-center gap-1.5">
@@ -491,7 +474,7 @@ function ActivityItem({ q, index }: { q: RecentQuestion; index: number }) {
             </span>
             {q.views != null && (
               <span className="flex shrink-0 items-center gap-1">
-                <Users className="h-2.5 w-2.5" />{q.views} views
+                <Users className="h-2.5 w-2.5"/>{q.views} views
               </span>
             )}
           </div>
@@ -514,7 +497,7 @@ function UpgradeCard({ tier }: { tier: Tier }) {
       <div className="relative">
         <div className="mb-3 flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/20 backdrop-blur">
-            <Crown className="h-4 w-4 text-yellow-300" fill="currentColor" />
+            <Crown className="h-4 w-4 text-yellow-300" fill="currentColor"/>
           </div>
           <div>
             <p className="text-xs font-black">{tier.isTrial ? "Keep your full access" : "Upgrade SparkL"}</p>
@@ -528,11 +511,11 @@ function UpgradeCard({ tier }: { tier: Tier }) {
         </p>
         <div className="mt-3 space-y-2">
           {[
-            { icon: <BookOpen className="h-3 w-3" />,     text: "All courses unlocked" },
-            { icon: <BarChart2 className="h-3 w-3" />,    text: "Unlimited read & practice mode" },
-            { icon: <Sparkles className="h-3 w-3" />,     text: "AI Cram study assistant" },
-            { icon: <CheckCircle2 className="h-3 w-3" />, text: "Unlimited note uploads (Pro)" },
-            { icon: <Award className="h-3 w-3" />,        text: "YouTube & link study (Premium)" },
+            { icon: <BookOpen className="h-3 w-3"/>,     text: "All courses unlocked" },
+            { icon: <BarChart2 className="h-3 w-3"/>,    text: "Unlimited read & practice mode" },
+            { icon: <Sparkles className="h-3 w-3"/>,     text: "AI Cram study assistant" },
+            { icon: <CheckCircle2 className="h-3 w-3"/>, text: "Unlimited note uploads (Pro)" },
+            { icon: <Award className="h-3 w-3"/>,        text: "YouTube & link study (Premium)" },
           ].map(f => (
             <div key={f.text} className="flex items-center gap-2">
               <span className="text-yellow-300">{f.icon}</span>
@@ -540,11 +523,8 @@ function UpgradeCard({ tier }: { tier: Tier }) {
             </div>
           ))}
         </div>
-        <Link
-          href="/dashboard/subscribe"
-          className="mt-4 flex items-center justify-center gap-1.5 rounded-xl bg-white py-2.5 text-[11px] font-black text-indigo-700 transition hover:bg-yellow-50"
-        >
-          <Crown className="h-3 w-3 text-yellow-500" fill="currentColor" />
+        <Link className="mt-4 flex items-center justify-center gap-1.5 rounded-xl bg-white py-2.5 text-[11px] font-black text-indigo-700 transition hover:bg-yellow-50" href="/dashboard/subscribe">
+          <Crown className="h-3 w-3 text-yellow-500" fill="currentColor"/>
           See plans — from ₦2,000/semester
         </Link>
       </div>
@@ -568,7 +548,7 @@ function TierCard({ tier }: { tier: Tier }) {
             className="flex h-10 w-10 items-center justify-center rounded-xl shadow-lg"
             style={{ background: tier.color, boxShadow: `0 6px 16px ${tier.color}45` }}
           >
-            <Crown className="h-5 w-5 text-yellow-300" fill="currentColor" />
+            <Crown className="h-5 w-5 text-yellow-300" fill="currentColor"/>
           </div>
           <div className="min-w-0">
             <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>SparkL {tier.label}</p>
@@ -584,12 +564,8 @@ function TierCard({ tier }: { tier: Tier }) {
           </div>
         )}
 
-        <Link
-          href="/dashboard/subscribe"
-          className="flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:-translate-y-0.5"
-          style={{ borderColor: `${tier.color}45`, color: tier.color, background: `${tier.color}0F` }}
-        >
-          {tier.expiringSoon ? "Renew plan" : "Manage plan"} <ChevronRight className="h-3 w-3" />
+        <Link `${tier.color}0F` `${tier.color}45`, background: borderColor: className="flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:-translate-y-0.5" color: href="/dashboard/subscribe" style="{{" tier.color, }}>
+          {tier.expiringSoon ? "Renew plan" : "Manage plan"} <ChevronRight className="h-3 w-3"/>
         </Link>
       </div>
     </div>
@@ -604,25 +580,18 @@ function TodayFocus({ courses }: { courses: Course[] }) {
   if (!c) return null;
   const p = COURSE_PALETTE[idx % COURSE_PALETTE.length];
   return (
-    <Link
-      href={`/dashboard/courses/${c.id}`}
-      className="group flex items-center gap-4 rounded-full border px-4 py-3 transition-all hover:shadow-md"
-      style={{ background: `${p.accent}10`, borderColor: `${p.accent}30` }}
-    >
+    <Link `${p.accent}10`, `${p.accent}30` background: borderColor: className="group flex items-center gap-4 rounded-full border px-4 py-3 transition-all hover:shadow-md" href="{`/dashboard/courses/${c.id}`}" style="{{" }}>
       <div
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white text-xs font-black"
         style={{ background: p.accent }}
       >
-        <Target className="h-3.5 w-3.5" />
+        <Target className="h-3.5 w-3.5"/>
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: p.accent }}>Today&apos;s focus</p>
         <p className="truncate text-xs font-bold" style={{ color: "var(--sp-text)" }}>{c.name}</p>
       </div>
-      <ArrowRight
-        className="h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-        style={{ color: p.accent }}
-      />
+      <ArrowRight className="h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" color: p.accent style="{{" }}/>
     </Link>
   );
 }
@@ -633,11 +602,7 @@ function QuickAction({ href, icon, label, sub, color }: {
   href: string; icon: React.ReactNode; label: string; sub: string; color: string;
 }) {
   return (
-    <Link
-      href={href}
-      className="group flex items-center gap-3 rounded-xl border p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-lg"
-      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-    >
+    <Link "var(--sp-bg-card)", "var(--sp-border)" background: borderColor: className="group flex items-center gap-3 rounded-xl border p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-lg" href="{href}" style="{{" }}>
       <div
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white transition-transform group-hover:scale-110"
         style={{ background: color, boxShadow: `0 4px 12px ${color}40` }}
@@ -648,10 +613,7 @@ function QuickAction({ href, icon, label, sub, color }: {
         <p className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>{label}</p>
         <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>{sub}</p>
       </div>
-      <ChevronRight
-        className="h-3.5 w-3.5 shrink-0 opacity-30 group-hover:opacity-70 transition-opacity"
-        style={{ color }}
-      />
+      <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-30 group-hover:opacity-70 transition-opacity" color style="{{" }}/>
     </Link>
   );
 }
@@ -672,11 +634,8 @@ function EmptyState({ icon, title, body, cta }: {
       </div>
       <p className="text-sm font-bold" style={{ color: "var(--sp-text-2)" }}>{title}</p>
       <p className="mt-1.5 max-w-[200px] text-xs leading-relaxed" style={{ color: "var(--sp-text-3)" }}>{body}</p>
-      <Link
-        href={cta.href}
-        className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5"
-      >
-        {cta.label} <ArrowRight className="h-3.5 w-3.5" />
+      <Link className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5" href="{cta.href}">
+        {cta.label} <ArrowRight className="h-3.5 w-3.5"/>
       </Link>
     </div>
   );
@@ -696,7 +655,7 @@ function StreakSection({ streak }: { streak: number }) {
         <span className="text-[10px] font-bold text-indigo-500">Goal: 7 days</span>
       </div>
       <div className="flex items-center gap-4">
-        <StreakRing streak={streak} size={72} />
+        <StreakRing size="{72}" streak="{streak}"/>
         <div className="flex-1 space-y-2">
           <div className="flex gap-1">
             {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => {
@@ -744,7 +703,7 @@ export default function DashboardHomePage() {
 
   const [query, setQuery]                 = useState("");
   const [avatarUrl, setAvatarUrl]         = useState<string | null>(null);
-  const [sub, setSub]                     = useState<SubStatus | null>(null);
+  const [sub, setSub]                     = useState<SubStatus null |>(null);
   const [searchFocused, setSearchFocused] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
@@ -809,13 +768,13 @@ export default function DashboardHomePage() {
   const xp              = data?.profile.xp ?? 0;
   const { results: searchResults, searching: searchLoading } = useLocalCourseSearch(query, courses);
 
-  if (isLoading) return <PageSkeleton />;
+  if (isLoading) return <PageSkeleton/>;
 
   if (error || !data) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-center" style={{ background: "var(--sp-bg)" }}>
         <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/10">
-          <AlertCircle className="h-6 w-6 text-red-500" />
+          <AlertCircle className="h-6 w-6 text-red-500"/>
         </div>
         <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>
           {error instanceof Error ? error.message : "Something went wrong."}
@@ -859,17 +818,14 @@ export default function DashboardHomePage() {
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 lg:gap-4 lg:px-6">
 
           {/* Logo */}
-          <Link href="/dashboard" className="flex shrink-0 items-center gap-2.5 mr-1">
-            <Image src="/images/logo.jpg" alt="SparkL" width={32} height={32} className="rounded-xl object-cover shadow-md" />
+          <Link className="flex shrink-0 items-center gap-2.5 mr-1" href="/dashboard">
+            <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height="{32}" src="/images/logo.jpg" width="{32}"/>
             <span className="hidden text-base font-black tracking-tight sm:block" style={{ color: "var(--sp-text)" }}>SparkL</span>
           </Link>
 
           {/* Search */}
           <div className="relative min-w-0 flex-1 max-w-md mx-auto" ref={searchRef}>
-            <Search
-              className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 transition-colors"
-              style={{ color: searchFocused ? "#6366F1" : "var(--sp-text-3)" }}
-            />
+            <Search "#6366F1" "var(--sp-text-3)" : ? className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 transition-colors" color: searchFocused style="{{" }}/>
             <input
               value={query}
               onChange={e => setQuery(e.target.value)}
@@ -897,7 +853,7 @@ export default function DashboardHomePage() {
                   </div>
                 ) : searchResults.length === 0 ? (
                   <div className="flex flex-col items-center py-8 gap-2">
-                    <Search className="h-5 w-5 opacity-30" style={{ color: "var(--sp-text-3)" }} />
+                    <Search "var(--sp-text-3)" className="h-5 w-5 opacity-30" color: style="{{" }}/>
                     <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>
                       No courses match &ldquo;{query}&rdquo;
                     </p>
@@ -915,11 +871,7 @@ export default function DashboardHomePage() {
                       const initials = courseInitials(c.name);
 
                       return (
-                        <Link
-                          key={c.id}
-                          href={`/dashboard/courses/${c.id}`}
-                          className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-500/5"
-                          onClick={() => { setQuery(""); setSearchFocused(false); }}
+                        <Link className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-500/5" href="{`/dashboard/courses/${c.id}`}" key="{c.id}" onClick="{()"> { setQuery(""); setSearchFocused(false); }}
                         >
                           <div
                             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-black text-white"
@@ -930,7 +882,7 @@ export default function DashboardHomePage() {
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{c.name}</p>
                           </div>
-                          <ArrowRight className="ml-auto h-3 w-3 shrink-0" style={{ color: p.accent }} />
+                          <ArrowRight className="ml-auto h-3 w-3 shrink-0" color: p.accent style="{{" }}/>
                         </Link>
                       );
                     })}
@@ -942,12 +894,12 @@ export default function DashboardHomePage() {
 
           {/* Right actions */}
           <div className="flex items-center gap-2">
-            <TierPill tier={tier} />
+            <TierPill tier="{tier}"/>
             <button
               className="relative hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 sm:flex"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
             >
-              <Bell className="h-4 w-4" style={{ color: "var(--sp-text-2)" }} />
+              <Bell "var(--sp-text-2)" className="h-4 w-4" color: style="{{" }}/>
               <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-indigo-500" />
             </button>
             <Link href="/dashboard/profile">
@@ -1018,29 +970,25 @@ export default function DashboardHomePage() {
                   </div>
                 )}
 
-                <LevelBadge xp={xp} />
+                <LevelBadge xp="{xp}"/>
 
-                <Link
-                  href="/dashboard/profile"
-                  className="mt-4 flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:border-indigo-500/40 hover:bg-indigo-500/5 hover:text-indigo-500"
-                  style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
-                >
-                  Edit profile <ChevronRight className="h-3 w-3" />
+                <Link "var(--sp-border)", "var(--sp-text-3)" borderColor: className="mt-4 flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:border-indigo-500/40 hover:bg-indigo-500/5 hover:text-indigo-500" color: href="/dashboard/profile" style="{{" }}>
+                  Edit profile <ChevronRight className="h-3 w-3"/>
                 </Link>
               </div>
             </div>
 
             {/* Streak card */}
-            <StreakSection streak={streak} />
+            <StreakSection streak="{streak}"/>
 
             {/* Quick actions */}
             <div className="space-y-2">
               <p className="px-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
                 Quick actions
               </p>
-              <QuickAction href="/dashboard/upload"  label="Upload paper"   sub="Earn 50 XP per upload"  icon={<Upload className="h-4 w-4" />}       color="#6366F1" />
-              <QuickAction href="/dashboard/courses" label="Browse courses" sub="Find past questions"     icon={<BookOpen className="h-4 w-4" />}      color="#0EA5E9" />
-              <QuickAction href="/dashboard/profile" label="My profile"     sub="Account & settings"      icon={<GraduationCap className="h-4 w-4" />} color="#8B5CF6" />
+              <QuickAction className="h-4 w-4" href="/dashboard/upload" icon="{<Upload" label="Upload paper" sub="Earn 50 XP per upload"/>}       color="#6366F1" />
+              <QuickAction className="h-4 w-4" href="/dashboard/courses" icon="{<BookOpen" label="Browse courses" sub="Find past questions"/>}      color="#0EA5E9" />
+              <QuickAction className="h-4 w-4" href="/dashboard/profile" icon="{<GraduationCap" label="My profile" sub="Account & settings"/>} color="#8B5CF6" />
             </div>
           </aside>
 
@@ -1059,7 +1007,7 @@ export default function DashboardHomePage() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
-                    <Calendar className="h-3.5 w-3.5" style={{ color: "var(--sp-text-3)" }} />
+                    <Calendar "var(--sp-text-3)" className="h-3.5 w-3.5" color: style="{{" }}/>
                     <span className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>{today}</span>
                   </div>
                   <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>{greeting},</p>
@@ -1073,11 +1021,8 @@ export default function DashboardHomePage() {
                   )}
                 </div>
                 {!tier.isPaid && (
-                  <Link
-                    href="/dashboard/subscribe"
-                    className="shrink-0 flex items-center gap-1.5 rounded-full bg-indigo-600 px-3.5 py-2 text-[11px] font-black text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5"
-                  >
-                    <Crown className="h-3 w-3 text-yellow-300" fill="currentColor" />
+                  <Link className="shrink-0 flex items-center gap-1.5 rounded-full bg-indigo-600 px-3.5 py-2 text-[11px] font-black text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5" href="/dashboard/subscribe">
+                    <Crown className="h-3 w-3 text-yellow-300" fill="currentColor"/>
                     Upgrade
                   </Link>
                 )}
@@ -1086,16 +1031,20 @@ export default function DashboardHomePage() {
 
             {/* Stats (4 tiles — the last one is the clickable plan tile) */}
             <div className="anim-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <StatCard icon={<BookOpen className="h-4 w-4" />} label="My courses"  value={courses.length}             accent="#6366F1" />
-              <StatCard icon={<FileText className="h-4 w-4" />} label="Past papers" value={stats.questions_in_courses} accent="#8B5CF6" />
-              <StatCard icon={<Trophy className="h-4 w-4" />}   label="Uploads"     value={stats.my_uploads}           accent="#10B981"
-                delta={stats.my_uploads > 0 ? `${stats.my_uploads}` : undefined} />
-              <PlanTile tier={tier} />
+              <StatCard className="h-4 w-4" icon="{<BookOpen"/>} label="My courses"  value={courses.length}             accent="#6366F1" />
+              <StatCard className="h-4 w-4" icon="{<FileText"/>} label="Past papers" value={stats.questions_in_courses} accent="#8B5CF6" />
+              <StatCard className="h-4 w-4" icon="{<Trophy"/>}   
+                label="Uploads"     
+                value={stats.my_uploads}           
+                accent="#10B981"
+                delta={stats.my_uploads > 0 ? `${stats.my_uploads}` : undefined} 
+              />
+              <PlanTile tier="{tier}"/>
             </div>
 
             {/* Today's focus */}
             {courses.length > 0 && (
-              <div className="anim-3"><TodayFocus courses={courses} /></div>
+              <div className="anim-3"><TodayFocus courses="{courses}"/></div>
             )}
 
             {/* Courses */}
@@ -1107,31 +1056,22 @@ export default function DashboardHomePage() {
                     {courses.length} enrolled this semester
                   </p>
                 </div>
-                <Link
-                  href="/onboarding"
-                  className="flex items-center gap-1 rounded-full border px-3 py-1.5 text-[10px] font-bold transition-all hover:border-indigo-500/40 hover:text-indigo-500"
-                  style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
-                >
-                  <Plus className="h-3 w-3" /> Manage
+                <Link "var(--sp-border)", "var(--sp-text-3)" borderColor: className="flex items-center gap-1 rounded-full border px-3 py-1.5 text-[10px] font-bold transition-all hover:border-indigo-500/40 hover:text-indigo-500" color: href="/onboarding" style="{{" }}>
+                  <Plus className="h-3 w-3"/> Manage
                 </Link>
               </div>
 
               {courses.length === 0 ? (
-                <EmptyState
-                  icon={<BookOpen className="h-6 w-6" />}
+                <EmptyState className="h-6 w-6" icon="{<BookOpen"/>}
                   title="No courses enrolled yet"
                   body="Enrol in your courses to unlock all past questions for your semester."
                   cta={{ href: "/onboarding", label: "Choose courses" }}
                 />
               ) : (
                 <div className="no-scrollbar -mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0">
-                  {courses.map((c, i) => <CourseCard key={c.id} course={c} index={i} />)}
-                  <Link
-                    href="/onboarding"
-                    className="flex min-h-[170px] w-[152px] shrink-0 snap-start flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-4 transition-all hover:border-indigo-500/40 hover:bg-indigo-500/[0.03] sm:w-auto"
-                    style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
-                  >
-                    <Plus className="h-5 w-5" />
+                  {courses.map((c, i) => <CourseCard course="{c}" index="{i}" key="{c.id}"/>)}
+                  <Link "var(--sp-border)", "var(--sp-text-3)" borderColor: className="flex min-h-[170px] w-[152px] shrink-0 snap-start flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-4 transition-all hover:border-indigo-500/40 hover:bg-indigo-500/[0.03] sm:w-auto" color: href="/onboarding" style="{{" }}>
+                    <Plus className="h-5 w-5"/>
                     <span className="text-[10px] font-bold">Add course</span>
                   </Link>
                 </div>
@@ -1140,13 +1080,9 @@ export default function DashboardHomePage() {
 
             {/* Simulate the real exam */}
             {courses.length > 0 && (
-              <Link
-                href="/dashboard/courses"
-                className="anim-4 group flex items-center gap-4 rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
-                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-              >
+              <Link "var(--sp-bg-card)", "var(--sp-border)" background: borderColor: className="anim-4 group flex items-center gap-4 rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg" href="/dashboard/courses" style="{{" }}>
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/30">
-                  <Timer className="h-5 w-5" />
+                  <Timer className="h-5 w-5"/>
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-black" style={{ color: "var(--sp-text)" }}>Simulate the real exam</p>
@@ -1154,7 +1090,7 @@ export default function DashboardHomePage() {
                     Pick a course and practise past questions like the real thing.
                   </p>
                 </div>
-                <ArrowRight className="h-4 w-4 shrink-0 text-indigo-500 opacity-60 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" />
+                <ArrowRight className="h-4 w-4 shrink-0 text-indigo-500 opacity-60 transition-all group-hover:translate-x-0.5 group-hover:opacity-100"/>
               </Link>
             )}
 
@@ -1163,22 +1099,21 @@ export default function DashboardHomePage() {
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-sm font-black" style={{ color: "var(--sp-text)" }}>Recent uploads</h2>
                 {recentQuestions.length > 0 && (
-                  <Link href="/dashboard/courses" className="text-[11px] font-bold text-indigo-500 hover:underline">
+                  <Link className="text-[11px] font-bold text-indigo-500 hover:underline" href="/dashboard/courses">
                     See all
                   </Link>
                 )}
               </div>
 
               {recentQuestions.length === 0 ? (
-                <EmptyState
-                  icon={<FileText className="h-6 w-6" />}
+                <EmptyState className="h-6 w-6" icon="{<FileText"/>}
                   title="No papers yet"
                   body={`Be the first to upload for ${data.profile.department?.name ?? "your department"}.`}
                   cta={{ href: "/dashboard/upload", label: "Upload a paper" }}
                 />
               ) : (
                 <div className="space-y-2">
-                  {recentQuestions.map((q, i) => <ActivityItem key={q.id} q={q} index={i} />)}
+                  {recentQuestions.map((q, i) => <ActivityItem index="{i}" key="{q.id}" q="{q}"/>)}
                 </div>
               )}
             </section>
@@ -1186,7 +1121,7 @@ export default function DashboardHomePage() {
 
           {/* ── RIGHT RAIL ── */}
           <aside className="space-y-4 anim-6">
-            {tier.isPaid ? <TierCard tier={tier} /> : <UpgradeCard tier={tier} />}
+            {tier.isPaid ? <TierCard tier="{tier}"/> : <UpgradeCard tier="{tier}"/>}
 
             {stats.my_uploads === 0 && (
               <div
@@ -1195,25 +1130,22 @@ export default function DashboardHomePage() {
               >
                 <div className="mb-2 flex items-center gap-2">
                   <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/20">
-                    <Flame className="h-3.5 w-3.5 text-amber-500" />
+                    <Flame className="h-3.5 w-3.5 text-amber-500"/>
                   </div>
                   <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>Start contributing</p>
                 </div>
                 <p className="text-[11px] leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
                   Upload your first past question and earn 50 XP instantly. Help your department grow.
                 </p>
-                <Link
-                  href="/dashboard/upload"
-                  className="mt-3 flex items-center justify-center gap-1.5 rounded-xl bg-amber-500 py-2.5 text-[11px] font-black text-white hover:bg-amber-400 transition-all"
-                >
-                  <Upload className="h-3 w-3" /> Upload now
+                <Link className="mt-3 flex items-center justify-center gap-1.5 rounded-xl bg-amber-500 py-2.5 text-[11px] font-black text-white hover:bg-amber-400 transition-all" href="/dashboard/upload">
+                  <Upload className="h-3 w-3"/> Upload now
                 </Link>
               </div>
             )}
 
             <div className="rounded-2xl border p-4" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               <div className="mb-2 flex items-center gap-2">
-                <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+                <Sparkles className="h-3.5 w-3.5 text-violet-500"/>
                 <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>Study tip</p>
               </div>
               <p className="text-[11px] leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
