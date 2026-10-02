@@ -204,7 +204,6 @@ function courseInitials(name: string): string {
   return letters || name.slice(0, 2).toUpperCase();
 }
 
-// "CSC 201 - Intro to Programming" → { code: "CSC 201", title: "Intro to Programming" }
 function splitCourseName(name: string): { code: string | null; title: string } {
   const m = name.match(/^\s*([A-Za-z]{2,5})\s?-?\s?(\d{2,4}[A-Za-z]?)\s*[-:–—]?\s*(.*)$/);
   if (!m) return { code: null, title: name };
@@ -244,11 +243,11 @@ function PageSkeleton() {
           </div>
           <div className="space-y-6 lg:col-span-2">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {[...Array(4)].map((_, i) => <Bone className="h-24 rounded-2xl" key="{i}"/>)}
+              {[...Array(4)].map((_, i) => <Bone key={i} className="h-24 rounded-2xl" />)}
             </div>
             <Bone className="h-10 rounded-full"/>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {[...Array(6)].map((_, i) => <Bone className="h-40 rounded-2xl" key="{i}"/>)}
+              {[...Array(6)].map((_, i) => <Bone key={i} className="h-40 rounded-2xl" />)}
             </div>
             <Bone className="h-48 rounded-2xl"/>
           </div>
@@ -270,16 +269,25 @@ function StreakRing({ streak = 0, size = 80 }: { streak: number; size?: number }
   const circ  = 2 * Math.PI * r;
   const fill  = Math.min(streak / 7, 1) * circ;
   const color = streak >= 7 ? "#F59E0B" : streak >= 3 ? "#6366F1" : "#94A3B8";
+
   return (
     <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--sp-ring-track)" strokeWidth="5" />
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth="5"
-          strokeDasharray={`${fill} ${circ}`} strokeLinecap="round"
-          style={{ transition: "stroke-dasharray 1.2s cubic-bezier(0.34,1.56,0.64,1)" }} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth="5"
+          strokeDasharray={`${fill} ${circ}`}
+          strokeLinecap="round"
+          style={{ transition: "stroke-dasharray 1.2s cubic-bezier(0.34,1.56,0.64,1)" }}
+        />
       </svg>
       <div className="absolute flex flex-col items-center">
-        <Flame className="h-4 w-4" color style="{{" }}/>
+        <Flame className="h-4 w-4" style={{ color }} />
         <span className="text-sm font-black" style={{ color: "var(--sp-text)" }}>{streak}</span>
       </div>
     </div>
@@ -293,6 +301,7 @@ function LevelBadge({ xp = 0 }: { xp: number }) {
   const progress = xp % 100;
   const LEVEL_NAMES = ["Newcomer", "Explorer", "Scholar", "Achiever", "Expert", "Master", "Legend"];
   const name     = LEVEL_NAMES[Math.min(level - 1, LEVEL_NAMES.length - 1)];
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
@@ -317,11 +326,16 @@ function LevelBadge({ xp = 0 }: { xp: number }) {
   );
 }
 
-// ── Tier pill (top bar) — clickable, goes to subscribe page ──────────────────
+// ── Tier pill (top bar) ───────────────────────────────────────────────────────
 
 function TierPill({ tier }: { tier: Tier }) {
   return (
-    <Link `${tier.color}12`, `${tier.color}38` background: borderColor: className="flex shrink-0 items-center gap-2 rounded-xl border px-2 py-1.5 transition-all hover:-translate-y-0.5 hover:shadow-md sm:px-2.5" href="/dashboard/subscribe" style="{{" title="View or manage your plan" }}>
+    <Link
+      href="/dashboard/subscribe"
+      title="View or manage your plan"
+      className="flex shrink-0 items-center gap-2 rounded-xl border px-2 py-1.5 transition-all hover:-translate-y-0.5 hover:shadow-md sm:px-2.5"
+      style={{ background: `${tier.color}12`, borderColor: `${tier.color}38` }}
+    >
       <span
         className="flex h-6 w-6 items-center justify-center rounded-lg text-white"
         style={{ background: tier.color }}
@@ -348,10 +362,14 @@ function StatCard({ icon, label, value, accent, delta }: {
 }) {
   const count = useCountUp(value);
   return (
-    <div className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
-      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-      <div className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-20 blur-xl transition-opacity group-hover:opacity-40"
-        style={{ background: accent }} />
+    <div
+      className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+    >
+      <div
+        className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-20 blur-xl transition-opacity group-hover:opacity-40"
+        style={{ background: accent }}
+      />
       <div className="mb-3 flex items-center justify-between">
         <div className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ background: `${accent}20` }}>
           <span style={{ color: accent }}>{icon}</span>
@@ -368,18 +386,24 @@ function StatCard({ icon, label, value, accent, delta }: {
   );
 }
 
-// ── Plan tile (4th stat tile) — clickable ─────────────────────────────────────
+// ── Plan tile (4th stat tile) ─────────────────────────────────────────────────
 
 function PlanTile({ tier }: { tier: Tier }) {
   return (
-    <Link "var(--sp-bg-card)", `${tier.color}45` background: borderColor: className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg" href="/dashboard/subscribe" style="{{" }}>
-      <div className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-25 blur-xl transition-opacity group-hover:opacity-50"
-        style={{ background: tier.color }} />
+    <Link
+      href="/dashboard/subscribe"
+      className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+      style={{ background: "var(--sp-bg-card)", borderColor: `${tier.color}45` }}
+    >
+      <div
+        className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-25 blur-xl transition-opacity group-hover:opacity-50"
+        style={{ background: tier.color }}
+      />
       <div className="mb-3 flex items-center justify-between">
         <div className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ background: `${tier.color}20` }}>
-          <Crown className="h-4 w-4" color: style="{{" tier.color }}/>
+          <Crown className="h-4 w-4" style={{ color: tier.color }} />
         </div>
-        <ChevronRight className="h-3.5 w-3.5 opacity-40 transition-opacity group-hover:opacity-90" color: style="{{" tier.color }}/>
+        <ChevronRight className="h-3.5 w-3.5 opacity-40 transition-opacity group-hover:opacity-90" style={{ color: tier.color }} />
       </div>
       <p className="truncate text-xl font-black leading-tight" style={{ color: tier.color }}>{tier.label}</p>
       <p className="mt-0.5 truncate text-[11px] font-medium" style={{ color: "var(--sp-text-3)" }}>{tier.detail}</p>
@@ -387,15 +411,19 @@ function PlanTile({ tier }: { tier: Tier }) {
   );
 }
 
-// ── Course card (thumbnail style) ─────────────────────────────────────────────
+// ── Course card ───────────────────────────────────────────────────────────────
 
 function CourseCard({ course, index }: { course: Course; index: number }) {
   const p        = COURSE_PALETTE[index % COURSE_PALETTE.length];
   const { code, title } = splitCourseName(course.name);
   const initials = courseInitials(course.name);
+
   return (
-    <Link "var(--sp-bg-card)", "var(--sp-border)" background: borderColor: className="group flex w-[152px] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border transition-all duration-200 hover:-translate-y-1 hover:shadow-xl sm:w-auto" href="{`/dashboard/courses/${course.id}`}" style="{{" }}>
-      {/* Thumbnail */}
+    <Link
+      href={`/dashboard/courses/${course.id}`}
+      className="group flex w-[152px] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border transition-all duration-200 hover:-translate-y-1 hover:shadow-xl sm:w-auto"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+    >
       <div
         className="relative h-24 overflow-hidden"
         style={{ background: `linear-gradient(135deg, ${p.accent}26, ${p.accent}0D)` }}
@@ -421,7 +449,6 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
         </span>
       </div>
 
-      {/* Body */}
       <div className="flex flex-1 flex-col p-3">
         <p className="min-h-[2rem] text-xs font-bold leading-snug" style={{ ...clamp2, color: "var(--sp-text)" }}>
           {title}
@@ -429,10 +456,7 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
         <p className="mt-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
           Past questions · Practice
         </p>
-        <div
-          className="mt-2.5 flex items-center gap-1 text-[10px] font-bold"
-          style={{ color: p.accent }}
-        >
+        <div className="mt-2.5 flex items-center gap-1 text-[10px] font-bold" style={{ color: p.accent }}>
           Study now
           <ArrowRight className="h-2.5 w-2.5 transition-transform group-hover:translate-x-0.5"/>
         </div>
@@ -441,13 +465,18 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
   );
 }
 
-// ── Activity item (feed style) ────────────────────────────────────────────────
+// ── Activity item ──────────────────────────────────────────────────────────────
 
 function ActivityItem({ q, index }: { q: RecentQuestion; index: number }) {
   const p = COURSE_PALETTE[index % COURSE_PALETTE.length];
   const courseCode = q.course?.name ? splitCourseName(q.course.name).code : null;
+
   return (
-    <Link "var(--sp-bg-card)", "var(--sp-border)" background: borderColor: className="group block rounded-xl border p-3 transition-all hover:border-indigo-500/30 hover:shadow-md" href="{`/questions/${q.id}`}" style="{{" }}>
+    <Link
+      href={`/questions/${q.id}`}
+      className="group block rounded-xl border p-3 transition-all hover:border-indigo-500/30 hover:shadow-md"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+    >
       <div className="flex items-start gap-3">
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white"
@@ -484,7 +513,7 @@ function ActivityItem({ q, index }: { q: RecentQuestion; index: number }) {
   );
 }
 
-// ── Upgrade card (free / trial users) ─────────────────────────────────────────
+// ── Upgrade card ───────────────────────────────────────────────────────────────
 
 function UpgradeCard({ tier }: { tier: Tier }) {
   return (
@@ -523,7 +552,10 @@ function UpgradeCard({ tier }: { tier: Tier }) {
             </div>
           ))}
         </div>
-        <Link className="mt-4 flex items-center justify-center gap-1.5 rounded-xl bg-white py-2.5 text-[11px] font-black text-indigo-700 transition hover:bg-yellow-50" href="/dashboard/subscribe">
+        <Link
+          href="/dashboard/subscribe"
+          className="mt-4 flex items-center justify-center gap-1.5 rounded-xl bg-white py-2.5 text-[11px] font-black text-indigo-700 transition hover:bg-yellow-50"
+        >
           <Crown className="h-3 w-3 text-yellow-500" fill="currentColor"/>
           See plans — from ₦2,000/semester
         </Link>
@@ -532,7 +564,7 @@ function UpgradeCard({ tier }: { tier: Tier }) {
   );
 }
 
-// ── Tier card (paid users) ────────────────────────────────────────────────────
+// ── Tier card ─────────────────────────────────────────────────────────────────
 
 function TierCard({ tier }: { tier: Tier }) {
   return (
@@ -540,8 +572,10 @@ function TierCard({ tier }: { tier: Tier }) {
       className="relative overflow-hidden rounded-2xl border p-4"
       style={{ background: "var(--sp-bg-card)", borderColor: `${tier.color}45` }}
     >
-      <div className="pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full opacity-20 blur-xl"
-        style={{ background: tier.color }} />
+      <div
+        className="pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full opacity-20 blur-xl"
+        style={{ background: tier.color }}
+      />
       <div className="relative">
         <div className="mb-3 flex items-center gap-3">
           <div
@@ -564,7 +598,11 @@ function TierCard({ tier }: { tier: Tier }) {
           </div>
         )}
 
-        <Link `${tier.color}0F` `${tier.color}45`, background: borderColor: className="flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:-translate-y-0.5" color: href="/dashboard/subscribe" style="{{" tier.color, }}>
+        <Link
+          href="/dashboard/subscribe"
+          className="flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:-translate-y-0.5"
+          style={{ background: `${tier.color}0F`, borderColor: `${tier.color}45`, color: tier.color }}
+        >
           {tier.expiringSoon ? "Renew plan" : "Manage plan"} <ChevronRight className="h-3 w-3"/>
         </Link>
       </div>
@@ -579,8 +617,13 @@ function TodayFocus({ courses }: { courses: Course[] }) {
   const c     = courses[idx];
   if (!c) return null;
   const p = COURSE_PALETTE[idx % COURSE_PALETTE.length];
+
   return (
-    <Link `${p.accent}10`, `${p.accent}30` background: borderColor: className="group flex items-center gap-4 rounded-full border px-4 py-3 transition-all hover:shadow-md" href="{`/dashboard/courses/${c.id}`}" style="{{" }}>
+    <Link
+      href={`/dashboard/courses/${c.id}`}
+      className="group flex items-center gap-4 rounded-full border px-4 py-3 transition-all hover:shadow-md"
+      style={{ background: `${p.accent}10`, borderColor: `${p.accent}30` }}
+    >
       <div
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white text-xs font-black"
         style={{ background: p.accent }}
@@ -591,7 +634,7 @@ function TodayFocus({ courses }: { courses: Course[] }) {
         <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: p.accent }}>Today&apos;s focus</p>
         <p className="truncate text-xs font-bold" style={{ color: "var(--sp-text)" }}>{c.name}</p>
       </div>
-      <ArrowRight className="h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" color: p.accent style="{{" }}/>
+      <ArrowRight className="h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: p.accent }} />
     </Link>
   );
 }
@@ -602,7 +645,11 @@ function QuickAction({ href, icon, label, sub, color }: {
   href: string; icon: React.ReactNode; label: string; sub: string; color: string;
 }) {
   return (
-    <Link "var(--sp-bg-card)", "var(--sp-border)" background: borderColor: className="group flex items-center gap-3 rounded-xl border p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-lg" href="{href}" style="{{" }}>
+    <Link
+      href={href}
+      className="group flex items-center gap-3 rounded-xl border p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+    >
       <div
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white transition-transform group-hover:scale-110"
         style={{ background: color, boxShadow: `0 4px 12px ${color}40` }}
@@ -613,7 +660,7 @@ function QuickAction({ href, icon, label, sub, color }: {
         <p className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>{label}</p>
         <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>{sub}</p>
       </div>
-      <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-30 group-hover:opacity-70 transition-opacity" color style="{{" }}/>
+      <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-30 group-hover:opacity-70 transition-opacity" style={{ color }} />
     </Link>
   );
 }
@@ -634,17 +681,19 @@ function EmptyState({ icon, title, body, cta }: {
       </div>
       <p className="text-sm font-bold" style={{ color: "var(--sp-text-2)" }}>{title}</p>
       <p className="mt-1.5 max-w-[200px] text-xs leading-relaxed" style={{ color: "var(--sp-text-3)" }}>{body}</p>
-      <Link className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5" href="{cta.href}">
+      <Link
+        href={cta.href}
+        className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5"
+      >
         {cta.label} <ArrowRight className="h-3.5 w-3.5"/>
       </Link>
     </div>
   );
 }
 
-// ── Streak section (day dots) ─────────────────────────────────────────────────
+// ── Streak section ─────────────────────────────────────────────────────────────
 
 function StreakSection({ streak }: { streak: number }) {
-  // Convert JS getDay() (0=Sun) to Mon-first index (0=Mon…6=Sun)
   const todayJS = new Date().getDay();
   const todayMF = todayJS === 0 ? 6 : todayJS - 1;
 
@@ -655,7 +704,7 @@ function StreakSection({ streak }: { streak: number }) {
         <span className="text-[10px] font-bold text-indigo-500">Goal: 7 days</span>
       </div>
       <div className="flex items-center gap-4">
-        <StreakRing size="{72}" streak="{streak}"/>
+        <StreakRing size={72} streak={streak} />
         <div className="flex-1 space-y-2">
           <div className="flex gap-1">
             {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => {
@@ -703,7 +752,7 @@ export default function DashboardHomePage() {
 
   const [query, setQuery]                 = useState("");
   const [avatarUrl, setAvatarUrl]         = useState<string | null>(null);
-  const [sub, setSub]                     = useState<SubStatus null |>(null);
+  const [sub, setSub]                     = useState<SubStatus | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
@@ -712,12 +761,10 @@ export default function DashboardHomePage() {
     queryFn:  () => fetchDashboardSummary(supabase, router),
   });
 
-  // Fire streak update on every dashboard load (fire-and-forget)
   useEffect(() => {
     fireStreakUpdate(supabase);
   }, [supabase]);
 
-  // Load avatar + subscription status
   useEffect(() => {
     async function load() {
       const { data: { session } } = await supabase.auth.getSession();
@@ -749,7 +796,6 @@ export default function DashboardHomePage() {
     load();
   }, [supabase]);
 
-  // Close search dropdown on outside click
   useEffect(() => {
     const h = (e: MouseEvent) => {
       if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
@@ -817,15 +863,16 @@ export default function DashboardHomePage() {
       >
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 lg:gap-4 lg:px-6">
 
-          {/* Logo */}
           <Link className="flex shrink-0 items-center gap-2.5 mr-1" href="/dashboard">
-            <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height="{32}" src="/images/logo.jpg" width="{32}"/>
+            <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={32} src="/images/logo.jpg" width={32}/>
             <span className="hidden text-base font-black tracking-tight sm:block" style={{ color: "var(--sp-text)" }}>SparkL</span>
           </Link>
 
-          {/* Search */}
           <div className="relative min-w-0 flex-1 max-w-md mx-auto" ref={searchRef}>
-            <Search "#6366F1" "var(--sp-text-3)" : ? className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 transition-colors" color: searchFocused style="{{" }}/>
+            <Search
+              className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 transition-colors"
+              style={{ color: searchFocused ? "#6366F1" : "var(--sp-text-3)" }}
+            />
             <input
               value={query}
               onChange={e => setQuery(e.target.value)}
@@ -840,7 +887,6 @@ export default function DashboardHomePage() {
               }}
             />
 
-            {/* Search dropdown */}
             {query.trim() && (
               <div
                 className="anim-slide absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border shadow-2xl"
@@ -853,7 +899,7 @@ export default function DashboardHomePage() {
                   </div>
                 ) : searchResults.length === 0 ? (
                   <div className="flex flex-col items-center py-8 gap-2">
-                    <Search "var(--sp-text-3)" className="h-5 w-5 opacity-30" color: style="{{" }}/>
+                    <Search className="h-5 w-5 opacity-30" style={{ color: "var(--sp-text-3)" }} />
                     <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>
                       No courses match &ldquo;{query}&rdquo;
                     </p>
@@ -871,7 +917,11 @@ export default function DashboardHomePage() {
                       const initials = courseInitials(c.name);
 
                       return (
-                        <Link className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-500/5" href="{`/dashboard/courses/${c.id}`}" key="{c.id}" onClick="{()"> { setQuery(""); setSearchFocused(false); }}
+                        <Link
+                          key={c.id}
+                          href={`/dashboard/courses/${c.id}`}
+                          onClick={() => { setQuery(""); setSearchFocused(false); }}
+                          className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-500/5"
                         >
                           <div
                             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-black text-white"
@@ -882,7 +932,7 @@ export default function DashboardHomePage() {
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{c.name}</p>
                           </div>
-                          <ArrowRight className="ml-auto h-3 w-3 shrink-0" color: p.accent style="{{" }}/>
+                          <ArrowRight className="ml-auto h-3 w-3 shrink-0" style={{ color: p.accent }} />
                         </Link>
                       );
                     })}
@@ -892,14 +942,13 @@ export default function DashboardHomePage() {
             )}
           </div>
 
-          {/* Right actions */}
           <div className="flex items-center gap-2">
-            <TierPill tier="{tier}"/>
+            <TierPill tier={tier}/>
             <button
               className="relative hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 sm:flex"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
             >
-              <Bell "var(--sp-text-2)" className="h-4 w-4" color: style="{{" }}/>
+              <Bell className="h-4 w-4" style={{ color: "var(--sp-text-2)" }} />
               <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-indigo-500" />
             </button>
             <Link href="/dashboard/profile">
@@ -925,7 +974,6 @@ export default function DashboardHomePage() {
           {/* ── LEFT RAIL ── */}
           <aside className="space-y-4 anim-1">
 
-            {/* User card */}
             <div
               className="relative overflow-hidden rounded-2xl border p-5"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
@@ -970,32 +1018,33 @@ export default function DashboardHomePage() {
                   </div>
                 )}
 
-                <LevelBadge xp="{xp}"/>
+                <LevelBadge xp={xp}/>
 
-                <Link "var(--sp-border)", "var(--sp-text-3)" borderColor: className="mt-4 flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:border-indigo-500/40 hover:bg-indigo-500/5 hover:text-indigo-500" color: href="/dashboard/profile" style="{{" }}>
+                <Link
+                  href="/dashboard/profile"
+                  className="mt-4 flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:border-indigo-500/40 hover:bg-indigo-500/5 hover:text-indigo-500"
+                  style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
+                >
                   Edit profile <ChevronRight className="h-3 w-3"/>
                 </Link>
               </div>
             </div>
 
-            {/* Streak card */}
-            <StreakSection streak="{streak}"/>
+            <StreakSection streak={streak}/>
 
-            {/* Quick actions */}
             <div className="space-y-2">
               <p className="px-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
                 Quick actions
               </p>
-              <QuickAction className="h-4 w-4" href="/dashboard/upload" icon="{<Upload" label="Upload paper" sub="Earn 50 XP per upload"/>}       color="#6366F1" />
-              <QuickAction className="h-4 w-4" href="/dashboard/courses" icon="{<BookOpen" label="Browse courses" sub="Find past questions"/>}      color="#0EA5E9" />
-              <QuickAction className="h-4 w-4" href="/dashboard/profile" icon="{<GraduationCap" label="My profile" sub="Account & settings"/>} color="#8B5CF6" />
+              <QuickAction href="/dashboard/upload" icon={<Upload className="h-4 w-4"/>} label="Upload paper" sub="Earn 50 XP per upload" color="#6366F1" />
+              <QuickAction href="/dashboard/courses" icon={<BookOpen className="h-4 w-4"/>} label="Browse courses" sub="Find past questions" color="#0EA5E9" />
+              <QuickAction href="/dashboard/profile" icon={<GraduationCap className="h-4 w-4"/>} label="My profile" sub="Account & settings" color="#8B5CF6" />
             </div>
           </aside>
 
           {/* ── MAIN ── */}
           <main className="space-y-5 lg:col-span-2 min-w-0">
 
-            {/* Greeting */}
             <div
               className="anim-1 relative overflow-hidden rounded-2xl border p-5"
               style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
@@ -1007,7 +1056,7 @@ export default function DashboardHomePage() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
-                    <Calendar "var(--sp-text-3)" className="h-3.5 w-3.5" color: style="{{" }}/>
+                    <Calendar className="h-3.5 w-3.5" style={{ color: "var(--sp-text-3)" }} />
                     <span className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>{today}</span>
                   </div>
                   <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>{greeting},</p>
@@ -1029,25 +1078,23 @@ export default function DashboardHomePage() {
               </div>
             </div>
 
-            {/* Stats (4 tiles — the last one is the clickable plan tile) */}
             <div className="anim-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <StatCard className="h-4 w-4" icon="{<BookOpen"/>} label="My courses"  value={courses.length}             accent="#6366F1" />
-              <StatCard className="h-4 w-4" icon="{<FileText"/>} label="Past papers" value={stats.questions_in_courses} accent="#8B5CF6" />
-              <StatCard className="h-4 w-4" icon="{<Trophy"/>}   
+              <StatCard icon={<BookOpen className="h-4 w-4"/>} label="My courses"  value={courses.length}             accent="#6366F1" />
+              <StatCard icon={<FileText className="h-4 w-4"/>} label="Past papers" value={stats.questions_in_courses} accent="#8B5CF6" />
+              <StatCard
+                icon={<Trophy className="h-4 w-4"/>}   
                 label="Uploads"     
                 value={stats.my_uploads}           
                 accent="#10B981"
                 delta={stats.my_uploads > 0 ? `${stats.my_uploads}` : undefined} 
               />
-              <PlanTile tier="{tier}"/>
+              <PlanTile tier={tier}/>
             </div>
 
-            {/* Today's focus */}
             {courses.length > 0 && (
-              <div className="anim-3"><TodayFocus courses="{courses}"/></div>
+              <div className="anim-3"><TodayFocus courses={courses}/></div>
             )}
 
-            {/* Courses */}
             <section className="anim-4">
               <div className="mb-3 flex items-center justify-between">
                 <div>
@@ -1056,21 +1103,30 @@ export default function DashboardHomePage() {
                     {courses.length} enrolled this semester
                   </p>
                 </div>
-                <Link "var(--sp-border)", "var(--sp-text-3)" borderColor: className="flex items-center gap-1 rounded-full border px-3 py-1.5 text-[10px] font-bold transition-all hover:border-indigo-500/40 hover:text-indigo-500" color: href="/onboarding" style="{{" }}>
+                <Link
+                  href="/onboarding"
+                  className="flex items-center gap-1 rounded-full border px-3 py-1.5 text-[10px] font-bold transition-all hover:border-indigo-500/40 hover:text-indigo-500"
+                  style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
+                >
                   <Plus className="h-3 w-3"/> Manage
                 </Link>
               </div>
 
               {courses.length === 0 ? (
-                <EmptyState className="h-6 w-6" icon="{<BookOpen"/>}
+                <EmptyState
+                  icon={<BookOpen className="h-6 w-6"/>}
                   title="No courses enrolled yet"
                   body="Enrol in your courses to unlock all past questions for your semester."
                   cta={{ href: "/onboarding", label: "Choose courses" }}
                 />
               ) : (
                 <div className="no-scrollbar -mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0">
-                  {courses.map((c, i) => <CourseCard course="{c}" index="{i}" key="{c.id}"/>)}
-                  <Link "var(--sp-border)", "var(--sp-text-3)" borderColor: className="flex min-h-[170px] w-[152px] shrink-0 snap-start flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-4 transition-all hover:border-indigo-500/40 hover:bg-indigo-500/[0.03] sm:w-auto" color: href="/onboarding" style="{{" }}>
+                  {courses.map((c, i) => <CourseCard key={c.id} course={c} index={i} />)}
+                  <Link
+                    href="/onboarding"
+                    className="flex min-h-[170px] w-[152px] shrink-0 snap-start flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-4 transition-all hover:border-indigo-500/40 hover:bg-indigo-500/[0.03] sm:w-auto"
+                    style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}
+                  >
                     <Plus className="h-5 w-5"/>
                     <span className="text-[10px] font-bold">Add course</span>
                   </Link>
@@ -1078,9 +1134,12 @@ export default function DashboardHomePage() {
               )}
             </section>
 
-            {/* Simulate the real exam */}
             {courses.length > 0 && (
-              <Link "var(--sp-bg-card)", "var(--sp-border)" background: borderColor: className="anim-4 group flex items-center gap-4 rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg" href="/dashboard/courses" style="{{" }}>
+              <Link
+                href="/dashboard/courses"
+                className="anim-4 group flex items-center gap-4 rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+              >
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/30">
                   <Timer className="h-5 w-5"/>
                 </div>
@@ -1094,7 +1153,6 @@ export default function DashboardHomePage() {
               </Link>
             )}
 
-            {/* Recent uploads */}
             <section className="anim-5">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-sm font-black" style={{ color: "var(--sp-text)" }}>Recent uploads</h2>
@@ -1106,14 +1164,15 @@ export default function DashboardHomePage() {
               </div>
 
               {recentQuestions.length === 0 ? (
-                <EmptyState className="h-6 w-6" icon="{<FileText"/>}
+                <EmptyState
+                  icon={<FileText className="h-6 w-6"/>}
                   title="No papers yet"
                   body={`Be the first to upload for ${data.profile.department?.name ?? "your department"}.`}
                   cta={{ href: "/dashboard/upload", label: "Upload a paper" }}
                 />
               ) : (
                 <div className="space-y-2">
-                  {recentQuestions.map((q, i) => <ActivityItem index="{i}" key="{q.id}" q="{q}"/>)}
+                  {recentQuestions.map((q, i) => <ActivityItem key={q.id} q={q} index={i} />)}
                 </div>
               )}
             </section>
@@ -1121,7 +1180,7 @@ export default function DashboardHomePage() {
 
           {/* ── RIGHT RAIL ── */}
           <aside className="space-y-4 anim-6">
-            {tier.isPaid ? <TierCard tier="{tier}"/> : <UpgradeCard tier="{tier}"/>}
+            {tier.isPaid ? <TierCard tier={tier}/> : <UpgradeCard tier={tier}/>}
 
             {stats.my_uploads === 0 && (
               <div
