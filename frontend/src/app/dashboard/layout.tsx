@@ -27,8 +27,8 @@ const navItems = [
   { href: "/dashboard/courses", label: "My Courses", icon: BookOpen        },
   { href: "/dashboard/upload",  label: "Upload",     icon: Upload          },
   { href: "/dashboard/profile", label: "Profile",    icon: User            },
-    { href: "/community", label: "Community",    icon: MessageCircle            },
-  { href: "/study", label: "Sparkl Cram",    icon: Zap          },
+  { href: "/community",         label: "Community",  icon: MessageCircle   },
+  { href: "/study",             label: "Sparkl Cram",icon: Zap             },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -123,10 +123,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <img
             src="/images/logo.jpg"
             alt="SparkL"
-            className="h-8 w-8 shrink-0 rounded-xl object-cover"
+            className="h-8 w-8 shrink-0 rounded-xl object-cover shadow-sm"
           />
           {isExpanded && (
-            <span className="text-base font-black tracking-tight text-white">SparkL</span>
+            <span className="text-base font-black tracking-tight" style={{ color: "var(--sp-text)" }}>
+              SparkL
+            </span>
           )}
         </div>
 
@@ -143,35 +145,37 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 href={item.href}
                 onClick={() => setMobileOpen(false)}
                 title={!isExpanded ? item.label : undefined}
-                className={`group flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-all duration-150
-                  ${!isExpanded ? "justify-center px-2.5" : "px-3"}
-                  ${active
-                    ? "bg-[#2563EB]/15 text-[#60A5FA]"
-                    : "text-[#64748B] hover:bg-white/[0.05] hover:text-slate-200"
-                  }`}
+                className={`group flex items-center gap-3 rounded-xl py-2.5 text-sm font-medium transition-all duration-150 ${
+                  !isExpanded ? "justify-center px-2.5" : "px-3"
+                }`}
+                style={{
+                  background: active ? "rgba(99, 102, 241, 0.12)" : "transparent",
+                  color: active ? "#6366F1" : "var(--sp-text-2)",
+                }}
               >
                 <Icon
-                  className={`h-[18px] w-[18px] shrink-0 transition-colors
-                    ${active ? "text-[#60A5FA]" : "text-[#475569] group-hover:text-slate-300"}`}
+                  className="h-[18px] w-[18px] shrink-0 transition-colors"
+                  style={{ color: active ? "#6366F1" : "var(--sp-text-3)" }}
                 />
-                {isExpanded && item.label}
+                {isExpanded && <span>{item.label}</span>}
               </Link>
             );
           })}
 
           {isAdmin && (
             <>
-              <div className="mx-1 my-3 border-t border-white/[0.06]" />
+              <div className="mx-1 my-3 border-t" style={{ borderColor: "var(--sp-border)" }} />
               <Link
                 href="/admin"
                 onClick={() => setMobileOpen(false)}
                 title={!isExpanded ? "Admin" : undefined}
-                className={`group flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-all
-                  ${!isExpanded ? "justify-center px-2.5" : "px-3"}
-                  ${pathname?.startsWith("/admin")
-                    ? "bg-[#2563EB]/15 text-[#60A5FA]"
-                    : "text-[#3B82F6] hover:bg-[#2563EB]/10"
-                  }`}
+                className={`group flex items-center gap-3 rounded-xl py-2.5 text-sm font-medium transition-all ${
+                  !isExpanded ? "justify-center px-2.5" : "px-3"
+                }`}
+                style={{
+                  background: pathname?.startsWith("/admin") ? "rgba(99, 102, 241, 0.12)" : "transparent",
+                  color: "#6366F1",
+                }}
               >
                 <ShieldCheck className="h-[18px] w-[18px] shrink-0" />
                 {isExpanded && "Admin"}
@@ -181,7 +185,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </nav>
 
         {/* ── User section ── */}
-        <div className="space-y-0.5 border-t border-white/[0.06] p-2">
+        <div className="space-y-0.5 border-t p-2" style={{ borderColor: "var(--sp-border)" }}>
 
           {/* Theme toggle */}
           <ThemeToggle expanded={isExpanded} />
@@ -190,8 +194,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link
             href="/dashboard/profile"
             onClick={() => setMobileOpen(false)}
-            className={`flex items-center gap-3 rounded-lg px-2 py-2.5 transition hover:bg-white/[0.05]
-              ${!isExpanded ? "justify-center" : ""}`}
+            className={`flex items-center gap-3 rounded-xl px-2 py-2.5 transition ${
+              !isExpanded ? "justify-center" : ""
+            }`}
+            style={{ color: "var(--sp-text)" }}
           >
             {/* Avatar */}
             <div className="relative shrink-0">
@@ -199,10 +205,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <img
                   src={avatarUrl}
                   alt="Profile"
-                  className="h-7 w-7 rounded-full object-cover ring-1 ring-blue-500/40"
+                  className="h-7 w-7 rounded-full object-cover ring-2 ring-indigo-500/30"
                 />
               ) : (
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#1E3A8A] text-xs font-bold text-blue-200">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white shadow-sm">
                   {initial}
                 </div>
               )}
@@ -215,10 +221,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
             {isExpanded && (
               <div className="min-w-0">
-                <p className="truncate text-xs font-semibold text-slate-200">
+                <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>
                   {userInfo.name ?? "Student"}
                 </p>
-                <p className="truncate text-[10px] capitalize text-slate-500">
+                <p className="truncate text-[10px] capitalize" style={{ color: "var(--sp-text-3)" }}>
                   {userPlan === "free" ? "Free plan" : `${userPlan} plan`}
                 </p>
               </div>
@@ -230,8 +236,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             onClick={handleLogout}
             disabled={loggingOut}
             title={!isExpanded ? "Log out" : undefined}
-            className={`flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-sm font-medium text-[#64748B] transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50
-              ${!isExpanded ? "justify-center" : ""}`}
+            className={`flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-sm font-medium transition hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50 ${
+              !isExpanded ? "justify-center" : ""
+            }`}
+            style={{ color: "var(--sp-text-3)" }}
           >
             {loggingOut
               ? <Loader2 className="h-4 w-4 animate-spin" />
@@ -258,9 +266,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             onMouseEnter={() => setSidebarExpanded(true)}
             onMouseLeave={() => setSidebarExpanded(false)}
             className={`hidden lg:flex flex-col fixed inset-y-0 left-0 z-30
-              border-r border-white/[0.06] bg-[#0D1230]
-              transition-all duration-200 ease-out
+              border-r transition-all duration-200 ease-out
               ${sidebarExpanded ? "w-52" : "w-14"}`}
+            style={{
+              background: "var(--sp-bg-card)",
+              borderColor: "var(--sp-border)",
+            }}
           >
             <SidebarContent />
           </aside>
@@ -268,7 +279,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {/* ── Mobile floating button ── */}
           <button
             onClick={() => setMobileOpen(true)}
-            className="fixed bottom-6 left-4 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-[#2563EB] shadow-lg transition hover:bg-blue-500 lg:hidden"
+            className="fixed bottom-6 left-4 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-indigo-600 shadow-lg shadow-indigo-500/30 transition hover:bg-indigo-500 lg:hidden"
           >
             <Menu className="h-5 w-5 text-white" />
           </button>
@@ -280,7 +291,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 className="absolute inset-0 bg-black/60 backdrop-blur-sm"
                 onClick={() => setMobileOpen(false)}
               />
-              <aside className="absolute inset-y-0 left-0 w-60 border-r border-white/[0.06] bg-[#0D1230]">
+              <aside
+                className="absolute inset-y-0 left-0 w-60 border-r"
+                style={{
+                  background: "var(--sp-bg-card)",
+                  borderColor: "var(--sp-border)",
+                }}
+              >
                 <SidebarContent mobile />
               </aside>
             </div>
