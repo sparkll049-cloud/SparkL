@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, ArrowRight, FileText, Loader2, AlertCircle,
-  BookOpen, Zap, Play, RotateCcw, Lock, Sparkles,
-  ChevronDown, Send, CheckCircle2,
+  BookOpen, Play, Lock, Sparkles,
+  Send, CheckCircle2,
   Paperclip, X, Clock, Eye, EyeOff, Crown,
+  ChevronDown, Zap, RotateCcw,
 } from "lucide-react";
 
 import InlinePaperViewer from "@/components/InlinePaperViewer";
@@ -47,7 +48,7 @@ interface ProcessedQuestion {
 
 interface QuestionLimits {
   is_paid: boolean;
-  plan: string; // free | basic | pro | premium
+  plan: string;
   read_mode_percent: number;
   practice_mode_max: number | null;
 }
@@ -67,83 +68,160 @@ const LOW_QUALITY_THRESHOLD = 0.5;
 const FREE_PRACTICE_CAP     = 5;
 const FREE_TEXT_LINES       = 10;
 
-type Tab = "view" | "read" | "practice" | "submit";
+type Tab = "text" | "paper" | "submit" | "practice";
 
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ── Anti-screenshot overlay ───────────────────────────────────────────────────
+// ── SECURITY LAYER ────────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
-function useAntiCapture(enabled: boolean) {
-  const [hidden, setHidden] = useState(false);
+/**
+ * useHardSecurity — aggressive multi-vector content protection.
+ *
+ * Vectors covered:
+ *   1. Visibility / blur events  → hides content when tab loses focus
+ *   2. Print stylesheet          → blurs all protected content
+ *   3. CSS user-select: none     → blocks text selection / copy
+ *   4. context-menu block        → disables right-click on protected zones
+ *   5. keyboard shortcut block   → PrintScreen, Ctrl+P, Ctrl+S, Ctrl+U,
+ *                                   Ctrl+Shift+I/J/C (devtools)
+ *   6. Drag-start block          → prevents drag-to-copy
+ *   7. Tiled email watermark     → visible deterrent + attribution
+ *
+ * What can NOT be blocked in a browser:
+ *   - OS-level screenshot tools (Print Screen key at OS level,
+ *     macOS Cmd+Shift+3/4, phone button combos).
+ *   - Screen recording software running outside the browser.
+ * The watermark ensures attribution even if a screenshot is taken.
+ */
+function useHardSecurity(enabled: boolean) {
+  const [obscured, setObscured] = useState(false);
 
   useEffect(() => {
     if (!enabled) return;
 
-    function onVisibility() {
-      setHidden(document.visibilityState === "hidden");
-    }
-    function onBlur()  { setHidden(true);  }
-    function onFocus() { setHidden(false); }
-
+    // ── 1. Visibility / blur ──────────────────────────────────────────────
+    const onVisibility = () => setObscured(document.visibilityState === "hidden");
+    const onBlur       = () => setObscured(true);
+    const onFocus      = () => setObscured(false);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("blur",  onBlur);
     window.addEventListener("focus", onFocus);
+
+    // ── 2. Print stylesheet ───────────────────────────────────────────────
+    const printStyle = document.createElement("style");
+    printStyle.id = "__sp_print__";
+    printStyle.textContent = `
+      @media print {
+        .sp-secure { filter: blur(40px) !important; opacity: 0.05 !important; }
+        .sp-secure * { visibility: hidden !important; }
+      }
+    `;
+    document.head.appendChild(printStyle);
+
+    // ── 5. Keyboard shortcuts ─────────────────────────────────────────────
+    const onKey = (e: KeyboardEvent) => {
+      const ctrl = e.ctrlKey || e.metaKey;
+      const blocked = [
+        ctrl && e.key === "p",           // print
+        ctrl && e.key === "s",           // save page
+        ctrl && e.key === "u",           // view source
+        ctrl && e.shiftKey && (e.key === "i" || e.key === "j" || e.key === "c"),
+        e.key === "PrintScreen",
+        ctrl && e.shiftKey && e.key === "s", // Windows snip shortcut
+      ];
+      if (blocked.some(Boolean)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setObscured(true);
+        setTimeout(() => setObscured(false), 1500);
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
 
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("blur",  onBlur);
       window.removeEventListener("focus", onFocus);
+      document.removeEventListener("keydown", onKey, true);
+      document.getElementById("__sp_print__")?.remove();
     };
   }, [enabled]);
 
-  return hidden;
+  return obscured;
 }
 
-interface ProtectedWrapProps {
+interface SecureWrapProps {
   userEmail: string | null;
   children: React.ReactNode;
   enabled?: boolean;
 }
 
-function ProtectedWrap({ userEmail, children, enabled = true }: ProtectedWrapProps) {
-  const hidden = useAntiCapture(enabled);
+function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
+  const obscured = useHardSecurity(enabled);
+
+  // ── 4. Context-menu block ─────────────────────────────────────────────
+  const onContextMenu = useCallback((e: React.MouseEvent) => {
+    if (enabled) e.preventDefault();
+  }, [enabled]);
+
+  // ── 6. Drag-start block ───────────────────────────────────────────────
+  const onDragStart = useCallback((e: React.DragEvent) => {
+    if (enabled) e.preventDefault();
+  }, [enabled]);
 
   if (!enabled) return <>{children}</>;
 
   return (
-    <div className="relative select-none">
-      {hidden && (
+    <div
+      className="sp-secure relative"
+      onContextMenu={onContextMenu}
+      onDragStart={onDragStart}
+      style={{
+        // ── 3. user-select block ──────────────────────────────────────
+        userSelect:          "none",
+        WebkitUserSelect:    "none",
+        MozUserSelect:       "none" as React.CSSProperties["MozUserSelect"],
+        msUserSelect:        "none" as React.CSSProperties["msUserSelect"],
+        WebkitTouchCallout: "none",
+      }}
+    >
+      {/* Obscure overlay — shown when focus is lost */}
+      {obscured && (
         <div
           className="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-2xl"
-          style={{ background: "var(--sp-bg-card)", backdropFilter: "blur(20px)" }}
+          style={{ background: "var(--sp-bg-card)", backdropFilter: "blur(24px)" }}
         >
-          <Lock className="h-8 w-8 text-indigo-500 mb-2" />
+          <Lock className="h-8 w-8 mb-2" style={{ color: "var(--sp-text-3)" }} />
           <p className="text-sm font-bold" style={{ color: "var(--sp-text)" }}>
             Content hidden
           </p>
           <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>
-            Return to SparkL to continue reading
+            Return to SparkL to continue
           </p>
         </div>
       )}
 
+      {/* ── 7. Tiled watermark ────────────────────────────────────────── */}
       <div
-        className="pointer-events-none absolute inset-0 z-10 overflow-hidden rounded-2xl"
         aria-hidden
+        className="pointer-events-none absolute inset-0 z-10 overflow-hidden rounded-2xl"
         style={{ userSelect: "none" }}
       >
-        {Array.from({ length: 30 }).map((_, i) => (
+        {Array.from({ length: 40 }).map((_, i) => (
           <span
             key={i}
-            className="absolute text-[10px] font-bold opacity-[0.07] whitespace-nowrap"
+            className="absolute whitespace-nowrap font-bold"
             style={{
-              top:       `${(i * 7) % 100}%`,
-              left:      `${(i * 13) % 100}%`,
-              transform: "rotate(-30deg)",
-              color:     "var(--sp-text)",
-              userSelect: "none",
+              top:           `${(i * 6.5) % 100}%`,
+              left:          `${(i * 11.3) % 100}%`,
+              transform:     "rotate(-28deg)",
+              fontSize:      "9px",
+              opacity:       0.055,
+              color:         "var(--sp-text)",
+              userSelect:    "none",
               pointerEvents: "none",
+              letterSpacing: "0.04em",
             }}
           >
             SparkL · {userEmail ?? "protected"}
@@ -151,19 +229,17 @@ function ProtectedWrap({ userEmail, children, enabled = true }: ProtectedWrapPro
         ))}
       </div>
 
-      <div style={{ userSelect: "none", WebkitUserSelect: "none" }}>
-        {children}
-      </div>
+      {children}
     </div>
   );
 }
 
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ── Extracted text (Read) tab ─────────────────────────────────────────────────
+// ── Extracted text (hero) ─────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
-function ExtractedTextView({
+function ExtractedTextHero({
   text,
   isPaid,
   userEmail,
@@ -172,65 +248,98 @@ function ExtractedTextView({
   isPaid: boolean;
   userEmail: string | null;
 }) {
-  const lines    = text.split("\n").filter(l => l.trim());
-  const visible  = isPaid ? lines : lines.slice(0, FREE_TEXT_LINES);
-  const hidden   = lines.length - visible.length;
-  const isGated  = !isPaid && hidden > 0;
+  const lines   = text.split("\n").filter(l => l.trim());
+  const visible = isPaid ? lines : lines.slice(0, FREE_TEXT_LINES);
+  const hidden  = lines.length - visible.length;
+  const isGated = !isPaid && hidden > 0;
 
   return (
     <div className="space-y-3">
-      <ProtectedWrap userEmail={userEmail} enabled={isPaid}>
+      <SecureWrap userEmail={userEmail} enabled={isPaid}>
         <div
-          className="rounded-2xl border p-5 space-y-3"
+          className="rounded-2xl border"
           style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
         >
-          <div className="flex items-center gap-2 pb-2 border-b" style={{ borderColor: "var(--sp-border)" }}>
-            <FileText size={14} className="text-indigo-400" />
-            <p className="text-xs font-bold" style={{ color: "var(--sp-text-2)" }}>
+          {/* Header strip */}
+          <div
+            className="flex items-center gap-2 px-5 py-3.5 border-b"
+            style={{ borderColor: "var(--sp-border)" }}
+          >
+            <FileText size={14} style={{ color: "var(--sp-text-3)" }} />
+            <span className="text-xs font-semibold" style={{ color: "var(--sp-text-3)" }}>
               Extracted paper text
-            </p>
+            </span>
             {!isPaid && (
-              <span className="ml-auto rounded-full bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-500">
-                Preview only — {FREE_TEXT_LINES} lines
+              <span
+                className="ml-auto rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                style={{
+                  borderColor: "rgba(245,158,11,0.3)",
+                  background:  "rgba(245,158,11,0.08)",
+                  color:       "var(--sp-amber, #f59e0b)",
+                }}
+              >
+                Preview · {FREE_TEXT_LINES} lines
               </span>
             )}
           </div>
 
-          <div className="space-y-2">
-            {visible.map((line, i) => (
-              <p
-                key={i}
-                className="text-sm leading-7 whitespace-pre-wrap"
-                style={{ color: "var(--sp-text-2)" }}
-              >
-                {line}
-              </p>
-            ))}
+          {/* Body */}
+          <div className="px-5 py-5 space-y-0 relative">
+            {visible.map((line, i) => {
+              // Detect section headers (short, ends with colon or all-caps-ish)
+              const isHeader = line.length < 80 && /^[A-Z\d]/.test(line) &&
+                (line.endsWith(":") || /^[A-Z\s\d]{4,}$/.test(line));
+
+              return (
+                <p
+                  key={i}
+                  className={`leading-7 whitespace-pre-wrap ${
+                    isHeader
+                      ? "text-sm font-semibold pt-4 first:pt-0 pb-1"
+                      : "text-sm"
+                  }`}
+                  style={{
+                    color: isHeader ? "var(--sp-text)" : "var(--sp-text-2)",
+                  }}
+                >
+                  {line}
+                </p>
+              );
+            })}
+
+            {/* Fade-out for gated content */}
+            {isGated && (
+              <div
+                className="absolute bottom-0 left-0 right-0 h-24 pointer-events-none"
+                style={{
+                  background: "linear-gradient(to bottom, transparent, var(--sp-bg-card))",
+                }}
+              />
+            )}
           </div>
-
-          {isGated && (
-            <div
-              className="relative -mt-10 pt-10"
-              style={{
-                background: "linear-gradient(to bottom, transparent, var(--sp-bg-card) 70%)",
-              }}
-            />
-          )}
         </div>
-      </ProtectedWrap>
+      </SecureWrap>
 
+      {/* Gate banner */}
       {isGated && (
-        <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-6 text-center">
-          <div className="flex justify-center mb-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/15">
-              <Crown className="h-4 w-4 text-indigo-500" />
-            </div>
+        <div
+          className="rounded-2xl border p-6 text-center"
+          style={{
+            borderColor: "rgba(99,102,241,0.2)",
+            background:  "rgba(99,102,241,0.05)",
+          }}
+        >
+          <div
+            className="flex h-10 w-10 items-center justify-center rounded-xl mx-auto mb-3"
+            style={{ background: "rgba(99,102,241,0.12)" }}
+          >
+            <Crown className="h-4 w-4 text-indigo-500" />
           </div>
           <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
             {hidden} more line{hidden !== 1 ? "s" : ""} hidden
           </p>
           <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-            Upgrade to Basic, Pro or Premium to read the full extracted text
+            Upgrade to Basic, Pro or Premium to read the full text
           </p>
           <Link
             href="/dashboard/subscribe"
@@ -248,14 +357,14 @@ function ExtractedTextView({
 
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ── Practice components ───────────────────────────────────────────────────────
+// ── Practice modal (quiz) ─────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
 function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
 
-  function style(opt: string) {
+  function style(opt: string): React.CSSProperties {
     if (!revealed && selected !== opt)
       return { borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" };
     if (!revealed && selected === opt)
@@ -269,7 +378,7 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
 
   return (
     <div className="space-y-2">
-      {(["a", "b", "c", "d"] as const).map((opt) => {
+      {(["a","b","c","d"] as const).map(opt => {
         const text = q[`option_${opt}` as keyof ProcessedQuestion] as string | null;
         if (!text) return null;
         return (
@@ -298,9 +407,7 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
           style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}
         >
           <p className={`text-sm font-semibold ${selected === q.correct_answer ? "text-emerald-500" : "text-red-500"}`}>
-            {selected === q.correct_answer
-              ? "✓ Correct!"
-              : `✗ Incorrect — answer is ${q.correct_answer?.toUpperCase()}`}
+            {selected === q.correct_answer ? "✓ Correct!" : `✗ Incorrect — answer is ${q.correct_answer?.toUpperCase()}`}
           </p>
           {q.explanation && (
             <p className="text-sm leading-6" style={{ color: "var(--sp-text-3)" }}>{q.explanation}</p>
@@ -324,8 +431,11 @@ function PracticeTheory({ q }: { q: ProcessedQuestion }) {
         {show ? "Hide model answer" : "Show model answer"}
       </button>
       {show && q.model_answer && (
-        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-          <p className="text-xs font-semibold text-emerald-500 mb-2">Model Answer</p>
+        <div
+          className="rounded-xl border p-4"
+          style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.05)" }}
+        >
+          <p className="text-[10px] font-semibold text-emerald-500 mb-2">Model Answer</p>
           <p className="text-sm leading-7 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
             {q.model_answer}
           </p>
@@ -335,68 +445,180 @@ function PracticeTheory({ q }: { q: ProcessedQuestion }) {
   );
 }
 
-function PracticeQuestion({ q, index }: { q: ProcessedQuestion; index: number }) {
+function PracticeModal({
+  questions,
+  isPaid,
+  userEmail,
+  onClose,
+}: {
+  questions: ProcessedQuestion[];
+  isPaid: boolean;
+  userEmail: string | null;
+  onClose: () => void;
+}) {
+  const [index, setIndex] = useState(0);
+  const visible   = !isPaid ? questions.slice(0, FREE_PRACTICE_CAP) : questions;
+  const hidden    = questions.length - visible.length;
+  const isGated   = !isPaid && hidden > 0;
+  const q         = visible[index];
+  const mcqCount  = visible.filter(q => q.question_type === "mcq").length;
+  const theoryCount = visible.filter(q => q.question_type === "theory").length;
+
+  // Lock body scroll while modal is open
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
   return (
     <div
-      className="rounded-2xl border p-5"
-      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+      className="fixed inset-0 z-50 flex flex-col"
+      style={{ background: "var(--sp-bg)" }}
     >
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <span className="text-xs font-bold text-indigo-500">
-          Question {q.question_number ?? index + 1}
-        </span>
-        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-          q.question_type === "mcq"
-            ? "border-blue-500/20 bg-blue-500/10 text-blue-500"
-            : "border-slate-500/20 bg-slate-500/10 text-slate-500"
-        }`}>
-          {q.question_type === "mcq" ? "MCQ" : "Theory"}
-        </span>
-        {q.topic_tag && (
-          <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-500">
-            {q.topic_tag}
-          </span>
-        )}
-        {q.marks && (
-          <span className="ml-auto text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-            {q.marks} marks
-          </span>
-        )}
-      </div>
-      <p className="text-sm leading-7 whitespace-pre-wrap mb-4" style={{ color: "var(--sp-text)" }}>
-        {q.question_text}
-      </p>
-      {q.question_type === "mcq" ? <PracticeMCQ q={q} /> : <PracticeTheory q={q} />}
-    </div>
-  );
-}
-
-function GateBanner({ hiddenCount, type }: { hiddenCount: number; type: "practice" | "preview" }) {
-  return (
-    <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-6 text-center">
-      <div className="flex justify-center mb-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/15">
-          <Lock className="h-4 w-4 text-indigo-500" />
-        </div>
-      </div>
-      <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-        {type === "practice"
-          ? `${hiddenCount} more question${hiddenCount !== 1 ? "s" : ""} locked`
-          : "Paper preview locked"}
-      </p>
-      <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-        {type === "practice"
-          ? `Free plan limits practice to ${FREE_PRACTICE_CAP} questions`
-          : "Upgrade to view and download the original paper"}
-      </p>
-      <Link
-        href="/dashboard/subscribe"
-        className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
+      {/* Modal header */}
+      <div
+        className="flex items-center gap-3 px-4 py-3.5 border-b shrink-0"
+        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
       >
-        <Crown className="h-3.5 w-3.5" />
-        Unlock — Basic, Pro or Premium
-        <ArrowRight className="h-3.5 w-3.5" />
-      </Link>
+        <button
+          onClick={onClose}
+          className="flex items-center justify-center h-8 w-8 rounded-lg transition"
+          style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+        >
+          <X size={15} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>
+            Practice Quiz
+          </p>
+          <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+            {visible.length} question{visible.length !== 1 ? "s" : ""}
+            {mcqCount > 0 && ` · ${mcqCount} MCQ`}
+            {theoryCount > 0 && ` · ${theoryCount} Theory`}
+          </p>
+        </div>
+        {/* Progress */}
+        <span className="text-xs font-semibold shrink-0" style={{ color: "var(--sp-text-3)" }}>
+          {index + 1} / {visible.length}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-1 shrink-0" style={{ background: "var(--sp-bg-muted)" }}>
+        <div
+          className="h-full bg-indigo-500 transition-all duration-300"
+          style={{ width: `${((index + 1) / visible.length) * 100}%` }}
+        />
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
+        <SecureWrap userEmail={userEmail} enabled={isPaid}>
+          <div
+            className="rounded-2xl border p-5"
+            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+          >
+            {/* Question meta */}
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+              <span className="text-xs font-bold text-indigo-500">
+                Question {q.question_number ?? index + 1}
+              </span>
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                  q.question_type === "mcq"
+                    ? "border-blue-500/20 bg-blue-500/10 text-blue-500"
+                    : "border-slate-500/20 bg-slate-500/10 text-slate-500"
+                }`}
+              >
+                {q.question_type === "mcq" ? "MCQ" : "Theory"}
+              </span>
+              {q.topic_tag && (
+                <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-500">
+                  {q.topic_tag}
+                </span>
+              )}
+              {q.marks && (
+                <span className="ml-auto text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+                  {q.marks} marks
+                </span>
+              )}
+            </div>
+
+            <p className="text-sm leading-7 whitespace-pre-wrap mb-4" style={{ color: "var(--sp-text)" }}>
+              {q.question_text}
+            </p>
+
+            {q.question_type === "mcq" ? <PracticeMCQ q={q} /> : <PracticeTheory q={q} />}
+          </div>
+        </SecureWrap>
+
+        {/* Gate banner */}
+        {isGated && index === visible.length - 1 && (
+          <div
+            className="rounded-2xl border p-6 text-center"
+            style={{ borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.05)" }}
+          >
+            <div
+              className="flex h-10 w-10 items-center justify-center rounded-xl mx-auto mb-3"
+              style={{ background: "rgba(99,102,241,0.12)" }}
+            >
+              <Lock className="h-4 w-4 text-indigo-500" />
+            </div>
+            <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+              {hidden} more question{hidden !== 1 ? "s" : ""} locked
+            </p>
+            <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+              Free plan limits practice to {FREE_PRACTICE_CAP} questions
+            </p>
+            <Link
+              href="/dashboard/subscribe"
+              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
+            >
+              <Crown className="h-3.5 w-3.5" />
+              Unlock all questions
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        )}
+      </div>
+
+      {/* Navigation footer */}
+      <div
+        className="flex items-center gap-3 px-4 py-3.5 border-t shrink-0"
+        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
+      >
+        <button
+          onClick={() => setIndex(i => Math.max(0, i - 1))}
+          disabled={index === 0}
+          className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-xs font-semibold transition disabled:opacity-30"
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+        >
+          <ArrowLeft size={13} /> Prev
+        </button>
+
+        <div className="flex-1 flex justify-center gap-1.5 overflow-hidden">
+          {visible.map((_, i) => (
+            <button
+              key={i}
+              onClick={() => setIndex(i)}
+              className="h-1.5 rounded-full transition-all shrink-0"
+              style={{
+                width:      i === index ? "20px" : "6px",
+                background: i === index ? "var(--sp-indigo, #6366f1)" : "var(--sp-border)",
+              }}
+            />
+          ))}
+        </div>
+
+        <button
+          onClick={() => setIndex(i => Math.min(visible.length - 1, i + 1))}
+          disabled={index === visible.length - 1}
+          className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-xs font-semibold transition disabled:opacity-30"
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+        >
+          Next <ArrowRight size={13} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -426,7 +648,7 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
       try {
         const res = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/api/answers/my/${questionId}`,
-          { headers: { Authorization: `Bearer ${session.access_token}` } }
+          { headers: { Authorization: `Bearer ${session.access_token}` } },
         );
         if (res.ok) setSubmissions(await res.json());
       } finally {
@@ -451,16 +673,13 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
 
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/answers/submit`,
-        { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, body: formData }
+        { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, body: formData },
       );
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.detail || "Failed to submit. Please try again.");
       }
-
-      // ── FIX: resolve JSON before entering setState ──
       const newSub = await res.json();
-
       setSubmissions(prev => [{
         id: newSub.id,
         status: "pending",
@@ -471,7 +690,6 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         created_at: new Date().toISOString(),
         reviewed_at: null,
       }, ...prev]);
-
       setText("");
       setFile(null);
     } catch (e) {
@@ -492,19 +710,24 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
           <p className="text-xs font-semibold px-1" style={{ color: "var(--sp-text-3)" }}>
             Your submissions ({submissions.length})
           </p>
-          {submissions.map((sub) => (
-            <div key={sub.id} className="rounded-2xl border p-4 space-y-3"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+          {submissions.map(sub => (
+            <div
+              key={sub.id}
+              className="rounded-2xl border p-4 space-y-3"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+            >
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-xs" style={{ color: "var(--sp-text-3)" }}>
                   {new Date(sub.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}
                 </span>
                 {sub.status === "reviewed" ? (
-                  <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-[10px] font-semibold text-emerald-500">
+                  <span className="flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold text-emerald-500"
+                    style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.08)" }}>
                     <CheckCircle2 size={10} /> Reviewed
                   </span>
                 ) : (
-                  <span className="flex items-center gap-1 rounded-full bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 text-[10px] font-semibold text-amber-500">
+                  <span className="flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold"
+                    style={{ borderColor: "rgba(245,158,11,0.2)", background: "rgba(245,158,11,0.08)", color: "#f59e0b" }}>
                     <Clock size={10} /> Pending review
                   </span>
                 )}
@@ -524,7 +747,8 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
                 </div>
               )}
               {sub.status === "reviewed" && sub.feedback && (
-                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1">
+                <div className="rounded-xl border p-3 space-y-1"
+                  style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.05)" }}>
                   <p className="text-[10px] font-semibold text-emerald-500">Feedback from SparkL</p>
                   <p className="text-sm leading-6 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
                     {sub.feedback}
@@ -541,28 +765,32 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         </div>
       )}
 
-      <div className="rounded-2xl border p-5 space-y-4"
-        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+      <div
+        className="rounded-2xl border p-5 space-y-4"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+      >
         <div>
           <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
             {submissions.length > 0 ? "Submit another solution" : "Submit your solution"}
           </p>
           <p className="mt-0.5 text-xs" style={{ color: "var(--sp-text-3)" }}>
-            Have answers or worked solutions? Share them here for feedback.
+            Share your worked answers for feedback.
           </p>
         </div>
-
         <textarea
-          value={text} onChange={(e) => setText(e.target.value)}
-          placeholder="Type your solution or answers here…" rows={5}
+          value={text}
+          onChange={e => setText(e.target.value)}
+          placeholder="Type your solution here…"
+          rows={5}
           className="w-full rounded-xl border px-4 py-3 text-sm outline-none transition resize-none"
           style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text)" }}
         />
-
         <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={() => fileRef.current?.click()}
+          <button
+            onClick={() => fileRef.current?.click()}
             className="flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition"
-            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
+            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+          >
             <Paperclip size={13} />
             {file ? "Change file" : "Attach file"}
           </button>
@@ -570,22 +798,31 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
             <div className="flex items-center gap-2 rounded-xl border px-3 py-1.5"
               style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
               <span className="text-xs truncate max-w-[160px]" style={{ color: "var(--sp-text-2)" }}>{file.name}</span>
-              <button onClick={() => setFile(null)}><X size={12} style={{ color: "var(--sp-text-3)" }} /></button>
+              <button onClick={() => setFile(null)}>
+                <X size={12} style={{ color: "var(--sp-text-3)" }} />
+              </button>
             </div>
           )}
-          <input ref={fileRef} type="file" accept="image/*,application/pdf"
-            className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*,application/pdf"
+            className="hidden"
+            onChange={e => setFile(e.target.files?.[0] ?? null)}
+          />
         </div>
-
         {submitError && (
-          <div className="flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2.5">
+          <div className="flex items-start gap-2 rounded-xl border px-3 py-2.5"
+            style={{ borderColor: "rgba(239,68,68,0.2)", background: "rgba(239,68,68,0.05)" }}>
             <AlertCircle size={13} className="mt-0.5 shrink-0 text-red-400" />
             <p className="text-xs text-red-400">{submitError}</p>
           </div>
         )}
-
-        <button onClick={handleSubmit} disabled={(!text.trim() && !file) || submitting}
-          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed">
+        <button
+          onClick={handleSubmit}
+          disabled={(!text.trim() && !file) || submitting}
+          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
+        >
           {submitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
           {submitting ? "Submitting…" : "Submit solution"}
         </button>
@@ -605,9 +842,9 @@ export default function QuestionDetailPage() {
   const params     = useParams();
   const questionId = params?.id as string;
 
-  const [data, setData]       = useState<QuestionDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState("");
+  const [data, setData]           = useState<QuestionDetail | null>(null);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState("");
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   const [processedQuestions, setProcessedQuestions] = useState<ProcessedQuestion[]>([]);
@@ -617,9 +854,11 @@ export default function QuestionDetailPage() {
     is_paid: false, plan: "free", read_mode_percent: 100, practice_mode_max: null,
   });
 
-  const [tab, setTab] = useState<Tab>("view");
-  const [showPreview, setShowPreview] = useState(false);
+  const [tab, setTab]               = useState<Tab>("text");
+  const [showPractice, setShowPractice] = useState(false);
+  const [showPreview, setShowPreview]   = useState(false);
 
+  // ── Data load ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!questionId) return;
     async function load() {
@@ -641,11 +880,10 @@ export default function QuestionDetailPage() {
 
         if (limitsRes.ok) {
           const d = await limitsRes.json();
-          const plan = (d.effective_plan ?? d.plan ?? "free").toLowerCase();
+          const plan   = (d.effective_plan ?? d.plan ?? "free").toLowerCase();
           const isPaid = d.is_paid === true || d.is_trial === true;
           setLimits({
-            is_paid: isPaid,
-            plan,
+            is_paid: isPaid, plan,
             read_mode_percent: d.read_mode_percent ?? 100,
             practice_mode_max: d.practice_mode_max ?? null,
           });
@@ -658,6 +896,7 @@ export default function QuestionDetailPage() {
           .then(setProcessedQuestions)
           .catch(() => {})
           .finally(() => setQuestionsLoading(false));
+
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong.");
       } finally {
@@ -667,17 +906,21 @@ export default function QuestionDetailPage() {
     load();
   }, [questionId]);
 
+  // ── Global print/copy block ────────────────────────────────────────────────
   useEffect(() => {
     const style = document.createElement("style");
-    style.id    = "sp-anticap";
+    style.id    = "sp-global-sec";
     style.textContent = `
-      .sp-protected { user-select: none; -webkit-user-select: none; }
-      @media print { .sp-protected { filter: blur(20px) !important; } }
+      @media print {
+        .sp-secure { filter: blur(40px) !important; opacity: 0.05 !important; }
+        .sp-secure * { visibility: hidden !important; }
+      }
     `;
     document.head.appendChild(style);
-    return () => { document.getElementById("sp-anticap")?.remove(); };
+    return () => { document.getElementById("sp-global-sec")?.remove(); };
   }, []);
 
+  // ── Guards ─────────────────────────────────────────────────────────────────
   if (loading) return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <Loader2 className="h-7 w-7 animate-spin text-indigo-500" />
@@ -695,241 +938,317 @@ export default function QuestionDetailPage() {
 
   const isPdf        = data.mime_type?.startsWith("application/pdf");
   const isLowQuality = data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
+  const hasText      = !!(data.extracted_text?.trim());
   const hasProcessed = processedQuestions.length > 0;
   const mcqCount     = processedQuestions.filter(q => q.question_type === "mcq").length;
   const theoryCount  = processedQuestions.filter(q => q.question_type === "theory").length;
-  const hasText      = !!(data.extracted_text?.trim());
-
-  const practiceCap      = FREE_PRACTICE_CAP;
-  const visibleQuestions = !limits.is_paid
-    ? processedQuestions.slice(0, practiceCap)
-    : processedQuestions;
-  const hiddenCount = processedQuestions.length - visibleQuestions.length;
-  const isGated     = !limits.is_paid && hiddenCount > 0;
 
   return (
-    <div className="min-h-screen px-4 py-8 sm:px-6" style={{ background: "var(--sp-bg)" }}>
-      <div className="mx-auto max-w-3xl">
+    <>
+      {/* ── Practice full-screen modal ─────────────────────────────────── */}
+      {showPractice && hasProcessed && (
+        <PracticeModal
+          questions={processedQuestions}
+          isPaid={limits.is_paid}
+          userEmail={userEmail}
+          onClose={() => setShowPractice(false)}
+        />
+      )}
 
-        <Link
-          href={data.course ? `/dashboard/courses/${data.course.id}` : "/dashboard"}
-          className="inline-flex items-center gap-1.5 text-sm font-medium transition-colors"
-          style={{ color: "var(--sp-text-3)" }}
-        >
-          <ArrowLeft size={15} /> Back
-        </Link>
+      <div
+        className="min-h-screen px-4 py-8 sm:px-6 pb-28"
+        style={{ background: "var(--sp-bg)" }}
+      >
+        <div className="mx-auto max-w-3xl">
 
-        <div className="mt-4 rounded-2xl border p-5"
-          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-          <div className="flex items-start gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-500/10">
-              <FileText size={20} className="text-indigo-500" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <h1 className="text-lg font-bold" style={{ color: "var(--sp-text)" }}>{data.title}</h1>
-              <p className="mt-0.5 text-sm" style={{ color: "var(--sp-text-3)" }}>
-                {data.course?.name ?? "—"}
-                {data.semester?.name ? ` · ${data.semester.name}` : ""}
-                {data.year ? ` · ${data.year}` : ""}
-              </p>
-            </div>
-          </div>
+          {/* Back link */}
+          <Link
+            href={data.course ? `/dashboard/courses/${data.course.id}` : "/dashboard"}
+            className="inline-flex items-center gap-1.5 text-sm font-medium transition-colors"
+            style={{ color: "var(--sp-text-3)" }}
+          >
+            <ArrowLeft size={15} /> Back
+          </Link>
 
-          {isLowQuality && (
-            <div className="mt-4 flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
-              <AlertCircle size={13} className="mt-0.5 shrink-0 text-amber-500" />
-              <p className="text-xs text-amber-500">
-                This scan quality is low — some content may be unclear.
-              </p>
-            </div>
-          )}
-
-          <div className="mt-5 flex items-center gap-1 flex-wrap border-t pt-4"
-            style={{ borderColor: "var(--sp-border)" }}>
-
-            {isPdf && (
-              <button
-                onClick={() => setTab("view")}
-                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
-                  tab === "view" ? "bg-indigo-600 text-white" : ""
-                }`}
-                style={tab !== "view" ? { color: "var(--sp-text-3)", background: "var(--sp-bg-muted)" } : {}}
+          {/* ── Paper header card ──────────────────────────────────────── */}
+          <div
+            className="mt-4 rounded-2xl border p-5"
+            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+          >
+            <div className="flex items-start gap-3">
+              <div
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
+                style={{ background: "rgba(99,102,241,0.1)" }}
               >
-                <FileText size={12} /> View paper
-              </button>
-            )}
-
-            {hasText && (
-              <button
-                onClick={() => setTab("read")}
-                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
-                  tab === "read" ? "bg-indigo-600 text-white" : ""
-                }`}
-                style={tab !== "read" ? { color: "var(--sp-text-3)", background: "var(--sp-bg-muted)" } : {}}
-              >
-                <BookOpen size={12} /> Read text
-                {!limits.is_paid && (
-                  <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[8px] font-bold text-amber-400">
-                    Preview
-                  </span>
-                )}
-              </button>
-            )}
-
-            {questionsLoading ? (
-              <div className="flex items-center gap-1.5 px-3.5 py-2">
-                <Loader2 size={12} className="animate-spin text-indigo-400" />
-                <span className="text-xs" style={{ color: "var(--sp-text-3)" }}>Loading…</span>
+                <FileText size={20} className="text-indigo-500" />
               </div>
-            ) : hasProcessed ? (
-              <button
-                onClick={() => setTab("practice")}
-                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
-                  tab === "practice" ? "bg-indigo-600 text-white" : ""
-                }`}
-                style={tab !== "practice" ? { color: "var(--sp-text-3)", background: "var(--sp-bg-muted)" } : {}}
-              >
-                <Play size={12} /> Practice
-                <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${
-                  tab === "practice" ? "bg-white/20 text-white" : "bg-indigo-500/15 text-indigo-500"
-                }`}>
-                  {processedQuestions.length}
-                </span>
-              </button>
-            ) : null}
+              <div className="min-w-0 flex-1">
+                <h1 className="text-lg font-bold" style={{ color: "var(--sp-text)" }}>{data.title}</h1>
+                <p className="mt-0.5 text-sm" style={{ color: "var(--sp-text-3)" }}>
+                  {data.course?.name ?? "—"}
+                  {data.semester?.name ? ` · ${data.semester.name}` : ""}
+                  {data.year ? ` · ${data.year}` : ""}
+                </p>
+              </div>
+            </div>
 
-            <button
-              onClick={() => setTab("submit")}
-              className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
-                tab === "submit" ? "bg-indigo-600 text-white" : ""
-              }`}
-              style={tab !== "submit" ? { color: "var(--sp-text-3)", background: "var(--sp-bg-muted)" } : {}}
+            {isLowQuality && (
+              <div
+                className="mt-4 flex items-start gap-2 rounded-xl border px-3 py-2.5"
+                style={{ borderColor: "rgba(245,158,11,0.2)", background: "rgba(245,158,11,0.06)" }}
+              >
+                <AlertCircle size={13} className="mt-0.5 shrink-0" style={{ color: "#f59e0b" }} />
+                <p className="text-xs" style={{ color: "#f59e0b" }}>
+                  This scan quality is low — some content may be unclear.
+                </p>
+              </div>
+            )}
+
+            {/* ── Tab bar ─────────────────────────────────────────────── */}
+            <div
+              className="mt-5 flex items-center gap-1 flex-wrap border-t pt-4"
+              style={{ borderColor: "var(--sp-border)" }}
             >
-              <Send size={12} /> Submit solution
-            </button>
+              {hasText && (
+                <TabBtn active={tab === "text"} onClick={() => setTab("text")}>
+                  <BookOpen size={12} /> Read text
+                  {!limits.is_paid && (
+                    <span
+                      className="rounded-full px-1.5 py-0.5 text-[8px] font-bold"
+                      style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b" }}
+                    >
+                      Preview
+                    </span>
+                  )}
+                </TabBtn>
+              )}
 
-            {hasProcessed && (
-              <div className="ml-auto flex items-center gap-3">
-                {mcqCount > 0 && (
-                  <span className="flex items-center gap-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-                    <Zap size={10} className="text-blue-500" />{mcqCount} MCQ
-                  </span>
-                )}
-                {theoryCount > 0 && (
-                  <span className="flex items-center gap-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-                    <BookOpen size={10} />{theoryCount} Theory
-                  </span>
-                )}
-              </div>
-            )}
+              {isPdf && (
+                <TabBtn active={tab === "paper"} onClick={() => setTab("paper")}>
+                  <FileText size={12} /> View paper
+                  {!limits.is_paid && (
+                    <Lock size={10} style={{ color: "var(--sp-text-3)" }} />
+                  )}
+                </TabBtn>
+              )}
+
+              <TabBtn active={tab === "submit"} onClick={() => setTab("submit")}>
+                <Send size={12} /> Submit solution
+              </TabBtn>
+
+              {/* Question type stats — right aligned */}
+              {hasProcessed && (
+                <div className="ml-auto flex items-center gap-3">
+                  {mcqCount > 0 && (
+                    <span className="flex items-center gap-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+                      <Zap size={10} className="text-blue-500" />{mcqCount} MCQ
+                    </span>
+                  )}
+                  {theoryCount > 0 && (
+                    <span className="flex items-center gap-1 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+                      <BookOpen size={10} />{theoryCount} Theory
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
 
-        <div className="mt-4 space-y-4">
+          {/* ── Tab content ────────────────────────────────────────────── */}
+          <div className="mt-4 space-y-4">
 
-          {tab === "view" && isPdf && (
-            <div className="space-y-3">
-              {limits.is_paid ? (
-                <div className="rounded-2xl border p-5"
-                  style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-                  <button
-                    onClick={() => setShowPreview(v => !v)}
-                    className="flex items-center gap-2 mb-4 rounded-xl border px-4 py-2.5 text-sm font-semibold transition w-full justify-center"
-                    style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
-                  >
-                    {showPreview
-                      ? <><EyeOff size={14} /> Hide paper preview</>
-                      : <><Eye size={14} /> Show paper preview</>}
-                  </button>
+            {/* TEXT TAB — hero */}
+            {tab === "text" && (
+              hasText ? (
+                <ExtractedTextHero
+                  text={data.extracted_text!}
+                  isPaid={limits.is_paid}
+                  userEmail={userEmail}
+                />
+              ) : (
+                <EmptyState
+                  icon={<BookOpen size={22} className="text-indigo-400" />}
+                  title="No extracted text yet"
+                  body="Our team is still processing this paper. Check back shortly."
+                />
+              )
+            )}
 
-                  {showPreview && (
-                    <ProtectedWrap userEmail={userEmail} enabled>
-                      <div className="sp-protected">
+            {/* PAPER TAB */}
+            {tab === "paper" && isPdf && (
+              <div
+                className="rounded-2xl border p-5"
+                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+              >
+                {limits.is_paid ? (
+                  <>
+                    <button
+                      onClick={() => setShowPreview(v => !v)}
+                      className="flex items-center gap-2 mb-4 rounded-xl border px-4 py-2.5 text-sm font-semibold transition w-full justify-center"
+                      style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+                    >
+                      {showPreview
+                        ? <><EyeOff size={14} /> Hide paper preview</>
+                        : <><Eye size={14} /> Show paper preview</>}
+                    </button>
+                    {showPreview && (
+                      <SecureWrap userEmail={userEmail} enabled>
                         <InlinePaperViewer
                           questionId={questionId}
                           isPaid={limits.is_paid}
                           userEmail={userEmail}
                         />
-                      </div>
-                    </ProtectedWrap>
-                  )}
-                </div>
-              ) : (
-                <GateBanner hiddenCount={0} type="preview" />
-              )}
-            </div>
-          )}
+                      </SecureWrap>
+                    )}
+                  </>
+                ) : (
+                  <GateBanner type="preview" hiddenCount={0} />
+                )}
+              </div>
+            )}
 
-          {tab === "view" && !isPdf && (
-            <div className="rounded-2xl border p-8 text-center"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <FileText size={24} className="mx-auto mb-3 text-indigo-400" />
-              <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-                No viewer for this file type
-              </p>
-              <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                Switch to Read or Practice to access the content.
-              </p>
-            </div>
-          )}
+            {tab === "paper" && !isPdf && (
+              <EmptyState
+                icon={<FileText size={22} className="text-indigo-400" />}
+                title="No viewer for this file type"
+                body="Switch to Read text to access the content."
+              />
+            )}
 
-          {tab === "read" && hasText && (
-            <ExtractedTextView
-              text={data.extracted_text!}
-              isPaid={limits.is_paid}
-              userEmail={userEmail}
-            />
-          )}
+            {/* SUBMIT TAB */}
+            {tab === "submit" && (
+              <SubmitSolutionSection questionId={questionId} />
+            )}
 
-          {tab === "practice" && (
-            <div className="space-y-4">
-              {hasProcessed ? (
-                <>
-                  <div className="flex items-center justify-between px-1">
-                    <p className="text-xs font-semibold" style={{ color: "var(--sp-text-3)" }}>
-                      {visibleQuestions.length} question{visibleQuestions.length !== 1 ? "s" : ""}
-                      {!limits.is_paid ? ` (free limit: ${FREE_PRACTICE_CAP})` : ""}
-                    </p>
-                    <button
-                      onClick={() => setTab("view")}
-                      className="flex items-center gap-1 text-xs font-semibold transition"
-                      style={{ color: "var(--sp-text-3)" }}
-                    >
-                      <RotateCcw size={11} /> Back to paper
-                    </button>
-                  </div>
-
-                  <ProtectedWrap userEmail={userEmail} enabled>
-                    <div className="sp-protected space-y-4">
-                      {visibleQuestions.map((q, i) => (
-                        <PracticeQuestion key={q.id} q={q} index={i} />
-                      ))}
-                    </div>
-                  </ProtectedWrap>
-
-                  {isGated && <GateBanner hiddenCount={hiddenCount} type="practice" />}
-                </>
-              ) : (
-                <div className="rounded-2xl border p-10 text-center"
-                  style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-                  <Sparkles size={24} className="mx-auto mb-3 text-violet-400" />
-                  <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-                    Practice questions not ready yet
-                  </p>
-                  <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                    Our team are currently processing this paper. Check back shortly.
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {tab === "submit" && (
-            <SubmitSolutionSection questionId={questionId} />
-          )}
-
+          </div>
         </div>
       </div>
+
+      {/* ── Floating Practice Bubble ──────────────────────────────────── */}
+      {(hasProcessed || questionsLoading) && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 px-4 w-full max-w-xs">
+          {questionsLoading ? (
+            <div
+              className="flex items-center gap-3 rounded-2xl border px-5 py-3.5 shadow-xl backdrop-blur-sm"
+              style={{
+                background:   "var(--sp-bg-card)",
+                borderColor:  "var(--sp-border)",
+              }}
+            >
+              <Loader2 size={16} className="animate-spin text-indigo-500 shrink-0" />
+              <span className="text-sm font-medium" style={{ color: "var(--sp-text-2)" }}>
+                Loading questions…
+              </span>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowPractice(true)}
+              className="w-full flex items-center gap-3 rounded-2xl px-5 py-3.5 shadow-2xl transition active:scale-95"
+              style={{
+                background:  "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+                boxShadow:   "0 8px 32px rgba(99,102,241,0.45)",
+              }}
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/20">
+                <Play size={14} className="text-white" fill="white" />
+              </div>
+              <div className="text-left min-w-0 flex-1">
+                <p className="text-sm font-bold text-white leading-none">
+                  Take Quiz
+                </p>
+                <p className="text-[11px] text-indigo-200 mt-0.5">
+                  {processedQuestions.length} question{processedQuestions.length !== 1 ? "s" : ""}
+                  {mcqCount > 0 && ` · ${mcqCount} MCQ`}
+                  {theoryCount > 0 && ` · ${theoryCount} Theory`}
+                </p>
+              </div>
+              <Sparkles size={16} className="text-indigo-200 shrink-0" />
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ── Small helpers ──────────────────────────────────────────────────────────────
+
+function TabBtn({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all"
+      style={
+        active
+          ? { background: "#4f46e5", color: "#fff" }
+          : { background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+function EmptyState({
+  icon,
+  title,
+  body,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+}) {
+  return (
+    <div
+      className="rounded-2xl border p-10 text-center"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+    >
+      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl"
+        style={{ background: "rgba(99,102,241,0.1)" }}>
+        {icon}
+      </div>
+      <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>{title}</p>
+      <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>{body}</p>
+    </div>
+  );
+}
+
+function GateBanner({ hiddenCount, type }: { hiddenCount: number; type: "practice" | "preview" }) {
+  return (
+    <div className="rounded-2xl border p-6 text-center"
+      style={{ borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.05)" }}>
+      <div className="flex justify-center mb-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl"
+          style={{ background: "rgba(99,102,241,0.12)" }}>
+          <Lock className="h-4 w-4 text-indigo-500" />
+        </div>
+      </div>
+      <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+        {type === "practice"
+          ? `${hiddenCount} more question${hiddenCount !== 1 ? "s" : ""} locked`
+          : "Paper preview locked"}
+      </p>
+      <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+        {type === "practice"
+          ? `Free plan limits practice to ${FREE_PRACTICE_CAP} questions`
+          : "Upgrade to view and download the original paper"}
+      </p>
+      <Link
+        href="/dashboard/subscribe"
+        className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
+      >
+        <Crown className="h-3.5 w-3.5" />
+        Unlock — Basic, Pro or Premium
+        <ArrowRight className="h-3.5 w-3.5" />
+      </Link>
     </div>
   );
 }
