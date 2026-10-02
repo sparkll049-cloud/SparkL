@@ -56,7 +56,6 @@ const SOURCE_COLORS: Record<SourceType, string> = {
 const API = process.env.NEXT_PUBLIC_API_URL;
 
 // ── API errors ─────────────────────────────────────────────────────────────────
-// The server now sends user-ready messages (limits, refusals, plan gates), so we show them as-is.
 
 class ApiError extends Error {}
 
@@ -103,8 +102,11 @@ function MathSpan({ tex, display }: { tex: string; display: boolean }) {
   }, []);
   useEffect(() => {
     if (!ready || !ref.current) return;
-    try { (window as any).katex.render(tex, ref.current, { throwOnError: false, displayMode: display }); }
-    catch { if (ref.current) ref.current.textContent = tex; }
+    try { 
+      (window as any).katex.render(tex, ref.current, { throwOnError: false, displayMode: display }); 
+    } catch { 
+      if (ref.current) ref.current.textContent = tex; 
+    }
   }, [tex, display, ready]);
   if (!ready) return <span style={{ fontFamily: "monospace", fontSize: "0.8em", color: "var(--sp-text-3)", background: "var(--sp-bg-muted)", borderRadius: 4, padding: "1px 4px" }}>{tex}</span>;
   return <span ref={ref} style={display ? { display: "block", overflowX: "auto", margin: "8px 0", textAlign: "center" } : { display: "inline" }} />;
@@ -512,7 +514,7 @@ function SessionCard({ session, onOpen, onDelete }: {
   async function confirm() {
     setBusy(true);
     const ok = await onDelete();
-    if (!ok) { setBusy(false); setConfirming(false); } // on success the card unmounts
+    if (!ok) { setBusy(false); setConfirming(false); }
   }
 
   return (
@@ -617,7 +619,7 @@ export default function CramPage() {
         setMessages(history.map(m => {
           if (m.role === "assistant" && m.content.startsWith("__QUIZ__:")) {
             try { return { role: "assistant" as const, content: "", quiz: JSON.parse(m.content.replace("__QUIZ__:", "")) }; }
-            catch { /* fall through to plain message */ }
+            catch { /* fall through */ }
           }
           return { role: m.role as "user" | "assistant", content: m.content };
         }));
@@ -718,7 +720,6 @@ export default function CramPage() {
         setMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: "assistant", content: "No response received. Please try again.", isError: true }; return u; });
       }
     } catch (e) {
-      // roll the counter back: the server did not count a rejected request
       setLimits(prev => prev ? { ...prev, messages_today: Math.max(0, prev.messages_today - 1) } : prev);
       const err: Message = { role: "assistant", content: friendlyError(e), isError: true };
       setMessages(prev => {
