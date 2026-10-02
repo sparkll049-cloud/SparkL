@@ -1,18 +1,5 @@
 """
-routers/study.py
-----------------
-SparkL Cram: AI study assistant (phase 1 hardening).
-
-What changed from the previous version
-  - Notes-only tutoring with a fixed refusal (no outside knowledge).
-  - Rule-based safety / prompt-injection pre-check before any LLM call.
-  - Per-minute and per-day limits are now enforced (plan limits + policy ceiling).
-  - URLs and YouTube links are fetched ONCE at session creation through the
-    SSRF-safe fetcher, and the text is stored. Chat never touches the network.
-  - Image sessions are transcribed once at creation, so later turns still work.
-  - Quiz markers no longer leak into prompts as history.
-  - Old-message cleanup runs occasionally instead of on every chat call.
-  - Error text now matches the real plans (Basic, Pro, Premium).
+SparkL Cram: AI study assistant (phase 1 hardening with YouTube Transcript integration).
 """
 
 from __future__ import annotations
@@ -23,6 +10,7 @@ import io
 import json
 import os
 import random
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -31,6 +19,12 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+
+from youtube_transcript_api import (
+    YouTubeTranscriptApi,
+    TranscriptsDisabled,
+    NoTranscriptFound,
+)
 
 from app.auth import get_current_user
 from app.services.safe_fetch import FetchError, fetch_url_text, is_youtube_url
@@ -73,7 +67,7 @@ MESSAGE_TTL_DAYS  = 7
 GROQ_MODEL   = "openai/gpt-oss-120b"
 GEMINI_MODEL = "gemini-2.0-flash"
 
-VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text", "url"}
+VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text", "url", "youtube"}
 
 QUIZ_SYSTEM_PROMPT = """You are SparkL Cram, a quiz generator for Nigerian university and polytechnic students.
 
@@ -102,6 +96,40 @@ Format:
 }"""
 
 # ── Extractors ─────────────────────────────────────────────────────────────────
+
+def _extract_youtube_id(url: str) -> str | None:
+    """Extract 11-character video ID from YouTube URLs."""
+    patterns = [
+        r"(?:v=|\/)([0-9A-Za-z_-]{11}).*",
+        r"youtu\.be\/([0-9A-Za-z_-]{11})",
+        r"youtube\.com\/embed\/([0-9A-Za-z_-]{11})",
+        r"youtube\.com\/shorts\/([0-9A-Za-z_-]{11})"
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _get_youtube_transcript(video_id: str) -> str:
+    """Fetch transcripts/captions from YouTube."""
+    try:
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'en-US', 'en-GB'])
+        text_parts = [item['text'] for item in transcript_list]
+        return "\n".join(text_parts).strip()
+    except (TranscriptsDisabled, NoTranscriptFound):
+        raise HTTPException(
+            status_code=422,
+            detail="This YouTube video does not have readable captions/transcripts enabled."
+        )
+    except Exception as e:
+        print(f"[YouTube Transcript Fetch Error] {e}")
+        raise HTTPException(
+            status_code=422,
+            detail="Could not extract captions from this YouTube link. Please verify the link."
+        )
+
 
 def _extract_pdf(data: bytes) -> str:
     try:
@@ -275,7 +303,7 @@ def _get_cram_limits(user_id: str) -> dict:
 
 async def _enforce_daily_message_limit(user_id: str, limits: dict) -> int:
     used = await _run(_sync_count_user_messages_today, user_id)
-    plan_cap = limits.get("cram_daily_messages")          # None = unlimited on this plan
+    plan_cap = limits.get("cram_daily_messages")
     caps = [LIMITS["max_user_messages_per_day"]] + ([plan_cap] if plan_cap else [])
     cap = min(caps)
     if used >= cap:
@@ -352,8 +380,6 @@ async def _stream_gemini_image(
 async def _stream_text_with_fallback(
     groq_messages: list[dict], gemini_prompt: str, history_text: str,
 ) -> AsyncGenerator[str, None]:
-    """Groq first. Fall back to Gemini only if Groq failed BEFORE sending anything,
-    so a mid-stream failure never produces a duplicated answer."""
     sent_any = False
     try:
         async for chunk in _stream_groq(groq_messages):
@@ -371,7 +397,6 @@ async def _stream_text_with_fallback(
 
 
 async def _guard_stream(gen: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
-    """If the model answers NOT_IN_NOTES, swap in the fixed refusal text."""
     token = NOT_IN_NOTES_TOKEN
     buf, decided = "", False
     async for chunk in gen:
@@ -390,7 +415,6 @@ async def _guard_stream(gen: AsyncGenerator[str, None]) -> AsyncGenerator[str, N
 
 
 async def _extract_image_text(data: bytes, mime: str) -> str:
-    """One Gemini call at session creation so later turns work from stored text."""
     client = _get_gemini_client()
     resp = await client.aio.models.generate_content(
         model=GEMINI_MODEL,
@@ -512,16 +536,25 @@ async def create_session(
     extracted_text: str | None = None
     stored_url:     str | None = None
 
-    if source_type == "url":
+    if source_type in ("url", "youtube"):
         if not limits.get("cram_youtube"):
             raise HTTPException(status_code=403, detail="Link and YouTube study is a Premium feature.")
         if not source_url or not source_url.strip():
             raise HTTPException(status_code=422, detail="A link is required for URL sessions.")
+        
         stored_url = source_url.strip()
-        try:
-            extracted_text = await fetch_url_text(stored_url)
-        except FetchError as e:
-            raise HTTPException(status_code=422, detail=str(e))
+        video_id = _extract_youtube_id(stored_url)
+
+        if source_type == "youtube" or video_id:
+            if not video_id:
+                raise HTTPException(status_code=422, detail="Invalid YouTube URL provided.")
+            extracted_text = await _run(_get_youtube_transcript, video_id)
+            source_type = "youtube"
+        else:
+            try:
+                extracted_text = await fetch_url_text(stored_url)
+            except FetchError as e:
+                raise HTTPException(status_code=422, detail=str(e))
 
     elif file and file.filename:
         file_bytes = await file.read()
@@ -594,18 +627,15 @@ async def study_chat(
     if len(message) > 4000:
         raise HTTPException(status_code=413, detail="That message is too long. Keep it under 4,000 characters.")
 
-    # Cheap deterministic gates first: nothing below here costs an LLM call.
     check_minute_rate(user_id)
     await _enforce_daily_message_limit(user_id, limits)
 
     session = await _get_session(session_id, user_id)
     extracted_text = session.get("extracted_text") or ""
 
-    # Rare, non-blocking housekeeping (was: every request)
     if random.random() < 0.02:
         asyncio.create_task(_run(_sync_cleanup_old_messages))
 
-    # Safety / injection pre-check (skip for quiz, whose message is fixed by the app)
     if mode != "quiz":
         refusal = safety_refusal(message)
         if refusal:
@@ -615,7 +645,6 @@ async def study_chat(
             ])
             return _text_stream(refusal)
 
-    # Optional image attached to this message
     image_b64 = image_mime = ""
     if file and file.filename:
         raw = await file.read()
@@ -625,13 +654,11 @@ async def study_chat(
         if mime.startswith("image/") or file.filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
             image_b64, image_mime = base64.b64encode(raw).decode(), mime or "image/jpeg"
 
-    # Evidence gate: no notes and no image means nothing to answer from.
     if not extracted_text and not image_b64:
         return _text_stream(REFUSAL_NOT_IN_NOTES)
 
     context_block = _build_context_block(extracted_text, session["title"]) if extracted_text else ""
 
-    # ── Quiz (JSON response) ───────────────────────────────────────────
     if mode == "quiz":
         if not context_block:
             raise HTTPException(status_code=422, detail="There are no notes in this session to build a quiz from.")
@@ -646,7 +673,6 @@ async def study_chat(
         ])
         return JSONResponse({"type": "quiz", "data": quiz_data})
 
-    # ── Build prompt ───────────────────────────────────────────────────
     history = _prompt_history(await _load_messages(session_id, limit=MAX_HISTORY_MSGS))
     history_text = "\n".join(
         f"{'Student' if m['role'] == 'user' else 'SparkL Cram'}: {m['content']}" for m in history
