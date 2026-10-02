@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Loader2, FileText, CheckCircle2, XCircle, Trash2,
   ExternalLink, ChevronDown, Pencil, Sparkles, Clock,
-  AlertCircle, RefreshCw, Play,
+  AlertCircle, Play, RefreshCw,
 } from "lucide-react";
-
 import { createClient } from "@/utils/supabase/client";
 import ConfirmDialog from "../components/ConfirmDialog";
 import QuestionReviewPanel from "@/components/QuestionReviewPanel";
 import AdminPaperViewer from "@/components/AdminPaperViewer";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Question {
   id: string;
@@ -21,13 +22,17 @@ interface Question {
   processing_error?: string | null;
   created_at: string;
   mime_type: string | null;
-  extracted_text: string | null;
+  // extracted_text is NOT in list response — fetched on demand
   rejection_reason: string | null;
   extraction_quality: number | null;
   course: { name: string } | null;
   semester: { name: string } | null;
   uploader: { full_name: string | null } | null;
   ai_processed: boolean;
+}
+
+interface QuestionWithText extends Question {
+  extracted_text: string | null;
 }
 
 const TABS = [
@@ -46,12 +51,49 @@ const PANEL_THEME = {
   "--sp-text-3":   "#64748b",
 } as React.CSSProperties;
 
+// ── Error boundary for QuestionReviewPanel ────────────────────────────────────
+
+import React from "react";
+
+class ReviewPanelBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; message: string }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error.message };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 mt-3">
+          <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+          <p className="text-xs text-red-400">
+            Failed to load review panel. {this.state.message}
+          </p>
+          <button
+            onClick={() => this.setState({ hasError: false, message: "" })}
+            className="ml-auto text-xs text-slate-500 hover:text-slate-300"
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ── Status pill ───────────────────────────────────────────────────────────────
+
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { bg: string; label: string; icon: React.ReactNode }> = {
-    pending:  { bg: "bg-amber-500/10 text-amber-400 border border-amber-500/20",       label: "Pending",  icon: <Clock       className="h-3 w-3" /> },
+    pending:  { bg: "bg-amber-500/10 text-amber-400 border border-amber-500/20",       label: "Pending",  icon: <Clock        className="h-3 w-3" /> },
     approved: { bg: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20", label: "Approved", icon: <CheckCircle2 className="h-3 w-3" /> },
-    rejected: { bg: "bg-red-500/10 text-red-400 border border-red-500/20",             label: "Rejected", icon: <XCircle     className="h-3 w-3" /> },
+    rejected: { bg: "bg-red-500/10 text-red-400 border border-red-500/20",             label: "Rejected", icon: <XCircle      className="h-3 w-3" /> },
   };
   const s = map[status] ?? map.pending;
   return (
@@ -62,12 +104,9 @@ function StatusPill({ status }: { status: string }) {
 }
 
 // ── Processing badge ──────────────────────────────────────────────────────────
+
 function ProcessingBadge({
-  s,
-  errorMsg,
-  retryError,
-  onProcess,
-  processing,
+  s, errorMsg, retryError, onProcess, processing,
 }: {
   s?: string;
   errorMsg?: string | null;
@@ -75,7 +114,6 @@ function ProcessingBadge({
   onProcess: () => void;
   processing: boolean;
 }) {
-  // "ready" → show nothing (all good)
   if (!s || s === "ready") return null;
 
   if (s === "failed") return (
@@ -95,10 +133,7 @@ function ProcessingBadge({
         disabled={processing}
         className="flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-400 transition hover:bg-blue-500/20 disabled:opacity-50"
       >
-        {processing
-          ? <Loader2 size={12} className="animate-spin" />
-          : <Play size={12} />
-        }
+        {processing ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
         {processing ? "Processing…" : "Process now"}
       </button>
     </div>
@@ -111,7 +146,6 @@ function ProcessingBadge({
     </p>
   );
 
-  // "uploaded" = queued / in-progress
   return (
     <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
       <Loader2 className="h-3 w-3 animate-spin" />
@@ -121,44 +155,50 @@ function ProcessingBadge({
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
+
 export default function AdminQuestionsPage() {
   const supabase = createClient();
 
-  const [questions,    setQuestions]    = useState<Question[]>([]);
-  const [loading,      setLoading]      = useState(true);
-  const [error,        setError]        = useState("");
-  const [activeTab,    setActiveTab]    = useState<string>("pending");
-  const [actioningId,  setActioningId]  = useState<string | null>(null);
-  const [expandedId,   setExpandedId]   = useState<string | null>(null);
-  const [reviewId,     setReviewId]     = useState<string | null>(null);
-  const [previewId,    setPreviewId]    = useState<string | null>(null);
-  const [selected,     setSelected]     = useState<Set<string>>(new Set());
-  const [bulkLoading,  setBulkLoading]  = useState(false);
+  const [questions,   setQuestions]   = useState<Question[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState("");
+  const [activeTab,   setActiveTab]   = useState<string>("pending");
+  const [actioningId, setActioningId] = useState<string | null>(null);
 
-  // Per-question processing state: id → { processing, error }
-  const [processingMap, setProcessingMap] = useState<Record<string, { active: boolean; error: string | null }>>({});
+  // Expanded extracted text (loaded on demand)
+  const [expandedId,    setExpandedId]    = useState<string | null>(null);
+  const [expandedText,  setExpandedText]  = useState<Record<string, string | null>>({});
+  const [expandLoading, setExpandLoading] = useState<string | null>(null);
 
-  // Polling timers: id → intervalId
+  const [reviewId,  setReviewId]  = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+
+  const [selected,    setSelected]    = useState<Set<string>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+
+  // Per-question processing state
+  const [processingMap, setProcessingMap] = useState<
+    Record<string, { active: boolean; error: string | null }>
+  >({});
+
+  // Polling refs — keyed by question id
   const pollRefs = useRef<Record<string, ReturnType<typeof setInterval>>>({});
 
-  const [deleteTarget,     setDeleteTarget]     = useState<Question | null>(null);
-  const [bulkConfirmOpen,  setBulkConfirmOpen]  = useState(false);
-  const [rejectTarget,     setRejectTarget]     = useState<Question | null>(null);
-  const [rejectReason,     setRejectReason]     = useState("");
+  // Confirm dialogs
+  const [deleteTarget,    setDeleteTarget]    = useState<Question | null>(null);
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [rejectTarget,    setRejectTarget]    = useState<Question | null>(null);
+  const [rejectReason,    setRejectReason]    = useState("");
 
+  // Inline text editing
   const [editingId,    setEditingId]    = useState<string | null>(null);
   const [editText,     setEditText]     = useState("");
   const [savingTextId, setSavingTextId] = useState<string | null>(null);
   const [textError,    setTextError]    = useState("");
 
-  // Clear all polls on unmount
-  useEffect(() => {
-    return () => {
-      Object.values(pollRefs.current).forEach(clearInterval);
-    };
-  }, []);
+  // ── Token helper ─────────────────────────────────────────────────────────
 
-  async function getToken() {
+  const getToken = useCallback(async (): Promise<string | null> => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return null;
     const expiresAt      = session.expires_at ? session.expires_at * 1000 : 0;
@@ -168,12 +208,79 @@ export default function AdminQuestionsPage() {
       return refreshed.session?.access_token ?? null;
     }
     return session.access_token;
-  }
+  }, [supabase]);
 
-  async function loadQuestions() {
+  // ── Poll helpers — defined before loadQuestions ───────────────────────────
+
+  const stopPolling = useCallback((id: string) => {
+    if (pollRefs.current[id]) {
+      clearInterval(pollRefs.current[id]);
+      delete pollRefs.current[id];
+    }
+  }, []);
+
+  const startPolling = useCallback((id: string) => {
+    if (pollRefs.current[id]) return; // already polling
+
+    const interval = setInterval(async () => {
+      const token = await getToken();
+      if (!token) { stopPolling(id); return; }
+
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) return;
+        const updated: Question = await res.json();
+
+        setQuestions(prev => prev.map(q => q.id === id ? { ...q, ...updated } : q));
+
+        if (updated.processing_status === "ready" || updated.processing_status === "failed") {
+          stopPolling(id);
+          setProcessingMap(prev => ({
+            ...prev,
+            [id]: {
+              active: false,
+              error: updated.processing_status === "failed"
+                ? (updated.processing_error ?? "Unknown error")
+                : null,
+            },
+          }));
+        }
+      } catch {
+        // swallow — retries on next tick
+      }
+    }, 3000);
+
+    pollRefs.current[id] = interval;
+  }, [getToken, stopPolling]);
+
+  // ── Clean up polls when tab changes or component unmounts ─────────────────
+
+  useEffect(() => {
+    // Stop polling questions that are no longer in the list
+    return () => {
+      Object.keys(pollRefs.current).forEach(stopPolling);
+    };
+  }, [stopPolling]);
+
+  useEffect(() => {
+    // When activeTab changes, stop all existing polls (new list will restart relevant ones)
+    Object.keys(pollRefs.current).forEach(stopPolling);
+  }, [activeTab, stopPolling]);
+
+  // ── Load questions ────────────────────────────────────────────────────────
+
+  const loadQuestions = useCallback(async () => {
     setLoading(true);
     setError("");
     setSelected(new Set());
+    setExpandedId(null);
+    setExpandedText({});
+    setReviewId(null);
+    setEditingId(null);
+
     const token = await getToken();
     if (!token) { setError("Session expired."); setLoading(false); return; }
 
@@ -185,7 +292,7 @@ export default function AdminQuestionsPage() {
       const data: Question[] = await res.json();
       setQuestions(data);
 
-      // Auto-start polling for anything already in-progress
+      // Auto-start polling for in-progress items
       for (const q of data) {
         if (q.processing_status === "uploaded" || q.processing_status === "extracting") {
           startPolling(q.id);
@@ -196,246 +303,78 @@ export default function AdminQuestionsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [activeTab, getToken, startPolling]);
 
-  useEffect(() => { loadQuestions(); }, [activeTab]);
+  useEffect(() => { loadQuestions(); }, [loadQuestions]);
 
-  // ── Poll a single question's processing status ────────────────────────────
-  function startPolling(id: string) {
-    if (pollRefs.current[id]) return; // already polling
+  // ── Expand extracted text (lazy load) ────────────────────────────────────
 
-    const interval = setInterval(async () => {
-      const token = await getToken();
-      if (!token) { stopPolling(id); return; }
+  async function toggleExpand(q: Question) {
+    if (editingId === q.id) return;
 
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (!res.ok) return;
-        const updated: Question = await res.json();
-
-        setQuestions(prev =>
-          prev.map(q => q.id === id ? { ...updated } : q)
-        );
-
-        if (updated.processing_status === "ready" || updated.processing_status === "failed") {
-          stopPolling(id);
-          setProcessingMap(prev => ({
-            ...prev,
-            [id]: { active: false, error: updated.processing_status === "failed" ? (updated.processing_error ?? "Unknown error") : null },
-          }));
-        }
-      } catch {
-        // swallow network errors during polling — will retry on next tick
-      }
-    }, 3000);
-
-    pollRefs.current[id] = interval;
-  }
-
-  function stopPolling(id: string) {
-    if (pollRefs.current[id]) {
-      clearInterval(pollRefs.current[id]);
-      delete pollRefs.current[id];
-    }
-  }
-
-  // ── Trigger processing manually ───────────────────────────────────────────
-  async function triggerProcessing(id: string) {
-    // Clear previous error for this id
-    setProcessingMap(prev => ({ ...prev, [id]: { active: true, error: null } }));
-
-    const token = await getToken();
-    if (!token) {
-      setProcessingMap(prev => ({ ...prev, [id]: { active: false, error: "Session expired." } }));
+    if (expandedId === q.id) {
+      setExpandedId(null);
       return;
     }
 
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/retry`,
-        { method: "POST", headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      if (!res.ok) {
-        // Read the actual backend error message
-        let msg = "Could not start processing.";
-        try {
-          const body = await res.json();
-          msg = body.detail ?? body.message ?? body.error ?? msg;
-        } catch {
-          try { msg = await res.text() || msg; } catch { /* ignore */ }
-        }
-        setProcessingMap(prev => ({ ...prev, [id]: { active: false, error: msg } }));
-        return;
-      }
-
-      // Flip local status to "uploaded" (queued) and start polling
-      setQuestions(prev =>
-        prev.map(q => q.id === id
-          ? { ...q, processing_status: "uploaded", processing_error: null }
-          : q
-        )
-      );
-      // Keep active:true so button stays disabled while polling
-      setProcessingMap(prev => ({ ...prev, [id]: { active: true, error: null } }));
-      startPolling(id);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unexpected error.";
-      setProcessingMap(prev => ({ ...prev, [id]: { active: false, error: msg } }));
-    }
-  }
-
-  async function updateStatus(id: string, status: "approved" | "pending") {
-    setActioningId(id);
-    const token = await getToken();
-    if (!token) { setError("Session expired."); setActioningId(null); return; }
-
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/status`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ status }),
-        }
-      );
-      if (!res.ok) throw new Error("Failed to update status.");
-      if (activeTab && activeTab !== status) {
-        setQuestions(prev => prev.filter(q => q.id !== id));
-      } else {
-        setQuestions(prev => prev.map(q => q.id === id ? { ...q, status } : q));
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setActioningId(null);
-    }
-  }
-
-  async function submitReject() {
-    if (!rejectTarget || !rejectReason.trim()) return;
-    setActioningId(rejectTarget.id);
-    const token = await getToken();
-    if (!token) { setActioningId(null); setRejectTarget(null); return; }
-
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${rejectTarget.id}/status`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ status: "rejected", reason: rejectReason.trim() }),
-        }
-      );
-      if (!res.ok) throw new Error("Failed to reject.");
-      if (activeTab && activeTab !== "rejected") {
-        setQuestions(prev => prev.filter(q => q.id !== rejectTarget.id));
-      } else {
-        setQuestions(prev =>
-          prev.map(q =>
-            q.id === rejectTarget.id
-              ? { ...q, status: "rejected", rejection_reason: rejectReason.trim() }
-              : q
-          )
-        );
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setActioningId(null);
-      setRejectTarget(null);
-      setRejectReason("");
-    }
-  }
-
-  async function performDelete(id: string) {
-    setActioningId(id);
-    stopPolling(id); // stop polling a deleted item
-    const token = await getToken();
-    if (!token) { setActioningId(null); setDeleteTarget(null); return; }
-
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}`,
-        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (!res.ok) throw new Error("Failed to delete.");
-      setQuestions(prev => prev.filter(q => q.id !== id));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setActioningId(null);
-      setDeleteTarget(null);
-    }
-  }
-
-  function toggleSelected(id: string) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleSelectAll() {
-    if (selected.size === questions.length) setSelected(new Set());
-    else setSelected(new Set(questions.map(q => q.id)));
-  }
-
-  async function performBulkApprove() {
-    setBulkLoading(true);
-    const token = await getToken();
-    if (!token) { setBulkLoading(false); setBulkConfirmOpen(false); return; }
-    const ids = Array.from(selected);
-
-    try {
-      const results = await Promise.all(
-        ids.map(async id => {
-          try {
-            const res = await fetch(
-              `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/status`,
-              {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ status: "approved" }),
-              }
-            );
-            return { id, ok: res.ok };
-          } catch {
-            return { id, ok: false };
-          }
-        })
-      );
-
-      const okIds  = new Set(results.filter(r => r.ok).map(r => r.id));
-      const failed = results.length - okIds.size;
-
-      if (activeTab && activeTab !== "approved") {
-        setQuestions(prev => prev.filter(q => !okIds.has(q.id)));
-      } else {
-        setQuestions(prev =>
-          prev.map(q => okIds.has(q.id) ? { ...q, status: "approved" } : q)
-        );
-      }
-      setSelected(new Set(results.filter(r => !r.ok).map(r => r.id)));
-      if (failed > 0)
-        setError(`${failed} paper${failed !== 1 ? "s" : ""} could not be approved.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Bulk approve failed.");
-    } finally {
-      setBulkLoading(false);
-      setBulkConfirmOpen(false);
-    }
-  }
-
-  function startEditing(q: Question) {
-    setEditingId(q.id);
-    setEditText(q.extracted_text ?? "");
-    setTextError("");
     setExpandedId(q.id);
+
+    // Already fetched
+    if (expandedText[q.id] !== undefined) return;
+
+    setExpandLoading(q.id);
+    const token = await getToken();
+    if (!token) { setExpandLoading(null); return; }
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${q.id}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) throw new Error("Failed to load text.");
+      const detail = await res.json();
+      setExpandedText(prev => ({ ...prev, [q.id]: detail.extracted_text ?? null }));
+    } catch {
+      setExpandedText(prev => ({ ...prev, [q.id]: null }));
+    } finally {
+      setExpandLoading(null);
+    }
+  }
+
+  // ── Start editing (also lazy-loads text if needed) ────────────────────────
+
+  async function startEditing(q: Question) {
+    setExpandedId(q.id);
+    setTextError("");
+
+    // Use cached text if available
+    if (expandedText[q.id] !== undefined) {
+      setEditText(expandedText[q.id] ?? "");
+      setEditingId(q.id);
+      return;
+    }
+
+    setExpandLoading(q.id);
+    const token = await getToken();
+    if (!token) { setExpandLoading(null); return; }
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${q.id}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) throw new Error("Failed to load text.");
+      const detail = await res.json();
+      const text = detail.extracted_text ?? "";
+      setExpandedText(prev => ({ ...prev, [q.id]: text }));
+      setEditText(text);
+    } catch {
+      setTextError("Could not load extracted text.");
+      setExpandedText(prev => ({ ...prev, [q.id]: null }));
+    } finally {
+      setExpandLoading(null);
+      setEditingId(q.id);
+    }
   }
 
   function cancelEditing() {
@@ -458,12 +397,11 @@ export default function AdminQuestionsPage() {
           method: "PATCH",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({ extracted_text: trimmed }),
-        }
+        },
       );
       if (!res.ok) throw new Error("Failed to save changes.");
-      setQuestions(prev =>
-        prev.map(q => q.id === id ? { ...q, extracted_text: trimmed } : q)
-      );
+      // Update the cached expanded text
+      setExpandedText(prev => ({ ...prev, [id]: trimmed }));
       setEditingId(null);
       setEditText("");
     } catch (err) {
@@ -473,7 +411,204 @@ export default function AdminQuestionsPage() {
     }
   }
 
+  // ── Trigger GitHub Actions processing ─────────────────────────────────────
+
+  async function triggerProcessing(id: string) {
+    setProcessingMap(prev => ({ ...prev, [id]: { active: true, error: null } }));
+
+    const token = await getToken();
+    if (!token) {
+      setProcessingMap(prev => ({ ...prev, [id]: { active: false, error: "Session expired." } }));
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/retry`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      if (!res.ok) {
+        let msg = "Could not start processing.";
+        try {
+          const body = await res.json();
+          msg = body.detail ?? body.message ?? body.error ?? msg;
+        } catch {
+          try { msg = (await res.text()) || msg; } catch { /* ignore */ }
+        }
+        setProcessingMap(prev => ({ ...prev, [id]: { active: false, error: msg } }));
+        return;
+      }
+
+      setQuestions(prev =>
+        prev.map(q =>
+          q.id === id ? { ...q, processing_status: "uploaded" as const, processing_error: null } : q,
+        ),
+      );
+      setProcessingMap(prev => ({ ...prev, [id]: { active: true, error: null } }));
+      startPolling(id);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unexpected error.";
+      setProcessingMap(prev => ({ ...prev, [id]: { active: false, error: msg } }));
+    }
+  }
+
+  // ── Status update ─────────────────────────────────────────────────────────
+
+  async function updateStatus(id: string, status: "approved" | "pending") {
+    setActioningId(id);
+    const token = await getToken();
+    if (!token) { setError("Session expired."); setActioningId(null); return; }
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/status`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ status }),
+        },
+      );
+      if (!res.ok) throw new Error("Failed to update status.");
+      if (activeTab && activeTab !== status) {
+        setQuestions(prev => prev.filter(q => q.id !== id));
+      } else {
+        setQuestions(prev => prev.map(q => q.id === id ? { ...q, status } : q));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setActioningId(null);
+    }
+  }
+
+  // ── Reject ────────────────────────────────────────────────────────────────
+
+  async function submitReject() {
+    if (!rejectTarget || !rejectReason.trim()) return;
+    setActioningId(rejectTarget.id);
+    const token = await getToken();
+    if (!token) { setActioningId(null); setRejectTarget(null); return; }
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${rejectTarget.id}/status`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ status: "rejected", reason: rejectReason.trim() }),
+        },
+      );
+      if (!res.ok) throw new Error("Failed to reject.");
+      if (activeTab && activeTab !== "rejected") {
+        setQuestions(prev => prev.filter(q => q.id !== rejectTarget.id));
+      } else {
+        setQuestions(prev =>
+          prev.map(q =>
+            q.id === rejectTarget.id
+              ? { ...q, status: "rejected" as const, rejection_reason: rejectReason.trim() }
+              : q,
+          ),
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setActioningId(null);
+      setRejectTarget(null);
+      setRejectReason("");
+    }
+  }
+
+  // ── Delete ────────────────────────────────────────────────────────────────
+
+  async function performDelete(id: string) {
+    setActioningId(id);
+    stopPolling(id);
+    const token = await getToken();
+    if (!token) { setActioningId(null); setDeleteTarget(null); return; }
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) throw new Error("Failed to delete.");
+      setQuestions(prev => prev.filter(q => q.id !== id));
+      // Clean up any cached text for deleted item
+      setExpandedText(prev => { const n = { ...prev }; delete n[id]; return n; });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setActioningId(null);
+      setDeleteTarget(null);
+    }
+  }
+
+  // ── Selection helpers ─────────────────────────────────────────────────────
+
+  function toggleSelected(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selected.size === questions.length) setSelected(new Set());
+    else setSelected(new Set(questions.map(q => q.id)));
+  }
+
+  // ── Bulk approve ──────────────────────────────────────────────────────────
+
+  async function performBulkApprove() {
+    setBulkLoading(true);
+    const token = await getToken();
+    if (!token) { setBulkLoading(false); setBulkConfirmOpen(false); return; }
+    const ids = Array.from(selected);
+
+    try {
+      const results = await Promise.all(
+        ids.map(async id => {
+          try {
+            const res = await fetch(
+              `${process.env.NEXT_PUBLIC_API_URL}/api/admin/questions/${id}/status`,
+              {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ status: "approved" }),
+              },
+            );
+            return { id, ok: res.ok };
+          } catch {
+            return { id, ok: false };
+          }
+        }),
+      );
+
+      const okIds  = new Set(results.filter(r => r.ok).map(r => r.id));
+      const failed = results.length - okIds.size;
+
+      if (activeTab && activeTab !== "approved") {
+        setQuestions(prev => prev.filter(q => !okIds.has(q.id)));
+      } else {
+        setQuestions(prev =>
+          prev.map(q => okIds.has(q.id) ? { ...q, status: "approved" as const } : q),
+        );
+      }
+      setSelected(new Set(results.filter(r => !r.ok).map(r => r.id)));
+      if (failed > 0) setError(`${failed} paper${failed !== 1 ? "s" : ""} could not be approved.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Bulk approve failed.");
+    } finally {
+      setBulkLoading(false);
+      setBulkConfirmOpen(false);
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
+
   return (
     <div className="min-h-screen bg-[#07091A] px-4 py-8 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-5xl">
@@ -482,11 +617,11 @@ export default function AdminQuestionsPage() {
           <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">Admin</p>
           <h1 className="text-3xl font-extrabold text-white">Past Questions</h1>
           <p className="mt-2 text-sm text-slate-500">
-            Review uploads, check the AI-generated questions and answers, then approve before students see them.
+            Review uploads, check AI-generated questions, then approve before students see them.
           </p>
         </div>
 
-        {/* Tabs + Bulk action */}
+        {/* Tabs + bulk action */}
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2">
             {TABS.map(tab => (
@@ -504,17 +639,28 @@ export default function AdminQuestionsPage() {
             ))}
           </div>
 
-          {selected.size > 0 && (
+          <div className="flex items-center gap-2">
+            {selected.size > 0 && (
+              <button
+                onClick={() => setBulkConfirmOpen(true)}
+                className="flex items-center gap-1.5 rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition"
+              >
+                <CheckCircle2 size={15} />
+                Approve {selected.size} selected
+              </button>
+            )}
             <button
-              onClick={() => setBulkConfirmOpen(true)}
-              className="flex items-center gap-1.5 rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition"
+              onClick={loadQuestions}
+              disabled={loading}
+              className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-400 hover:bg-white/[0.08] transition disabled:opacity-50"
             >
-              <CheckCircle2 size={15} />
-              Approve {selected.size} selected
+              <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+              Refresh
             </button>
-          )}
+          </div>
         </div>
 
+        {/* Error banner */}
         {error && (
           <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
@@ -543,6 +689,7 @@ export default function AdminQuestionsPage() {
             </div>
           ) : (
             <>
+              {/* Select all row */}
               <div className="flex items-center gap-3 border-b border-white/[0.05] px-5 py-3">
                 <input
                   type="checkbox"
@@ -556,15 +703,21 @@ export default function AdminQuestionsPage() {
 
               <div className="divide-y divide-white/[0.05]">
                 {questions.map(q => {
-                  const pState = processingMap[q.id];
-                  const isProcessingActive = pState?.active === true || q.processing_status === "extracting" || q.processing_status === "uploaded";
-                  const retryError = pState?.error ?? null;
+                  const pState             = processingMap[q.id];
+                  const isProcessingActive = pState?.active === true
+                    || q.processing_status === "extracting"
+                    || q.processing_status === "uploaded";
+                  const retryError         = pState?.error ?? null;
+                  const isExpanded         = expandedId === q.id;
+                  const cachedText         = expandedText[q.id];
+                  const isLoadingText      = expandLoading === q.id;
 
                   return (
                     <div key={q.id} className="p-5">
-
                       <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div className="flex items-start gap-3">
+
+                        {/* Left: checkbox + icon + metadata */}
+                        <div className="flex items-start gap-3 min-w-0">
                           <input
                             type="checkbox"
                             checked={selected.has(q.id)}
@@ -574,8 +727,8 @@ export default function AdminQuestionsPage() {
                           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10">
                             <FileText className="h-4.5 w-4.5 text-blue-400" size={18} />
                           </div>
-                          <div>
-                            <p className="font-semibold text-white">{q.title}</p>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-white truncate">{q.title}</p>
                             <p className="mt-0.5 text-sm text-slate-500">
                               {q.course?.name ?? "No course"}
                               {q.semester?.name ? ` · ${q.semester.name}` : ""}
@@ -588,7 +741,7 @@ export default function AdminQuestionsPage() {
                               })}
                             </p>
 
-                            {/* Processing badge with real error surfacing */}
+                            {/* Processing badge */}
                             <ProcessingBadge
                               s={q.processing_status}
                               errorMsg={q.processing_error}
@@ -597,7 +750,7 @@ export default function AdminQuestionsPage() {
                               processing={isProcessingActive}
                             />
 
-                            {/* Also show Process button when ready but ai_processed is false */}
+                            {/* Generate questions button (ready but not AI processed) */}
                             {q.processing_status === "ready" && !q.ai_processed && (
                               <div className="mt-2">
                                 <button
@@ -607,20 +760,21 @@ export default function AdminQuestionsPage() {
                                 >
                                   {isProcessingActive
                                     ? <Loader2 size={12} className="animate-spin" />
-                                    : <Sparkles size={12} />
-                                  }
+                                    : <Sparkles size={12} />}
                                   {isProcessingActive ? "Generating…" : "Generate questions"}
                                 </button>
                               </div>
                             )}
 
+                            {/* Low quality warning */}
                             {q.extraction_quality !== null && q.extraction_quality < 0.5 && (
                               <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
-                                <AlertCircle className="h-3.5 w-3.5" />
+                                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
                                 Low extraction quality — review text before approving
                               </div>
                             )}
 
+                            {/* Preview watermarked file */}
                             <button
                               onClick={() => setPreviewId(q.id)}
                               className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
@@ -628,27 +782,33 @@ export default function AdminQuestionsPage() {
                               Preview watermarked file <ExternalLink size={11} />
                             </button>
 
-                            {q.extracted_text && editingId !== q.id && (
+                            {/* Expand / Edit text controls */}
+                            {editingId !== q.id && (
                               <div className="mt-2 flex items-center gap-3">
                                 <button
-                                  onClick={() => setExpandedId(expandedId === q.id ? null : q.id)}
-                                  className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-300 transition-colors"
+                                  onClick={() => toggleExpand(q)}
+                                  disabled={isLoadingText}
+                                  className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-50"
                                 >
-                                  <ChevronDown
-                                    size={13}
-                                    className={`transition-transform ${expandedId === q.id ? "rotate-180" : ""}`}
-                                  />
-                                  {expandedId === q.id ? "Hide text" : "Preview text"}
+                                  {isLoadingText
+                                    ? <Loader2 size={12} className="animate-spin" />
+                                    : <ChevronDown
+                                        size={13}
+                                        className={`transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                                      />}
+                                  {isExpanded ? "Hide text" : "Preview text"}
                                 </button>
                                 <button
                                   onClick={() => startEditing(q)}
-                                  className="flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+                                  disabled={isLoadingText}
+                                  className="flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50"
                                 >
                                   <Pencil size={11} /> Edit
                                 </button>
                               </div>
                             )}
 
+                            {/* Rejection reason */}
                             {q.status === "rejected" && q.rejection_reason && (
                               <div className="mt-2 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
                                 <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
@@ -659,15 +819,29 @@ export default function AdminQuestionsPage() {
                             )}
                           </div>
                         </div>
+
+                        {/* Right: status pill */}
                         <StatusPill status={q.status} />
                       </div>
 
-                      {expandedId === q.id && q.extracted_text && editingId !== q.id && (
-                        <div className="mt-4 max-h-48 overflow-y-auto rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm leading-7 text-slate-400">
-                          {q.extracted_text}
+                      {/* Expanded extracted text (lazy loaded) */}
+                      {isExpanded && editingId !== q.id && (
+                        <div className="mt-4">
+                          {isLoadingText ? (
+                            <div className="flex items-center gap-2 py-4 text-xs text-slate-500">
+                              <Loader2 size={13} className="animate-spin" /> Loading extracted text…
+                            </div>
+                          ) : cachedText ? (
+                            <div className="max-h-48 overflow-y-auto rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm leading-7 text-slate-400">
+                              {cachedText}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-slate-500 italic">No extracted text available.</p>
+                          )}
                         </div>
                       )}
 
+                      {/* Inline text editor */}
                       {editingId === q.id && (
                         <div className="mt-4">
                           <textarea
@@ -676,9 +850,11 @@ export default function AdminQuestionsPage() {
                             rows={10}
                             className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                           />
-                          {textError && <p className="mt-1.5 text-xs text-red-400">{textError}</p>}
+                          {textError && (
+                            <p className="mt-1.5 text-xs text-red-400">{textError}</p>
+                          )}
                           <p className="mt-1.5 text-[11px] text-slate-600">
-                            After changing the text, tap &quot;Process now&quot; to rebuild questions from it.
+                            After saving, tap &quot;Generate questions&quot; to rebuild from the updated text.
                           </p>
                           <div className="mt-2 flex gap-2">
                             <button
@@ -760,7 +936,9 @@ export default function AdminQuestionsPage() {
 
                           {reviewId === q.id && (
                             <div className="mt-4" style={PANEL_THEME}>
-                              <QuestionReviewPanel paperId={q.id} />
+                              <ReviewPanelBoundary>
+                                <QuestionReviewPanel paperId={q.id} />
+                              </ReviewPanelBoundary>
                             </div>
                           )}
                         </div>
@@ -774,6 +952,7 @@ export default function AdminQuestionsPage() {
         </div>
       </div>
 
+      {/* Admin paper viewer modal */}
       {previewId && (
         <AdminPaperViewer
           questionId={previewId}
@@ -782,6 +961,7 @@ export default function AdminQuestionsPage() {
         />
       )}
 
+      {/* Delete confirm */}
       <ConfirmDialog
         open={deleteTarget !== null}
         title="Delete this past question?"
@@ -793,6 +973,7 @@ export default function AdminQuestionsPage() {
         onCancel={() => setDeleteTarget(null)}
       />
 
+      {/* Bulk approve confirm */}
       <ConfirmDialog
         open={bulkConfirmOpen}
         title={`Approve ${selected.size} question${selected.size !== 1 ? "s" : ""}?`}
@@ -804,6 +985,7 @@ export default function AdminQuestionsPage() {
         onCancel={() => setBulkConfirmOpen(false)}
       />
 
+      {/* Reject modal */}
       {rejectTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
           <div className="w-full max-w-sm rounded-2xl border border-white/[0.08] bg-[#0D1230] p-6 shadow-2xl">
@@ -814,7 +996,7 @@ export default function AdminQuestionsPage() {
             <textarea
               value={rejectReason}
               onChange={e => setRejectReason(e.target.value)}
-              placeholder="e.g. Blurry scan, wrong course, incomplete pages..."
+              placeholder="e.g. Blurry scan, wrong course, incomplete pages…"
               rows={3}
               maxLength={300}
               className="mt-4 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
