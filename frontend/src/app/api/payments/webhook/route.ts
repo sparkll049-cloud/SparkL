@@ -1,9 +1,13 @@
+// src/app/api/payments/webhook/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.text();
-    const signature = req.headers.get("x-payvessel-signature") ?? "";
+
+    // ✅ FIXED: correct signature header name (was x-payvessel-signature)
+    const signature = req.headers.get("HTTP_PAYVESSEL_HTTP_SIGNATURE") ?? "";
 
     if (!signature) {
       return NextResponse.json({ detail: "Missing signature" }, { status: 400 });
@@ -20,7 +24,8 @@ export async function POST(req: NextRequest) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-payvessel-signature": signature,
+          // ✅ FIXED: forward the correct header name to FastAPI
+          "HTTP_PAYVESSEL_HTTP_SIGNATURE": signature,
         },
         body,
       }
