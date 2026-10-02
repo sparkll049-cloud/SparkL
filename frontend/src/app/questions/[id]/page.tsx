@@ -8,7 +8,7 @@ import {
   BookOpen, Play, Lock, Sparkles,
   Send, CheckCircle2,
   Paperclip, X, Clock, Eye, EyeOff, Crown,
-  ChevronDown, Zap, RotateCcw,
+  ChevronDown, Zap,
 } from "lucide-react";
 
 import InlinePaperViewer from "@/components/InlinePaperViewer";
@@ -49,8 +49,6 @@ interface ProcessedQuestion {
 interface QuestionLimits {
   is_paid: boolean;
   plan: string;
-  read_mode_percent: number;
-  practice_mode_max: number | null;
 }
 
 interface Submission {
@@ -65,10 +63,8 @@ interface Submission {
 }
 
 const LOW_QUALITY_THRESHOLD = 0.5;
-const FREE_PRACTICE_CAP     = 5;
-const FREE_TEXT_LINES       = 10;
 
-type Tab = "text" | "paper" | "submit" | "practice";
+type Tab = "paper" | "submit";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ── SECURITY LAYER ────────────────────────────────────────────────────────────
@@ -208,121 +204,6 @@ function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ── Extracted text (hero) ─────────────────────────────────────────────────────
-// ══════════════════════════════════════════════════════════════════════════════
-
-function ExtractedTextHero({
-  text,
-  isPaid,
-  userEmail,
-}: {
-  text: string;
-  isPaid: boolean;
-  userEmail: string | null;
-}) {
-  const lines   = text.split("\n").filter(l => l.trim());
-  const visible = isPaid ? lines : lines.slice(0, FREE_TEXT_LINES);
-  const hidden  = lines.length - visible.length;
-  const isGated = !isPaid && hidden > 0;
-
-  return (
-    <div className="space-y-3">
-      <SecureWrap userEmail={userEmail} enabled={isPaid}>
-        <div
-          className="rounded-2xl border"
-          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-        >
-          <div
-            className="flex items-center gap-2 px-5 py-3.5 border-b"
-            style={{ borderColor: "var(--sp-border)" }}
-          >
-            <FileText size={14} style={{ color: "var(--sp-text-3)" }} />
-            <span className="text-xs font-semibold" style={{ color: "var(--sp-text-3)" }}>
-              Extracted paper text
-            </span>
-            {!isPaid && (
-              <span
-                className="ml-auto rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                style={{
-                  borderColor: "rgba(245,158,11,0.3)",
-                  background:  "rgba(245,158,11,0.08)",
-                  color:       "var(--sp-amber, #f59e0b)",
-                }}
-              >
-                Preview · {FREE_TEXT_LINES} lines
-              </span>
-            )}
-          </div>
-
-          <div className="px-5 py-5 space-y-0 relative">
-            {visible.map((line, i) => {
-              const isHeader = line.length < 80 && /^[A-Z\d]/.test(line) &&
-                (line.endsWith(":") || /^[A-Z\s\d]{4,}$/.test(line));
-
-              return (
-                <p
-                  key={i}
-                  className={`leading-7 whitespace-pre-wrap ${
-                    isHeader
-                      ? "text-sm font-semibold pt-4 first:pt-0 pb-1"
-                      : "text-sm"
-                  }`}
-                  style={{
-                    color: isHeader ? "var(--sp-text)" : "var(--sp-text-2)",
-                  }}
-                >
-                  {line}
-                </p>
-              );
-            })}
-
-            {isGated && (
-              <div
-                className="absolute bottom-0 left-0 right-0 h-24 pointer-events-none"
-                style={{
-                  background: "linear-gradient(to bottom, transparent, var(--sp-bg-card))",
-                }}
-              />
-            )}
-          </div>
-        </div>
-      </SecureWrap>
-
-      {isGated && (
-        <div
-          className="rounded-2xl border p-6 text-center"
-          style={{
-            borderColor: "rgba(99,102,241,0.2)",
-            background:  "rgba(99,102,241,0.05)",
-          }}
-        >
-          <div
-            className="flex h-10 w-10 items-center justify-center rounded-xl mx-auto mb-3"
-            style={{ background: "rgba(99,102,241,0.12)" }}
-          >
-            <Crown className="h-4 w-4 text-indigo-500" />
-          </div>
-          <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-            {hidden} more line{hidden !== 1 ? "s" : ""} hidden
-          </p>
-          <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-            Upgrade to Basic, Pro or Premium to read the full text
-          </p>
-          <Link
-            href="/dashboard/subscribe"
-            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
-          >
-            <Crown className="h-3.5 w-3.5" />
-            Unlock full text
-            <ArrowRight className="h-3.5 w-3.5" />
-          </Link>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 // ── Practice modal (quiz) ─────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -344,7 +225,7 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
 
   return (
     <div className="space-y-2">
-      {(["a","b","c","d"] as const).map(opt => {
+      {(["a", "b", "c", "d"] as const).map(opt => {
         const text = q[`option_${opt}` as keyof ProcessedQuestion] as string | null;
         if (!text) return null;
         return (
@@ -423,11 +304,15 @@ function PracticeModal({
   onClose: () => void;
 }) {
   const [index, setIndex] = useState(0);
-  const visible   = !isPaid ? questions.slice(0, FREE_PRACTICE_CAP) : questions;
+
+  // Free practice limit calculation (~10%, minimum 2 questions)
+  const freeLimit = Math.max(2, Math.min(questions.length, Math.ceil(questions.length * 0.1)));
+  const visible   = !isPaid ? questions.slice(0, freeLimit) : questions;
   const hidden    = questions.length - visible.length;
   const isGated   = !isPaid && hidden > 0;
-  const q         = visible[index];
-  const mcqCount  = visible.filter(q => q.question_type === "mcq").length;
+  
+  const q           = visible[index];
+  const mcqCount    = visible.filter(q => q.question_type === "mcq").length;
   const theoryCount = visible.filter(q => q.question_type === "theory").length;
 
   useEffect(() => {
@@ -529,7 +414,7 @@ function PracticeModal({
               {hidden} more question{hidden !== 1 ? "s" : ""} locked
             </p>
             <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-              Free plan limits practice to {FREE_PRACTICE_CAP} questions
+              Free plan limits practice to {freeLimit} question{freeLimit !== 1 ? "s" : ""} (~10% preview)
             </p>
             <Link
               href="/dashboard/subscribe"
@@ -809,12 +694,12 @@ export default function QuestionDetailPage() {
   const [questionsLoading, setQuestionsLoading]     = useState(false);
 
   const [limits, setLimits] = useState<QuestionLimits>({
-    is_paid: false, plan: "free", read_mode_percent: 100, practice_mode_max: null,
+    is_paid: false, plan: "free"
   });
 
-  const [tab, setTab]               = useState<Tab>("text");
+  const [tab, setTab]                   = useState<Tab>("paper");
   const [showPractice, setShowPractice] = useState(false);
-  const [showPreview, setShowPreview]   = useState(false);
+  const [showPreview, setShowPreview]   = useState(true);
 
   useEffect(() => {
     if (!questionId) return;
@@ -841,11 +726,7 @@ export default function QuestionDetailPage() {
           const d = await limitsRes.json();
           const plan   = (d.effective_plan ?? d.plan ?? "free").toLowerCase();
           const isPaid = d.is_paid === true || d.is_trial === true;
-          setLimits({
-            is_paid: isPaid, plan,
-            read_mode_percent: d.read_mode_percent ?? 100,
-            practice_mode_max: d.practice_mode_max ?? null,
-          });
+          setLimits({ is_paid: isPaid, plan });
         }
 
         setQuestionsLoading(true);
@@ -895,7 +776,6 @@ export default function QuestionDetailPage() {
 
   const isPdf        = data.mime_type?.startsWith("application/pdf");
   const isLowQuality = data.extraction_quality !== null && data.extraction_quality < LOW_QUALITY_THRESHOLD;
-  const hasText      = Boolean(data.extracted_text && data.extracted_text.trim().length > 0);
   const hasProcessed = processedQuestions.length > 0;
   const mcqCount     = processedQuestions.filter(q => q.question_type === "mcq").length;
   const theoryCount  = processedQuestions.filter(q => q.question_type === "theory").length;
@@ -961,28 +841,17 @@ export default function QuestionDetailPage() {
               className="mt-5 flex items-center gap-1 flex-wrap border-t pt-4"
               style={{ borderColor: "var(--sp-border)" }}
             >
-              {hasText && (
-                <TabBtn active={tab === "text"} onClick={() => setTab("text")}>
-                  <BookOpen size={12} /> Read text
-                  {!limits.is_paid && (
-                    <span
-                      className="rounded-full px-1.5 py-0.5 text-[8px] font-bold"
-                      style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b" }}
-                    >
-                      Preview
-                    </span>
-                  )}
-                </TabBtn>
-              )}
-
-              {isPdf && (
-                <TabBtn active={tab === "paper"} onClick={() => setTab("paper")}>
-                  <FileText size={12} /> View paper
-                  {!limits.is_paid && (
-                    <Lock size={10} style={{ color: "var(--sp-text-3)" }} />
-                  )}
-                </TabBtn>
-              )}
+              <TabBtn active={tab === "paper"} onClick={() => setTab("paper")}>
+                <FileText size={12} /> View paper
+                {!limits.is_paid && (
+                  <span
+                    className="rounded-full px-1.5 py-0.5 text-[8px] font-bold"
+                    style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b" }}
+                  >
+                    1 Page Preview
+                  </span>
+                )}
+              </TabBtn>
 
               <TabBtn active={tab === "submit"} onClick={() => setTab("submit")}>
                 <Send size={12} /> Submit solution
@@ -1006,50 +875,51 @@ export default function QuestionDetailPage() {
           </div>
 
           <div className="mt-4 space-y-4">
-            {tab === "text" && (
-              hasText ? (
-                <ExtractedTextHero
-                  text={data.extracted_text!}
-                  isPaid={limits.is_paid}
-                  userEmail={userEmail}
-                />
-              ) : (
-                <EmptyState
-                  icon={<BookOpen size={22} className="text-indigo-400" />}
-                  title="No extracted text yet"
-                  body="Our team is still processing this paper. Check back shortly."
-                />
-              )
-            )}
-
             {tab === "paper" && isPdf && (
               <div
-                className="rounded-2xl border p-5"
+                className="rounded-2xl border p-5 space-y-4"
                 style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
               >
-                {limits.is_paid ? (
-                  <>
-                    <button
-                      onClick={() => setShowPreview(v => !v)}
-                      className="flex items-center gap-2 mb-4 rounded-xl border px-4 py-2.5 text-sm font-semibold transition w-full justify-center"
-                      style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+                <button
+                  onClick={() => setShowPreview(v => !v)}
+                  className="flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition w-full justify-center"
+                  style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+                >
+                  {showPreview
+                    ? <><EyeOff size={14} /> Hide paper preview</>
+                    : <><Eye size={14} /> Show paper preview</>}
+                </button>
+
+                {showPreview && (
+                  <SecureWrap userEmail={userEmail} enabled={limits.is_paid}>
+                    <InlinePaperViewer
+                      questionId={questionId}
+                      isPaid={limits.is_paid}
+                      userEmail={userEmail}
+                      maxPages={limits.is_paid ? undefined : 1}
+                    />
+                  </SecureWrap>
+                )}
+
+                {!limits.is_paid && (
+                  <div
+                    className="rounded-xl border p-4 text-center space-y-2 mt-4"
+                    style={{ borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.05)" }}
+                  >
+                    <p className="text-xs font-semibold" style={{ color: "var(--sp-text)" }}>
+                      Viewing 1-page free preview
+                    </p>
+                    <p className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>
+                      Upgrade to Basic, Pro, or Premium to access all pages and full downloads.
+                    </p>
+                    <Link
+                      href="/dashboard/subscribe"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-indigo-500 transition"
                     >
-                      {showPreview
-                        ? <><EyeOff size={14} /> Hide paper preview</>
-                        : <><Eye size={14} /> Show paper preview</>}
-                    </button>
-                    {showPreview && (
-                      <SecureWrap userEmail={userEmail} enabled>
-                        <InlinePaperViewer
-                          questionId={questionId}
-                          isPaid={limits.is_paid}
-                          userEmail={userEmail}
-                        />
-                      </SecureWrap>
-                    )}
-                  </>
-                ) : (
-                  <GateBanner type="preview" hiddenCount={0} />
+                      <Crown className="h-3 w-3" />
+                      Upgrade now
+                    </Link>
+                  </div>
                 )}
               </div>
             )}
@@ -1057,8 +927,8 @@ export default function QuestionDetailPage() {
             {tab === "paper" && !isPdf && (
               <EmptyState
                 icon={<FileText size={22} className="text-indigo-400" />}
-                title="No viewer for this file type"
-                body="Switch to Read text to access the content."
+                title="No PDF viewer available for this file"
+                body="This document is not stored as a PDF file."
               />
             )}
 
@@ -1161,38 +1031,6 @@ function EmptyState({
       </div>
       <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>{title}</p>
       <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>{body}</p>
-    </div>
-  );
-}
-
-function GateBanner({ hiddenCount, type }: { hiddenCount: number; type: "practice" | "preview" }) {
-  return (
-    <div className="rounded-2xl border p-6 text-center"
-      style={{ borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.05)" }}>
-      <div className="flex justify-center mb-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl"
-          style={{ background: "rgba(99,102,241,0.12)" }}>
-          <Lock className="h-4 w-4 text-indigo-500" />
-        </div>
-      </div>
-      <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-        {type === "practice"
-          ? `${hiddenCount} more question${hiddenCount !== 1 ? "s" : ""} locked`
-          : "Paper preview locked"}
-      </p>
-      <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-        {type === "practice"
-          ? `Free plan limits practice to ${FREE_PRACTICE_CAP} questions`
-          : "Upgrade to view and download the original paper"}
-      </p>
-      <Link
-        href="/dashboard/subscribe"
-        className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
-      >
-        <Crown className="h-3.5 w-3.5" />
-        Unlock — Basic, Pro or Premium
-        <ArrowRight className="h-3.5 w-3.5" />
-      </Link>
     </div>
   );
 }
