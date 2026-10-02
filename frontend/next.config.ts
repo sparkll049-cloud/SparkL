@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 
+// cache-bust: 1
 const nextConfig: NextConfig = {
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
