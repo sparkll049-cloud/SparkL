@@ -80,7 +80,8 @@ async def payvessel_webhook(request: Request):
     if not PAYVESSEL_SECRET_KEY:
         raise HTTPException(status_code=500, detail="Payment secret not configured")
 
-    expected = hmac.new(
+    # ✅ Fixed: hmac.new does not exist in Python 3 — use hmac.HMAC
+    expected = hmac.HMAC(
         key=PAYVESSEL_SECRET_KEY.encode("utf-8"),
         msg=body,
         digestmod=hashlib.sha512,
@@ -335,14 +336,12 @@ async def admin_revoke_subscription(
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    # End any active subscription row
     supabase.table("subscriptions").update({
-        "status": "cancelled",   # change if your status column uses another value
+        "status": "cancelled",
         "expires_at": now_iso,
         "auto_renew": False,
     }).eq("user_id", target_user_id).eq("status", "active").execute()
 
-    # Drop the profile back to free
     supabase.table("profiles").update({
         "subscription_plan": "free",
         "subscription_expic": None,
@@ -373,7 +372,6 @@ async def _activate_subscription(
     plan = plan_res.data
     now = datetime.now(timezone.utc)
 
-    # Carry over remaining days if user already has an active subscription
     existing_sub_res = (
         supabase.table("subscriptions")
         .select("id, expires_at")
