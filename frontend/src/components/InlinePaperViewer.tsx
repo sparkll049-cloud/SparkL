@@ -44,6 +44,7 @@ interface Props {
   questionId: string;
   isPaid: boolean;
   userEmail: string | null;
+  maxPages?: number;
 }
 
 interface PageMeta {
@@ -51,7 +52,7 @@ interface PageMeta {
   viewable_pages: number;
 }
 
-export default function InlinePaperViewer({ questionId, isPaid, userEmail }: Props) {
+export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPages }: Props) {
   const supabase    = createClient();
   const canvasRef   = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -240,9 +241,15 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail }: Pro
   }, []);
 
   // ── Derived state ───────────────────────────────────────────────────────
+  const effectiveViewablePages = meta
+    ? maxPages !== undefined
+      ? Math.min(meta.viewable_pages, maxPages)
+      : meta.viewable_pages
+    : 0;
+
   const canGoPrev   = currentPage > 1;
-  const canGoNext   = meta ? currentPage < meta.viewable_pages : false;
-  const lockedCount = meta ? meta.total_pages - meta.viewable_pages : 0;
+  const canGoNext   = currentPage < effectiveViewablePages;
+  const lockedCount = meta ? meta.total_pages - effectiveViewablePages : 0;
   const progress    = TILE_COUNT > 0 ? Math.round((tilesLoaded / TILE_COUNT) * 100) : 0;
 
   // ── Render ──────────────────────────────────────────────────────────────
@@ -370,7 +377,7 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail }: Pro
 
           {/* Dot indicators */}
           <div className="flex items-center gap-1.5">
-            {Array.from({ length: Math.min(meta.viewable_pages, 7) }, (_, i) => {
+            {Array.from({ length: Math.min(effectiveViewablePages, 7) }, (_, i) => {
               const page = i + 1;
               return (
                 <button
@@ -385,9 +392,9 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail }: Pro
                 />
               );
             })}
-            {meta.viewable_pages > 7 && (
+            {effectiveViewablePages > 7 && (
               <span className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-                …{meta.viewable_pages - 7} more
+                …{effectiveViewablePages - 7} more
               </span>
             )}
           </div>
@@ -406,10 +413,10 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail }: Pro
       {/* Page counter */}
       {meta && (
         <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-          Page {currentPage} of {meta.viewable_pages}
-          {!isPaid && meta.total_pages > meta.viewable_pages && (
+          Page {currentPage} of {effectiveViewablePages}
+          {!isPaid && meta.total_pages > effectiveViewablePages && (
             <span className="ml-1.5 text-indigo-400">
-              · {meta.total_pages - meta.viewable_pages} pages locked
+              · {meta.total_pages - effectiveViewablePages} pages locked
             </span>
           )}
         </p>
