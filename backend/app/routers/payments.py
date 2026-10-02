@@ -80,11 +80,11 @@ async def payvessel_webhook(request: Request):
     if not PAYVESSEL_SECRET_KEY:
         raise HTTPException(status_code=500, detail="Payment secret not configured")
 
-    expected = hmac.new(
-        key=PAYVESSEL_SECRET_KEY.encode("utf-8"),
-        msg=body,
-        digestmod=hashlib.sha512,
-    ).hexdigest()
+    expected = hmac.HMAC(
+    key=PAYVESSEL_SECRET_KEY.encode("utf-8"),
+    msg=body,
+    digestmod=hashlib.sha512,
+).hexdigest()
 
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(status_code=400, detail="Invalid signature")
