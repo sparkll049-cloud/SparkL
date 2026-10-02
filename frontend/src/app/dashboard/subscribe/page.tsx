@@ -429,38 +429,31 @@ function SubscribePageInner() {
     loadUser();
   }, [router, supabaseClient]);
 
-  // ─── FIX: converted from nested .then() chains to async/await ───────────
-  // The old version used .then() chains — if refreshSession or the initiate
-  // fetch threw, the error was swallowed silently and initializeCheckout
-  // was never reached, so the modal never opened.
-  //
-  // Additional fixes applied here:
-  // 1. metadata is now always passed (it is REQUIRED by PayVessel docs)
-  // 2. customer_phone_number is now always passed (REQUIRED by PayVessel docs)
-  //    — a blank phone gets a safe fallback so the SDK doesn't reject it
-  // 3. onSuccessfulOrder now uses async/await internally and is fully error-handled
-  // 4. setCheckoutPlan(null) still happens before initializeCheckout so the
-  //    summary modal closes cleanly before the PayVessel modal opens
-
   async function handleConfirmCheckout() {
     if (!user || !checkoutPlan) return;
 
     setError("");
     setProcessingPlan(checkoutPlan.slug);
 
-    // Capture plan snapshot so closure is stable even if state changes
+    // Snapshot the plan now — state may change while async work is in flight
     const plan = checkoutPlan;
     const chargeAmount = plan.price + SERVICE_FEE;
 
     try {
-      // Step 1 — refresh session
+      // Step 1 — Refresh the session so the token is fresh
       const { data: { session } } = await supabaseClient.auth.refreshSession();
       if (!session) {
         router.push("/auth/login");
         return;
       }
 
-      // Step 2 — create a pending transaction on the backend and get our reference
+      // Step 2 — Create a pending transaction on the backend.
+      //
+      // FIX: We now send `total_amount` (plan price + service fee) to the backend
+      // so it stores the correct amount_kobo. Previously only the plan price was
+      // stored, so when PayVessel returned the real charged amount (plan + fee)
+      // the backend's amount check always failed with "amount mismatch" and marked
+      // every payment as failed — even when the user actually paid successfully.
       const initiateRes = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`,
         {
@@ -469,7 +462,10 @@ function SubscribePageInner() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({ plan: plan.slug }),
+          body: JSON.stringify({
+            plan: plan.slug,
+            total_amount: chargeAmount, // ← plan price + ₦100 service fee
+          }),
         }
       );
 
@@ -480,12 +476,10 @@ function SubscribePageInner() {
 
       const { reference: ourReference } = await initiateRes.json();
 
-      // Step 3 — close our summary modal BEFORE opening PayVessel modal
+      // Step 3 — Close the summary modal before opening PayVessel modal
       setCheckoutPlan(null);
 
-      // Step 4 — open the PayVessel checkout
-      // NOTE: Checkout() is a synchronous factory call; initializeCheckout is also
-      // synchronous in terms of opening the modal — callbacks fire asynchronously.
+      // Step 4 — Open PayVessel checkout
       const init = Checkout({
         api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
       });
@@ -495,31 +489,31 @@ function SubscribePageInner() {
         currency: "NGN",
         customer_name: user.name,
         customer_email: user.email,
-        // REQUIRED by PayVessel — must always be present.
-        // A user with no phone stored gets a safe placeholder so the SDK
-        // doesn't reject the call and silently refuse to open.
+        // REQUIRED by PayVessel docs — must always be present.
+        // Users with no stored phone get a safe placeholder so the SDK
+        // doesn't silently refuse to open the modal.
         customer_phone_number: user.phone || "00000000000",
         reference: ourReference,
         channels: PAYVESSEL_CHANNELS,
-        // REQUIRED by PayVessel — attach order context
+        // REQUIRED by PayVessel docs — attach order context.
         metadata: {
           plan: plan.slug,
           name: user.name,
           reference: ourReference,
         },
 
-        // Fires when the checkout session is successfully initialised (modal open)
+        // Fires when the checkout session opens successfully (modal is visible)
         onSuccess: (response: unknown) => {
           console.log("[PayVessel] checkout session opened", response);
         },
 
         // Fires when the customer actually completes payment
         onSuccessfulOrder: async (response: unknown) => {
-          const r = response as Record<string, any>;
+          const r = response as Record<string, unknown>;
           const ref =
-            r?.reference ??
-            r?.transactionReference ??
-            r?.data?.reference ??
+            (r?.reference as string) ??
+            (r?.transactionReference as string) ??
+            ((r?.data as Record<string, unknown>)?.reference as string) ??
             ourReference;
 
           try {
@@ -560,19 +554,18 @@ function SubscribePageInner() {
         },
 
         onClose: () => {
-          // User dismissed — just stop the spinner, don't treat as an error
+          // User dismissed the modal — stop the spinner, not an error
           setProcessingPlan(null);
         },
       });
 
-      // NOTE: We intentionally do NOT setProcessingPlan(null) here.
-      // The spinner stays active until onSuccessfulOrder, onError, or onClose fires,
-      // which prevents double-clicks from re-opening the checkout.
+      // Intentionally NOT calling setProcessingPlan(null) here.
+      // The spinner stays on until one of the three callbacks above fires.
+      // This prevents the user from clicking "Pay" again while PayVessel is open.
 
     } catch (err: unknown) {
       console.error("[handleConfirmCheckout error]", err);
-      const message = err instanceof Error ? err.message : "Something went wrong.";
-      setError(message);
+      setError(err instanceof Error ? err.message : "Something went wrong.");
       setProcessingPlan(null);
     }
   }
