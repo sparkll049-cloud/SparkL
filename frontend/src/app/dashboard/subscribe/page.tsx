@@ -355,16 +355,6 @@ function SubscribePageInner() {
         return res.json();
       })
       .then(({ reference: ourReference }) => {
-        // Patch fetch to proxy unpkg through our domain
-        // so form.html loads even when unpkg.com is blocked
-        const originalFetch = window.fetch.bind(window);
-        window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
-          if (typeof input === "string" && input.includes("unpkg.com")) {
-            input = input.replace("https://unpkg.com", "/payvessel-cdn");
-          }
-          return originalFetch(input, init);
-        };
-
         const init = Checkout({
           api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
         });
@@ -381,8 +371,6 @@ function SubscribePageInner() {
 
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           onSuccessfulOrder: (response: any) => {
-            window.fetch = originalFetch;
-
             const ref =
               response.reference ??
               response.transactionReference ??
@@ -421,14 +409,12 @@ function SubscribePageInner() {
           },
 
           onError: (err: unknown) => {
-            window.fetch = originalFetch;
             console.error("[PayVessel error]", err);
             setError("Payment failed. Please try again.");
             setProcessingPlan(null);
           },
 
           onClose: () => {
-            window.fetch = originalFetch;
             setProcessingPlan(null);
           },
         });
@@ -438,8 +424,7 @@ function SubscribePageInner() {
         setProcessingPlan(null);
       });
   });
-}
-
+  }
   if (loadingUser) {
     return (
       <div
