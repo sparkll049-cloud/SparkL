@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import "katex/dist/katex.min.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -17,7 +18,10 @@ export const metadata: Metadata = {
     "student resources",
   ],
   icons: {
-    icon: "/images/logo.png",
+    icon: [
+      { url: "/images/logo.png" },
+      { url: "/favicon.ico" },
+    ],
     shortcut: "/images/logo.png",
     apple: "/images/logo.png",
   },
