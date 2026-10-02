@@ -319,112 +319,126 @@ function SubscribePageInner() {
 
   // Plain function — NOT async, NO await on initializeCheckout
   function handleConfirmCheckout() {
-    if (!user || !checkoutPlan) return;
-    setError("");
-    setProcessingPlan(checkoutPlan.slug);
+  if (!user || !checkoutPlan) return;
+  setError("");
+  setProcessingPlan(checkoutPlan.slug);
 
-    const plan = checkoutPlan;
-    setCheckoutPlan(null);
+  const plan = checkoutPlan;
+  setCheckoutPlan(null);
 
-    supabase.auth.refreshSession().then(({ data: { session } }) => {
-      if (!session) {
-        router.push("/auth/login");
-        return;
-      }
+  supabase.auth.refreshSession().then(({ data: { session } }) => {
+    if (!session) {
+      router.push("/auth/login");
+      return;
+    }
 
-      const accessToken = session.access_token;
-      const planSlug = plan.slug;
-      const userName = user.name;
-      const userEmail = user.email;
-      const userPhone = user.phone;
+    const accessToken = session.access_token;
+    const planSlug = plan.slug;
+    const userName = user.name;
+    const userEmail = user.email;
+    const userPhone = user.phone;
 
-      fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ plan: planSlug }),
+    fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/initiate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ plan: planSlug }),
+    })
+      .then((res) => {
+        if (!res.ok) {
+          return res.json().then((e) =>
+            Promise.reject(new Error(e.detail ?? "Failed to initiate payment"))
+          );
+        }
+        return res.json();
       })
-        .then((res) => {
-          if (!res.ok) {
-            return res.json().then((e) =>
-              Promise.reject(new Error(e.detail ?? "Failed to initiate payment"))
-            );
+      .then(({ reference: ourReference }) => {
+        // Patch fetch to proxy unpkg through our domain
+        // so form.html loads even when unpkg.com is blocked
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
+          if (typeof input === "string" && input.includes("unpkg.com")) {
+            input = input.replace("https://unpkg.com", "/payvessel-cdn");
           }
-          return res.json();
-        })
-        .then(({ reference: ourReference }) => {
-          const init = Checkout({
-            api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
-          });
+          return originalFetch(input, init);
+        };
 
-          // NOT awaited — initializeCheckout is callback-based, not a Promise
-          init.initializeCheckout({
-            amount: String(plan.price),
-            currency: "NGN",
-            customer_name: userName,
-            customer_email: userEmail,
-            // Only send phone if we have one (remove this line if PayVessel rejects it)
-            ...(userPhone ? { customer_phone_number: userPhone } : {}),
-            reference: ourReference,
-            channels: PAYVESSEL_CHANNELS, // UPPERCASE: "BANK_TRANSFER" | "CARD"
-            metadata: { plan: planSlug, name: userName },
-
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            onSuccessfulOrder: (response: any) => {
-              const ref =
-                response.reference ??
-                response.transactionReference ??
-                response.data?.reference ??
-                ourReference;
-
-              fetch("/api/payments/verify", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  reference: ref,
-                  our_reference: ourReference,
-                  access_token: accessToken,
-                }),
-              })
-                .then((r) => r.json())
-                .then((data) => {
-                  if (
-                    data.status === "success" ||
-                    data.status === "already_verified"
-                  ) {
-                    setCurrentPlan(planSlug);
-                    router.push("/dashboard/subscribe?subscribed=true");
-                  } else {
-                    setError(
-                      data.detail ?? "Verification failed. Please contact support."
-                    );
-                  }
-                })
-                .catch(() =>
-                  setError(
-                    "Network error during verification. Please contact support."
-                  )
-                )
-                .finally(() => setProcessingPlan(null));
-            },
-
-            onError: (err: unknown) => {
-              console.error("[PayVessel error]", err);
-              setError("Payment failed. Please try again.");
-              setProcessingPlan(null);
-            },
-
-            onClose: () => setProcessingPlan(null),
-          });
-        })
-        .catch((err: Error) => {
-          setError(err.message ?? "Something went wrong.");
-          setProcessingPlan(null);
+        const init = Checkout({
+          api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
         });
-    });
-  }
+
+        init.initializeCheckout({
+          amount: String(plan.price),
+          currency: "NGN",
+          customer_name: userName,
+          customer_email: userEmail,
+          ...(userPhone ? { customer_phone_number: userPhone } : {}),
+          reference: ourReference,
+          channels: PAYVESSEL_CHANNELS,
+          metadata: { plan: planSlug, name: userName },
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          onSuccessfulOrder: (response: any) => {
+            window.fetch = originalFetch;
+
+            const ref =
+              response.reference ??
+              response.transactionReference ??
+              response.data?.reference ??
+              ourReference;
+
+            fetch("/api/payments/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                reference: ref,
+                our_reference: ourReference,
+                access_token: accessToken,
+              }),
+            })
+              .then((r) => r.json())
+              .then((data) => {
+                if (
+                  data.status === "success" ||
+                  data.status === "already_verified"
+                ) {
+                  setCurrentPlan(planSlug);
+                  router.push("/dashboard/subscribe?subscribed=true");
+                } else {
+                  setError(
+                    data.detail ?? "Verification failed. Please contact support."
+                  );
+                }
+              })
+              .catch(() =>
+                setError(
+                  "Network error during verification. Please contact support."
+                )
+              )
+              .finally(() => setProcessingPlan(null));
+          },
+
+          onError: (err: unknown) => {
+            window.fetch = originalFetch;
+            console.error("[PayVessel error]", err);
+            setError("Payment failed. Please try again.");
+            setProcessingPlan(null);
+          },
+
+          onClose: () => {
+            window.fetch = originalFetch;
+            setProcessingPlan(null);
+          },
+        });
+      })
+      .catch((err: Error) => {
+        setError(err.message ?? "Something went wrong.");
+        setProcessingPlan(null);
+      });
+  });
+}
 
   if (loadingUser) {
     return (
