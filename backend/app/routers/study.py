@@ -1,13 +1,12 @@
 """
 SparkL Cram: AI study assistant.
 Storage-optimised: messages deleted with sessions, per-session cap, shorter TTL.
-YouTube extracted via Gemini URL context (no youtube_transcript_api needed).
+YouTube: Gemini url_context (if SDK >= 0.8.0) with yt-dlp subtitle fallback.
 
-v2 storage fixes:
-  1. Quiz messages store a compact reference instead of full JSON blobs.
-  2. Sessions inactive for 30+ days are auto-deleted (with messages).
-  3. Gemini client is module-level singleton with request timeout.
-  4. DB index hints documented; index SQL in migrations note below.
+v3 fixes:
+  - Guards google-genai UrlContext behind _GEMINI_HAS_URL_CONTEXT flag
+  - yt-dlp fallback for YouTube when url_context unavailable or returns empty
+  - All previous storage + singleton + timeout fixes retained
 
 --- DB MIGRATIONS (run once in Supabase SQL editor) ---
 CREATE INDEX IF NOT EXISTS idx_cram_messages_session_created
@@ -22,7 +21,6 @@ CREATE INDEX IF NOT EXISTS idx_cram_sessions_user_created
 CREATE INDEX IF NOT EXISTS idx_cram_sessions_last_active
   ON cram_sessions (last_active_at);
 
--- Also add the last_active_at column if it doesn't exist:
 ALTER TABLE cram_sessions
   ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ DEFAULT NOW();
 ------------------------------------------------------
@@ -32,13 +30,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import glob
 import io
 import json
 import os
 import random
 import re
+import subprocess
+import tempfile
 import uuid
-from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import AsyncGenerator
@@ -69,9 +69,13 @@ except ImportError:
 try:
     from google import genai as genai_sdk
     from google.genai import types as genai_types
+    # UrlContext was added in google-genai 0.8.0.
+    # Guard it so older installs degrade to yt-dlp gracefully.
+    _GEMINI_HAS_URL_CONTEXT = hasattr(genai_types, "UrlContext")
 except ImportError:
     genai_sdk = None
     genai_types = None
+    _GEMINI_HAS_URL_CONTEXT = False
 
 router = APIRouter(prefix="/api/study", tags=["study"])
 
@@ -88,21 +92,16 @@ MAX_TEXT_CHARS           = LIMITS["max_text_chars"]
 MESSAGE_TTL_DAYS          = 3
 MAX_MESSAGES_PER_SESSION  = 40
 CLEANUP_PROBABILITY       = 0.15
-SESSION_INACTIVE_DAYS     = 30   # sessions with no activity beyond this are deleted
+SESSION_INACTIVE_DAYS     = 30
 
 # ── AI knobs ───────────────────────────────────────────────────────────────────
 GROQ_MODEL              = "openai/gpt-oss-120b"
-GEMINI_MODEL            = "gemini-3.5-flash"
-GEMINI_REQUEST_TIMEOUT  = 30    # seconds; kills hanging Render workers
+GEMINI_MODEL            = "gemini-2.0-flash"
+GEMINI_REQUEST_TIMEOUT  = 30
 
 VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text", "url", "youtube"}
 
-# ── Quiz compact reference ─────────────────────────────────────────────────────
-# Instead of storing the full quiz JSON (can be 2-4 KB per row), we store a
-# one-line reference and keep the actual quiz in the HTTP response only.
-# The chat history filter already strips __QUIZ__: lines from prompt context,
-# so this is a pure storage saving with no behaviour change.
-QUIZ_MESSAGE_STUB = "__QUIZ_GENERATED__"   # replaces __QUIZ__:{json}
+QUIZ_MESSAGE_STUB = "__QUIZ_GENERATED__"
 
 QUIZ_SYSTEM_PROMPT = """You are SparkL Cram, a quiz generator for Nigerian university and polytechnic students.
 
@@ -131,8 +130,6 @@ Format:
 }"""
 
 # ── Gemini singleton ───────────────────────────────────────────────────────────
-# One client per process; Gemini's async client is thread-safe.
-# Created lazily on first use so startup doesn't fail if the key is absent.
 
 _gemini_client = None
 
@@ -150,7 +147,7 @@ def _get_gemini_client():
 
 
 async def _gemini_with_timeout(coro, timeout: int = GEMINI_REQUEST_TIMEOUT):
-    """Wrap any Gemini awaitable with a hard timeout so Render workers don't hang."""
+    """Hard timeout so hanging Gemini calls don't tie up Render workers."""
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
@@ -160,7 +157,7 @@ async def _gemini_with_timeout(coro, timeout: int = GEMINI_REQUEST_TIMEOUT):
         )
 
 
-# ── YouTube / URL helpers ──────────────────────────────────────────────────────
+# ── YouTube helpers ────────────────────────────────────────────────────────────
 
 def _extract_youtube_id(url: str) -> str | None:
     patterns = [
@@ -176,52 +173,179 @@ def _extract_youtube_id(url: str) -> str | None:
     return None
 
 
-async def _extract_url_with_gemini(url: str, is_youtube: bool) -> str:
-    client = _get_gemini_client()
-    if is_youtube:
-        prompt = (
-            f"Read this YouTube video and extract ALL of its educational content: {url}\n\n"
-            "Return a full transcript or detailed summary covering every topic, example, "
-            "definition and explanation from the video. Use clear headings. "
-            "Do not add your own opinions — only what is in the video."
-        )
-    else:
-        prompt = (
-            f"Read this web page and extract ALL readable text and educational content: {url}\n\n"
-            "Return the full text, preserving headings and structure. "
-            "Do not add your own opinions — only what is on the page."
-        )
+def _clean_vtt(vtt: str) -> str:
+    """Strip VTT timing/positioning lines and deduplicate repeated caption lines."""
+    lines, seen, out = vtt.splitlines(), set(), []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("WEBVTT") or line.startswith("NOTE"):
+            continue
+        if re.match(r"^\d{2}:\d{2}", line):
+            continue
+        line = re.sub(r"<[^>]+>", "", line).strip()
+        if not line or line in seen:
+            continue
+        seen.add(line)
+        out.append(line)
+    return " ".join(out)
+
+
+async def _extract_youtube_subtitles(video_id: str) -> str | None:
+    """
+    Pull auto-generated or manual English subtitles via yt-dlp.
+    Runs subprocess in executor so it doesn't block the event loop.
+    Returns cleaned plain text or None.
+    """
+    loop = asyncio.get_running_loop()
     try:
-        resp = await _gemini_with_timeout(
-            client.aio.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    tools=[genai_types.Tool(url_context=genai_types.UrlContext())],
-                    max_output_tokens=8192,
-                    temperature=0.0,
+        with tempfile.TemporaryDirectory() as tmp:
+            await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    [
+                        "yt-dlp",
+                        "--skip-download",
+                        "--write-auto-sub",
+                        "--write-sub",
+                        "--sub-lang", "en",
+                        "--sub-format", "vtt",
+                        "--output", f"{tmp}/%(id)s",
+                        f"https://www.youtube.com/watch?v={video_id}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
                 ),
             )
-        )
-        text = (resp.text or "").strip()
-        if len(text) < 50:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Could not extract content from this YouTube video. "
-                    "Make sure the video has captions enabled."
-                ) if is_youtube else "Could not read any content from that link.",
-            )
-        return text
-    except HTTPException:
-        raise
+            vtt_files = glob.glob(f"{tmp}/*.vtt")
+            if not vtt_files:
+                return None
+            with open(vtt_files[0], encoding="utf-8", errors="replace") as f:
+                return _clean_vtt(f.read())
     except Exception as e:
-        print(f"[Gemini URL extraction failed] {e}")
+        print(f"[yt-dlp subtitle extraction failed] {e}")
+        return None
+
+
+async def _extract_url_with_gemini(url: str, is_youtube: bool) -> str:
+    """
+    Extract content from a URL or YouTube video.
+
+    YouTube path:
+      1. Gemini url_context (if SDK >= 0.8.0 and returns enough text)
+      2. yt-dlp subtitles → Gemini cleanup pass
+      3. Raw subtitles as fallback if Gemini cleanup fails
+      4. 422 if all three fail
+
+    Regular URL path:
+      Gemini url_context only (no yt-dlp fallback).
+    """
+    client = _get_gemini_client()
+
+    if is_youtube:
+        # ── Step 1: Gemini url_context ─────────────────────────────────────────
+        if _GEMINI_HAS_URL_CONTEXT:
+            try:
+                resp = await _gemini_with_timeout(
+                    client.aio.models.generate_content(
+                        model=GEMINI_MODEL,
+                        contents=(
+                            f"Read this YouTube video and extract ALL educational content: {url}\n\n"
+                            "Return a full transcript or detailed summary covering every topic, "
+                            "example, definition and explanation from the video. Use clear headings. "
+                            "Do not add your own opinions — only what is in the video."
+                        ),
+                        config=genai_types.GenerateContentConfig(
+                            tools=[genai_types.Tool(url_context=genai_types.UrlContext())],
+                            max_output_tokens=8192,
+                            temperature=0.0,
+                        ),
+                    )
+                )
+                text = (resp.text or "").strip()
+                if len(text) >= 50:
+                    return text
+                print("[Gemini url_context returned too little — falling back to yt-dlp]")
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"[Gemini url_context failed] {e}")
+        else:
+            print("[Gemini url_context unavailable in this SDK version — using yt-dlp]")
+
+        # ── Step 2: yt-dlp subtitles ───────────────────────────────────────────
+        video_id = _extract_youtube_id(url)
+        if video_id:
+            subtitle_text = await _extract_youtube_subtitles(video_id)
+
+            if subtitle_text and len(subtitle_text) > 100:
+                # Ask Gemini to rewrite raw captions as structured study notes.
+                try:
+                    resp = await _gemini_with_timeout(
+                        client.aio.models.generate_content(
+                            model=GEMINI_MODEL,
+                            contents=(
+                                "Below are raw captions from a YouTube video. "
+                                "Rewrite them as clean, structured study notes with headings. "
+                                "Preserve all facts, definitions and examples exactly. "
+                                "Do not add any information that is not in the captions.\n\n"
+                                f"{subtitle_text[:MAX_CONTEXT_CHARS]}"
+                            ),
+                            config=genai_types.GenerateContentConfig(
+                                max_output_tokens=8192,
+                                temperature=0.0,
+                            ),
+                        )
+                    )
+                    cleaned = (resp.text or "").strip()
+                    if len(cleaned) >= 50:
+                        return cleaned
+                except Exception as e:
+                    print(f"[Gemini caption cleanup failed] {e}")
+
+                # ── Step 3: raw subtitles as last resort ───────────────────────
+                if len(subtitle_text) >= 50:
+                    return subtitle_text
+
+        # ── Step 4: hard fail ──────────────────────────────────────────────────
         raise HTTPException(
             status_code=422,
             detail=(
-                "Could not extract this YouTube video. Verify the link and that captions are on."
-            ) if is_youtube else "Could not read that link. Try pasting the text directly.",
+                "Could not extract this YouTube video. "
+                "Try a video that has captions, or paste the transcript as text instead."
+            ),
+        )
+
+    else:
+        # ── Regular URL — Gemini url_context only ──────────────────────────────
+        if _GEMINI_HAS_URL_CONTEXT:
+            try:
+                resp = await _gemini_with_timeout(
+                    client.aio.models.generate_content(
+                        model=GEMINI_MODEL,
+                        contents=(
+                            f"Read this web page and extract ALL readable text and educational content: {url}\n\n"
+                            "Return the full text, preserving headings and structure. "
+                            "Do not add your own opinions — only what is on the page."
+                        ),
+                        config=genai_types.GenerateContentConfig(
+                            tools=[genai_types.Tool(url_context=genai_types.UrlContext())],
+                            max_output_tokens=8192,
+                            temperature=0.0,
+                        ),
+                    )
+                )
+                text = (resp.text or "").strip()
+                if len(text) >= 50:
+                    return text
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"[Gemini URL extraction failed] {e}")
+
+        raise HTTPException(
+            status_code=422,
+            detail="Could not read that link. Try pasting the text directly.",
         )
 
 
@@ -270,7 +394,12 @@ def _day_start_iso() -> str:
 
 def _sync_save_messages(session_id: str, user_id: str, messages: list[dict]) -> None:
     rows = [
-        {"session_id": session_id, "user_id": user_id, "role": m["role"], "content": m["content"]}
+        {
+            "session_id": session_id,
+            "user_id": user_id,
+            "role": m["role"],
+            "content": m["content"],
+        }
         for m in messages
         if m.get("role") in ("user", "assistant") and m.get("content")
     ]
@@ -295,9 +424,10 @@ def _sync_load_messages(session_id: str, limit: int) -> list[dict]:
 
 
 def _sync_cleanup_old_messages() -> None:
-    """Delete messages older than MESSAGE_TTL_DAYS."""
     try:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=MESSAGE_TTL_DAYS)).isoformat()
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=MESSAGE_TTL_DAYS)
+        ).isoformat()
         supabase.table("cram_messages").delete().lt("created_at", cutoff).execute()
     except Exception:
         pass
@@ -305,18 +435,13 @@ def _sync_cleanup_old_messages() -> None:
 
 def _sync_cleanup_inactive_sessions() -> None:
     """
-    Delete sessions (and cascade their messages) that have had no activity
-    for SESSION_INACTIVE_DAYS days. Runs inside the same background cleanup
-    task as message TTL cleanup so there's no extra overhead.
-
-    Requires last_active_at column and idx_cram_sessions_last_active index
-    (see migration SQL at top of file).
+    Delete sessions (and their messages) that have had no activity
+    for SESSION_INACTIVE_DAYS days.
     """
     try:
         cutoff = (
             datetime.now(timezone.utc) - timedelta(days=SESSION_INACTIVE_DAYS)
         ).isoformat()
-        # Fetch IDs first so we can delete messages explicitly if CASCADE isn't set.
         res = (
             supabase.table("cram_sessions")
             .select("id")
@@ -326,16 +451,13 @@ def _sync_cleanup_inactive_sessions() -> None:
         stale_ids = [r["id"] for r in (res.data or [])]
         if not stale_ids:
             return
-        # Delete messages first (safe even with CASCADE).
         supabase.table("cram_messages").delete().in_("session_id", stale_ids).execute()
-        # Then delete the sessions themselves.
         supabase.table("cram_sessions").delete().in_("id", stale_ids).execute()
     except Exception:
         pass
 
 
 def _sync_touch_session(session_id: str) -> None:
-    """Bump last_active_at so the inactivity clock resets on every chat turn."""
     try:
         supabase.table("cram_sessions").update(
             {"last_active_at": datetime.now(timezone.utc).isoformat()}
@@ -352,10 +474,7 @@ def _sync_delete_session_messages(session_id: str) -> None:
 
 
 def _sync_prune_session_messages(session_id: str) -> None:
-    """
-    Keep only the most recent MAX_MESSAGES_PER_SESSION rows for a session.
-    Uses the (session_id, created_at DESC) index added in migrations.
-    """
+    """Keep only the most recent MAX_MESSAGES_PER_SESSION rows per session."""
     try:
         res = (
             supabase.table("cram_messages")
@@ -391,7 +510,11 @@ def _sync_insert_session(row: dict) -> None:
 
 def _sync_count_sessions(user_id: str, since_iso: str | None = None) -> int:
     try:
-        q = supabase.table("cram_sessions").select("id", count="exact").eq("user_id", user_id)
+        q = (
+            supabase.table("cram_sessions")
+            .select("id", count="exact")
+            .eq("user_id", user_id)
+        )
         if since_iso:
             q = q.gte("created_at", since_iso)
         return q.execute().count or 0
@@ -427,18 +550,24 @@ def _sync_list_sessions(user_id: str) -> list[dict]:
 
 
 def _sync_delete_session(session_id: str, user_id: str) -> None:
-    supabase.table("cram_sessions").delete().eq("id", session_id).eq("user_id", user_id).execute()
+    supabase.table("cram_sessions").delete().eq("id", session_id).eq(
+        "user_id", user_id
+    ).execute()
 
 
 async def _run(fn, *args):
     return await asyncio.get_running_loop().run_in_executor(None, partial(fn, *args))
 
 
-async def _save_messages(session_id: str, user_id: str, messages: list[dict]) -> None:
+async def _save_messages(
+    session_id: str, user_id: str, messages: list[dict]
+) -> None:
     await _run(_sync_save_messages, session_id, user_id, messages)
 
 
-async def _load_messages(session_id: str, limit: int = MAX_HISTORY_MSGS) -> list[dict]:
+async def _load_messages(
+    session_id: str, limit: int = MAX_HISTORY_MSGS
+) -> list[dict]:
     return await _run(_sync_load_messages, session_id, limit)
 
 
@@ -451,10 +580,11 @@ async def _get_session(session_id: str, user_id: str) -> dict:
 
 def _prompt_history(raw: list[dict]) -> list[dict]:
     return [
-        m for m in raw
+        m
+        for m in raw
         if m.get("role") in ("user", "assistant")
         and m.get("content")
-        and not m["content"].startswith("__QUIZ__")   # catches both old and new stub
+        and not m["content"].startswith("__QUIZ__")
         and m["content"] != "[Quiz requested]"
     ]
 
@@ -462,10 +592,6 @@ def _prompt_history(raw: list[dict]) -> list[dict]:
 # ── Background cleanup ─────────────────────────────────────────────────────────
 
 def _maybe_schedule_cleanup() -> None:
-    """
-    Fire-and-forget: at CLEANUP_PROBABILITY rate, delete expired messages
-    AND inactive sessions in a single background task.
-    """
     if random.random() < CLEANUP_PROBABILITY:
         async def _do_cleanup():
             await _run(_sync_cleanup_old_messages)
@@ -493,7 +619,10 @@ async def _enforce_daily_message_limit(user_id: str, limits: dict) -> int:
     if used >= cap:
         raise HTTPException(
             status_code=429,
-            detail=f"You've reached today's limit of {cap} Cram messages. It resets at midnight UTC.",
+            detail=(
+                f"You've reached today's limit of {cap} Cram messages. "
+                "It resets at midnight UTC."
+            ),
         )
     return used
 
@@ -508,8 +637,11 @@ async def _stream_groq(messages: list[dict]) -> AsyncGenerator[str, None]:
         raise RuntimeError("GROQ_API_KEY not set")
     client = AsyncGroq(api_key=api_key)
     stream = await client.chat.completions.create(
-        model=GROQ_MODEL, messages=messages, max_tokens=MAX_ANSWER_TOKENS,
-        stream=True, temperature=0.3,
+        model=GROQ_MODEL,
+        messages=messages,
+        max_tokens=MAX_ANSWER_TOKENS,
+        stream=True,
+        temperature=0.3,
     )
     async for chunk in stream:
         delta = chunk.choices[0].delta.content
@@ -517,7 +649,9 @@ async def _stream_groq(messages: list[dict]) -> AsyncGenerator[str, None]:
             yield delta
 
 
-async def _stream_gemini_text(prompt: str, history_text: str = "") -> AsyncGenerator[str, None]:
+async def _stream_gemini_text(
+    prompt: str, history_text: str = ""
+) -> AsyncGenerator[str, None]:
     client = _get_gemini_client()
     full = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
     stream = await _gemini_with_timeout(
@@ -537,15 +671,26 @@ async def _stream_gemini_text(prompt: str, history_text: str = "") -> AsyncGener
 
 
 async def _stream_gemini_image(
-    image_b64: str, mime_type: str, prompt: str, history_text: str, context_block: str,
+    image_b64: str,
+    mime_type: str,
+    prompt: str,
+    history_text: str,
+    context_block: str,
 ) -> AsyncGenerator[str, None]:
     client = _get_gemini_client()
-    text = "\n\n".join(p for p in (context_block, history_text, f"Student: {prompt}") if p)
+    text = "\n\n".join(
+        p for p in (context_block, history_text, f"Student: {prompt}") if p
+    )
     stream = await _gemini_with_timeout(
         client.aio.models.generate_content_stream(
             model=GEMINI_MODEL,
             contents=[
-                genai_types.Part(inline_data=genai_types.Blob(mime_type=mime_type, data=base64.b64decode(image_b64))),
+                genai_types.Part(
+                    inline_data=genai_types.Blob(
+                        mime_type=mime_type,
+                        data=base64.b64decode(image_b64),
+                    )
+                ),
                 genai_types.Part(text=text),
             ],
             config=genai_types.GenerateContentConfig(
@@ -561,7 +706,9 @@ async def _stream_gemini_image(
 
 
 async def _stream_text_with_fallback(
-    groq_messages: list[dict], gemini_prompt: str, history_text: str,
+    groq_messages: list[dict],
+    gemini_prompt: str,
+    history_text: str,
 ) -> AsyncGenerator[str, None]:
     sent_any = False
     try:
@@ -579,7 +726,9 @@ async def _stream_text_with_fallback(
         yield chunk
 
 
-async def _guard_stream(gen: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
+async def _guard_stream(
+    gen: AsyncGenerator[str, None],
+) -> AsyncGenerator[str, None]:
     token = NOT_IN_NOTES_TOKEN
     buf, decided = "", False
     async for chunk in gen:
@@ -603,13 +752,19 @@ async def _extract_image_text(data: bytes, mime: str) -> str:
         client.aio.models.generate_content(
             model=GEMINI_MODEL,
             contents=[
-                genai_types.Part(inline_data=genai_types.Blob(mime_type=mime, data=data)),
-                genai_types.Part(text=(
-                    "Transcribe all text, formulas and diagram labels in this image faithfully. "
-                    "Output only the transcription."
-                )),
+                genai_types.Part(
+                    inline_data=genai_types.Blob(mime_type=mime, data=data)
+                ),
+                genai_types.Part(
+                    text=(
+                        "Transcribe all text, formulas and diagram labels in this image "
+                        "faithfully. Output only the transcription."
+                    )
+                ),
             ],
-            config=genai_types.GenerateContentConfig(max_output_tokens=2048, temperature=0.0),
+            config=genai_types.GenerateContentConfig(
+                max_output_tokens=2048, temperature=0.0
+            ),
         )
     )
     return (resp.text or "").strip()
@@ -628,7 +783,11 @@ def _parse_quiz(raw: str) -> dict:
     if not isinstance(qs, list) or not qs:
         raise ValueError("Quiz had no questions")
     for q in qs:
-        if q.get("type") not in ("mcq", "theory") or not q.get("question") or not q.get("answer"):
+        if (
+            q.get("type") not in ("mcq", "theory")
+            or not q.get("question")
+            or not q.get("answer")
+        ):
             raise ValueError("Quiz had a malformed question")
         q.setdefault("explanation", "")
     return data
@@ -642,8 +801,12 @@ async def _generate_quiz_groq(messages: list[dict]) -> dict:
         raise RuntimeError("GROQ_API_KEY not set")
     client = AsyncGroq(api_key=api_key)
     resp = await client.chat.completions.create(
-        model=GROQ_MODEL, messages=messages, max_tokens=2048, stream=False,
-        temperature=0.5, response_format={"type": "json_object"},
+        model=GROQ_MODEL,
+        messages=messages,
+        max_tokens=2048,
+        stream=False,
+        temperature=0.5,
+        response_format={"type": "json_object"},
     )
     return _parse_quiz(resp.choices[0].message.content or "{}")
 
@@ -655,7 +818,9 @@ async def _generate_quiz_gemini(context_block: str) -> dict:
             model=GEMINI_MODEL,
             contents=f"Generate a quiz from these study notes:\n\n{context_block}",
             config=genai_types.GenerateContentConfig(
-                system_instruction=QUIZ_SYSTEM_PROMPT, max_output_tokens=2048, temperature=0.5,
+                system_instruction=QUIZ_SYSTEM_PROMPT,
+                max_output_tokens=2048,
+                temperature=0.5,
             ),
         )
     )
@@ -665,7 +830,10 @@ async def _generate_quiz_gemini(context_block: str) -> dict:
 async def _generate_quiz(context_block: str) -> dict:
     msgs = [
         {"role": "system", "content": QUIZ_SYSTEM_PROMPT},
-        {"role": "user", "content": f"Generate a quiz from these notes:\n\n{context_block}"},
+        {
+            "role": "user",
+            "content": f"Generate a quiz from these notes:\n\n{context_block}",
+        },
     ]
     try:
         return await _generate_quiz_groq(msgs)
@@ -712,7 +880,10 @@ async def create_session(
         if await _run(_sync_count_sessions, user_id) >= max_sessions:
             raise HTTPException(
                 status_code=403,
-                detail=f"Your {plan} plan allows {max_sessions} Cram sessions. Delete one or upgrade for more.",
+                detail=(
+                    f"Your {plan} plan allows {max_sessions} Cram sessions. "
+                    "Delete one or upgrade for more."
+                ),
             )
 
     daily_uploads = limits.get("cram_daily_uploads")
@@ -720,7 +891,10 @@ async def create_session(
         if await _run(_sync_count_sessions, user_id, _day_start_iso()) >= daily_uploads:
             raise HTTPException(
                 status_code=429,
-                detail=f"Your {plan} plan allows {daily_uploads} new sessions per day. Try again tomorrow.",
+                detail=(
+                    f"Your {plan} plan allows {daily_uploads} new sessions per day. "
+                    "Try again tomorrow."
+                ),
             )
 
     _maybe_schedule_cleanup()
@@ -735,13 +909,17 @@ async def create_session(
                 detail="Link and YouTube study is a Premium feature.",
             )
         if not source_url or not source_url.strip():
-            raise HTTPException(status_code=422, detail="A link is required for URL sessions.")
+            raise HTTPException(
+                status_code=422, detail="A link is required for URL sessions."
+            )
 
         stored_url = source_url.strip()
         video_id   = _extract_youtube_id(stored_url)
         is_youtube = bool(video_id)
 
-        extracted_text = await _extract_url_with_gemini(stored_url, is_youtube=is_youtube)
+        extracted_text = await _extract_url_with_gemini(
+            stored_url, is_youtube=is_youtube
+        )
         if is_youtube:
             source_type = "youtube"
 
@@ -754,6 +932,7 @@ async def create_session(
             )
         fname = file.filename.lower()
         mime  = file.content_type or ""
+
         if fname.endswith(".pdf") or "pdf" in mime:
             extracted_text = _extract_pdf(file_bytes)
             if len(extracted_text) < 50:
@@ -768,9 +947,13 @@ async def create_session(
             extracted_text = _extract_docx(file_bytes)
         elif fname.endswith(".txt"):
             extracted_text = file_bytes.decode("utf-8", errors="replace")
-        elif mime.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        elif mime.startswith("image/") or fname.endswith(
+            (".jpg", ".jpeg", ".png", ".webp")
+        ):
             try:
-                extracted_text = await _extract_image_text(file_bytes, mime or "image/jpeg")
+                extracted_text = await _extract_image_text(
+                    file_bytes, mime or "image/jpeg"
+                )
             except Exception as e:
                 print(f"[image transcription failed] {e}")
                 raise HTTPException(
@@ -799,22 +982,29 @@ async def create_session(
     session_id = str(uuid.uuid4())
     now_iso    = datetime.now(timezone.utc).isoformat()
     try:
-        await _run(_sync_insert_session, {
-            "id":               session_id,
-            "user_id":          user_id,
-            "title":            title.strip()[:120],
-            "source_type":      source_type,
-            "extracted_text":   extracted_text,
-            "source_url":       stored_url,
-            "last_active_at":   now_iso,
-        })
+        await _run(
+            _sync_insert_session,
+            {
+                "id":             session_id,
+                "user_id":        user_id,
+                "title":          title.strip()[:120],
+                "source_type":    source_type,
+                "extracted_text": extracted_text,
+                "source_url":     stored_url,
+                "last_active_at": now_iso,
+            },
+        )
     except Exception:
         raise HTTPException(
             status_code=500,
             detail="Could not create the session. Please try again.",
         )
 
-    return CramSessionRow(id=session_id, title=title.strip()[:120], source_type=source_type)
+    return CramSessionRow(
+        id=session_id,
+        title=title.strip()[:120],
+        source_type=source_type,
+    )
 
 
 @router.get("/sessions/{session_id}/messages")
@@ -857,7 +1047,7 @@ async def study_chat(
 
     _maybe_schedule_cleanup()
 
-    # Touch last_active_at so the session's inactivity clock resets.
+    # Bump last_active_at in the background.
     asyncio.create_task(_run(_sync_touch_session, session_id))
 
     if mode != "quiz":
@@ -878,13 +1068,20 @@ async def study_chat(
                 status_code=413,
                 detail=f"Image too large. The limit is {MAX_FILE_MB} MB.",
             )
-        if mime.startswith("image/") or file.filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-            image_b64, image_mime = base64.b64encode(raw).decode(), mime or "image/jpeg"
+        if mime.startswith("image/") or file.filename.lower().endswith(
+            (".jpg", ".jpeg", ".png", ".webp")
+        ):
+            image_b64  = base64.b64encode(raw).decode()
+            image_mime = mime or "image/jpeg"
 
     if not extracted_text and not image_b64:
         return _text_stream(REFUSAL_NOT_IN_NOTES)
 
-    context_block = _build_context_block(extracted_text, session["title"]) if extracted_text else ""
+    context_block = (
+        _build_context_block(extracted_text, session["title"])
+        if extracted_text
+        else ""
+    )
 
     if mode == "quiz":
         if not context_block:
@@ -896,7 +1093,9 @@ async def study_chat(
             quiz_data = await _generate_quiz(context_block)
         except Exception as e:
             print(f"[quiz failed] {e}")
-            raise HTTPException(status_code=502, detail="Quiz generation failed. Please try again.")
+            raise HTTPException(
+                status_code=502, detail="Quiz generation failed. Please try again."
+            )
 
         # Store a compact stub — not the full JSON blob.
         await _save_messages(session_id, user_id, [
@@ -906,31 +1105,58 @@ async def study_chat(
         asyncio.create_task(_run(_sync_prune_session_messages, session_id))
         return JSONResponse({"type": "quiz", "data": quiz_data})
 
-    history      = _prompt_history(await _load_messages(session_id, limit=MAX_HISTORY_MSGS))
+    history = _prompt_history(
+        await _load_messages(session_id, limit=MAX_HISTORY_MSGS)
+    )
     history_text = "\n".join(
-        f"{'Student' if m['role'] == 'user' else 'SparkL Cram'}: {m['content']}" for m in history
+        f"{'Student' if m['role'] == 'user' else 'SparkL Cram'}: {m['content']}"
+        for m in history
     )
 
     mode_prefix = {
-        "summary": "Summarise the key points from the notes in clear bullet points grouped by topic.",
-        "explain": "Explain the main concepts from the notes simply, as if teaching a student seeing this for the first time.",
+        "summary": (
+            "Summarise the key points from the notes in clear bullet points "
+            "grouped by topic."
+        ),
+        "explain": (
+            "Explain the main concepts from the notes simply, as if teaching "
+            "a student seeing this for the first time."
+        ),
     }.get(mode, "")
-    full_message = f"{mode_prefix}\n\n{message}".strip() if mode_prefix else message
+    full_message = (
+        f"{mode_prefix}\n\n{message}".strip() if mode_prefix else message
+    )
     if not full_message:
         raise HTTPException(status_code=422, detail="Type a question first.")
 
-    await _save_messages(session_id, user_id, [{"role": "user", "content": full_message}])
+    await _save_messages(
+        session_id, user_id, [{"role": "user", "content": full_message}]
+    )
 
     if image_b64:
-        source = _stream_gemini_image(image_b64, image_mime, full_message, history_text, context_block)
+        source = _stream_gemini_image(
+            image_b64, image_mime, full_message, history_text, context_block
+        )
     else:
-        groq_messages: list[dict] = [{"role": "system", "content": TUTOR_SYSTEM_PROMPT}]
-        groq_messages.append({"role": "user",      "content": f"Study notes (untrusted data):\n\n{context_block}"})
-        groq_messages.append({"role": "assistant", "content": "Understood. I will answer only from these notes."})
-        groq_messages.extend({"role": m["role"], "content": m["content"]} for m in history)
+        groq_messages: list[dict] = [
+            {"role": "system", "content": TUTOR_SYSTEM_PROMPT}
+        ]
+        groq_messages.append({
+            "role":    "user",
+            "content": f"Study notes (untrusted data):\n\n{context_block}",
+        })
+        groq_messages.append({
+            "role":    "assistant",
+            "content": "Understood. I will answer only from these notes.",
+        })
+        groq_messages.extend(
+            {"role": m["role"], "content": m["content"]} for m in history
+        )
         groq_messages.append({"role": "user", "content": full_message})
         source = _stream_text_with_fallback(
-            groq_messages, f"{context_block}\n\n{full_message}", history_text,
+            groq_messages,
+            f"{context_block}\n\n{full_message}",
+            history_text,
         )
 
     async def stream():
@@ -946,7 +1172,10 @@ async def study_chat(
                 ai_text = msg
                 yield msg
         if ai_text:
-            await _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
+            await _save_messages(
+                session_id, user_id,
+                [{"role": "assistant", "content": ai_text}],
+            )
             asyncio.create_task(_run(_sync_prune_session_messages, session_id))
 
     return StreamingResponse(stream(), media_type="text/plain")
@@ -957,7 +1186,9 @@ async def get_cram_limits(user_id: str = Depends(get_current_user)):
     limits         = get_user_limits(user_id)
     has_access     = bool(limits.get("cram_access"))
     sessions_used  = await _run(_sync_count_sessions, user_id) if has_access else 0
-    messages_today = await _run(_sync_count_user_messages_today, user_id) if has_access else 0
+    messages_today = (
+        await _run(_sync_count_user_messages_today, user_id) if has_access else 0
+    )
     return {
         "plan":                limits.get("plan", "free"),
         "cram_access":         has_access,
@@ -976,15 +1207,21 @@ async def list_sessions(user_id: str = Depends(get_current_user)):
     try:
         return await _run(_sync_list_sessions, user_id)
     except Exception:
-        raise HTTPException(status_code=500, detail="Could not load your sessions.")
+        raise HTTPException(
+            status_code=500, detail="Could not load your sessions."
+        )
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str, user_id: str = Depends(get_current_user)):
+async def delete_session(
+    session_id: str, user_id: str = Depends(get_current_user)
+):
     _get_cram_limits(user_id)
     try:
         await _run(_sync_delete_session_messages, session_id)
         await _run(_sync_delete_session, session_id, user_id)
         return {"deleted": True}
     except Exception:
-        raise HTTPException(status_code=500, detail="Could not delete that session.")
+        raise HTTPException(
+            status_code=500, detail="Could not delete that session."
+        )
