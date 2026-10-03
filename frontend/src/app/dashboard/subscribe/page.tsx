@@ -327,8 +327,8 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }
           </div>
 
           {(() => {
-            const processingFee = 100; // PayVessel flat processing fee (NGN)
-            const vat = 100;           // VAT on processing fee (₦100 flat, as required by Nigerian law)
+            const processingFee = 50; // PayVessel flat processing fee (NGN)
+            const vat = 50;           // VAT on processing fee (₦100 flat, as required by Nigerian law)
             const total = plan.price + processingFee + vat;
             return (
               <div
