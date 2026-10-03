@@ -667,24 +667,24 @@ function Sidebar({
           })}
 
           {/* Admin link */}
-          {user?.isAdmin && (
-            <>
-              <p className="px-3 pt-3 pb-1 text-[9px] font-black uppercase tracking-widest text-red-500">Admin</p>
-              <Link href="/admin" onClick={onClose}
-                className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all"
-                style={{
-                  background: pathname.startsWith("/dashboard/admin") ? "rgba(239,68,68,0.10)" : "transparent",
-                  color: pathname.startsWith("/dashboard/admin") ? "#EF4444" : "var(--sp-text-2)",
-                  borderLeft: pathname.startsWith("/dashboard/admin") ? "3px solid #EF4444" : "3px solid transparent",
-                }}>
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-500/10">
-                  <ShieldAlert className="h-3.5 w-3.5 text-red-500"/>
-                </span>
-                Admin panel
-                {pathname.startsWith("/dashboard/admin") && <ChevronRight className="ml-auto h-3 w-3 text-red-500"/>}
-              </Link>
-            </>
-          )}
+{user?.isAdmin && (
+  <>
+    <p className="px-3 pt-3 pb-1 text-[9px] font-black uppercase tracking-widest text-red-500">Admin</p>
+    <Link href="/admin" onClick={onClose}
+      className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all"
+      style={{
+        background: pathname.startsWith("/admin") ? "rgba(239,68,68,0.10)" : "transparent",
+        color: pathname.startsWith("/admin") ? "#EF4444" : "var(--sp-text-2)",
+        borderLeft: pathname.startsWith("/admin") ? "3px solid #EF4444" : "3px solid transparent",
+      }}>
+      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-500/10">
+        <ShieldAlert className="h-3.5 w-3.5 text-red-500"/>
+      </span>
+      Admin panel
+      {pathname.startsWith("/admin") && <ChevronRight className="ml-auto h-3 w-3 text-red-500"/>}
+    </Link>
+  </>
+)}
         </nav>
 
         {/* Footer */}
