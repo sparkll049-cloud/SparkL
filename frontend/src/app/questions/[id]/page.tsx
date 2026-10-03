@@ -9,6 +9,7 @@ import {
   Send, CheckCircle2,
   Paperclip, X, Clock, Eye, EyeOff, Crown,
   ChevronDown, Zap,
+  Check, HelpCircle, RotateCcw, Trophy,
 } from "lucide-react";
 
 import InlinePaperViewer from "@/components/InlinePaperViewer";
@@ -70,14 +71,56 @@ const LOW_QUALITY_THRESHOLD = 0.5;
 type Tab = "paper" | "submit";
 
 // ── Math renderer ─────────────────────────────────────────────────────────────
+// Renders $...$ / $$...$$ AND auto-detects plain-text math such as
+// x^2, (a+b)^2, x^-1, a_n, x_{10}, sqrt(x+1), \frac{a}{b}.
+
+const MATH_SPLIT = /(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)/g;
+
+// Run `fn` only on the parts that are NOT already inside $...$ / $$...$$
+function mapText(str: string, fn: (s: string) => string): string {
+  return str
+    .split(MATH_SPLIT)
+    .map((seg, i) => (i % 2 === 1 ? seg : fn(seg)))
+    .join("");
+}
+
+const LATEX_CMD =
+  /(\\(?:d?frac|sqrt|sum|int|lim|times|div|cdot|pm|leq|geq|neq|approx|infty|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|omega|log|ln|sin|cos|tan|rightarrow|to)\b(?:\{[^{}]*\})*(?:[\^_](?:\{[^{}]*\}|[A-Za-z0-9]))*)/g;
+
+function autoWrapMath(raw: string): string {
+  // 1. normalise \( \) and \[ \]
+  let t = raw
+    .replace(/\\\[/g, "$$$$").replace(/\\\]/g, "$$$$")
+    .replace(/\\\(/g, "$").replace(/\\\)/g, "$");
+
+  // 2. bare LaTeX commands: \frac{a}{b}, \sqrt{x}, \times ...
+  t = mapText(t, s => s.replace(LATEX_CMD, "$$$1$$"));
+
+  // 3. sqrt(x+1) -> \sqrt{x+1}
+  t = mapText(t, s => s.replace(/\bsqrt\(([^()]+)\)/g, (_m, a) => `$\\sqrt{${a}}$`));
+
+  // 4. powers & subscripts: x^2, (a+b)^2, 2^n, x^-1, a_n, x_{10}, x_1^2
+  t = mapText(t, s =>
+    s.replace(
+      /(^|[^\w$\\{}])([A-Za-z0-9]+|\([^()]+\))((?:[\^_](?:\{[^{}]+\}|[+-]?[A-Za-z0-9]+))+)/g,
+      (m, pre, base, ops) => {
+        const hasCaret = ops.includes("^");
+        // underscores alone only count for short math-like vars (x_1, a_n),
+        // so snake_case words in normal text are left alone
+        if (!hasCaret && (base.startsWith("(") || base.length > 2)) return m;
+        const fixed = ops.replace(/([\^_])([+-]?[A-Za-z0-9]+)/g, "$1{$2}");
+        return `${pre}$${base}${fixed}$`;
+      },
+    ),
+  );
+
+  return t;
+}
 
 function MathRenderer({ content, className = "" }: { content: string | null; className?: string }) {
   const parts = useMemo(() => {
     if (!content) return [];
-    const normalized = content
-      .replace(/\\\[/g, "$$").replace(/\\\]/g, "$$")
-      .replace(/\\\(/g, "$").replace(/\\\)/g, "$");
-    return normalized.split(/(\$\$.*?\$\$|\$.*?\$)/gs);
+    return autoWrapMath(content).split(MATH_SPLIT);
   }, [content]);
 
   if (!content) return null;
@@ -86,20 +129,24 @@ function MathRenderer({ content, className = "" }: { content: string | null; cla
     <span className={className}>
       {parts.map((part, index) => {
         if (!part) return null;
-        if (part.startsWith("$$") && part.endsWith("$$")) {
+
+        if (part.startsWith("$$") && part.endsWith("$$") && part.length > 4) {
           const math = part.slice(2, -2).trim();
           if (!math) return null;
           return (
             <span key={index} className="my-2 block overflow-x-auto max-w-full">
-              <BlockMath math={math} />
+              <BlockMath math={math} renderError={() => <span>{math}</span>} />
             </span>
           );
         }
-        if (part.startsWith("$") && part.endsWith("$")) {
+
+        if (part.startsWith("$") && part.endsWith("$") && part.length > 2) {
           const math = part.slice(1, -1).trim();
           if (!math) return null;
-          return <InlineMath key={index} math={math} />;
+          // if KaTeX can't parse it, fall back to plain text instead of a red error
+          return <InlineMath key={index} math={math} renderError={() => <span>{math}</span>} />;
         }
+
         return <span key={index}>{part}</span>;
       })}
     </span>
@@ -237,51 +284,90 @@ function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
   );
 }
 
-// ── Practice modal ────────────────────────────────────────────────────────────
+// ── Practice quiz ─────────────────────────────────────────────────────────────
 
-function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
-  const [selected, setSelected] = useState<string | null>(null);
-  const [revealed, setRevealed] = useState(false);
+type Result = "correct" | "wrong" | "skipped" | "got" | "review";
 
-  function style(opt: string): React.CSSProperties {
-    if (!revealed && selected !== opt)
-      return { borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" };
-    if (!revealed && selected === opt)
-      return { borderColor: "rgba(99,102,241,0.5)", background: "rgba(99,102,241,0.08)", color: "var(--sp-text)" };
-    if (opt === q.correct_answer)
-      return { borderColor: "rgba(16,185,129,0.4)", background: "rgba(16,185,129,0.08)", color: "#10b981" };
-    if (selected === opt)
-      return { borderColor: "rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.08)", color: "#ef4444" };
-    return { borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" };
+const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
+
+function PracticeMCQ({
+  q, pick, result, onPick, onSkip,
+}: {
+  q: ProcessedQuestion;
+  pick?: string;
+  result?: Result;
+  onPick: (opt: string) => void;
+  onSkip: () => void;
+}) {
+  const done = result !== undefined;
+  const correct = norm(q.correct_answer);
+
+  function look(opt: string): React.CSSProperties {
+    const base: React.CSSProperties = {
+      borderColor: "var(--sp-border)", background: "var(--sp-bg-card)", color: "var(--sp-text-2)",
+    };
+    if (!done) return base;
+    if (opt === correct)
+      return { borderColor: "rgba(16,185,129,0.55)", background: "rgba(16,185,129,0.10)", color: "var(--sp-text)" };
+    if (opt === pick)
+      return { borderColor: "rgba(239,68,68,0.55)", background: "rgba(239,68,68,0.08)", color: "var(--sp-text)" };
+    return { ...base, opacity: 0.55 };
+  }
+
+  function badge(opt: string): React.CSSProperties {
+    if (done && opt === correct) return { background: "#10b981", borderColor: "#10b981", color: "#fff" };
+    if (done && opt === pick)    return { background: "#ef4444", borderColor: "#ef4444", color: "#fff" };
+    return { borderColor: "var(--sp-border)", color: "var(--sp-text-3)" };
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2.5">
       {(["a", "b", "c", "d"] as const).map(opt => {
         const text = q[`option_${opt}` as keyof ProcessedQuestion] as string | null;
         if (!text) return null;
         return (
-          <button key={opt} onClick={() => { if (!revealed) setSelected(opt); }} disabled={revealed}
-            className="w-full rounded-xl border px-4 py-3 text-left text-sm transition-all disabled:cursor-default flex items-start gap-2"
-            style={style(opt)}>
-            <span className="font-bold uppercase shrink-0 mt-0.5">{opt}.</span>
-            <MathRenderer content={text} className="flex-1" />
+          <button
+            key={opt}
+            onClick={() => onPick(opt)}
+            disabled={done}
+            className="w-full flex items-center gap-3 rounded-2xl border px-3.5 py-3 text-left text-[15px] leading-6 transition-all active:scale-[0.99] disabled:cursor-default"
+            style={look(opt)}
+          >
+            <span
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold uppercase"
+              style={badge(opt)}
+            >
+              {done && opt === correct ? <Check size={14} strokeWidth={3} />
+                : done && opt === pick ? <X size={14} strokeWidth={3} />
+                : opt}
+            </span>
+            <MathRenderer content={text} className="flex-1 min-w-0 break-words" />
           </button>
         );
       })}
-      {!revealed ? (
-        <button onClick={() => setRevealed(true)} disabled={!selected}
-          className="mt-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed">
-          Submit answer
+
+      {!done ? (
+        <button
+          onClick={onSkip}
+          className="mt-2 inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-medium transition"
+          style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }}
+        >
+          <HelpCircle size={15} /> Don&apos;t know the answer
         </button>
       ) : (
-        <div className="rounded-xl border p-4 space-y-1.5 mt-1"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
-          <p className={`text-sm font-semibold ${selected === q.correct_answer ? "text-emerald-500" : "text-red-500"}`}>
-            {selected === q.correct_answer ? "✓ Correct!" : `✗ Incorrect — answer is ${q.correct_answer?.toUpperCase()}`}
+        <div
+          className="mt-3 rounded-2xl border p-4 space-y-1.5"
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}
+        >
+          <p className={`text-sm font-bold ${
+            result === "correct" ? "text-emerald-500" : result === "wrong" ? "text-red-500" : "text-amber-500"
+          }`}>
+            {result === "correct" && "Correct!"}
+            {result === "wrong" && `Not quite — the answer is ${correct.toUpperCase()}`}
+            {result === "skipped" && `The answer is ${correct.toUpperCase()}`}
           </p>
           {q.explanation && (
-            <div className="text-sm leading-6" style={{ color: "var(--sp-text-3)" }}>
+            <div className="text-sm leading-6" style={{ color: "var(--sp-text-2)" }}>
               <MathRenderer content={q.explanation} />
             </div>
           )}
@@ -291,25 +377,83 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
   );
 }
 
-function PracticeTheory({ q }: { q: ProcessedQuestion }) {
-  const [show, setShow] = useState(false);
+function PracticeTheory({
+  q, result, onGrade,
+}: {
+  q: ProcessedQuestion;
+  result?: Result;
+  onGrade: (r: "got" | "review") => void;
+}) {
+  const [show, setShow] = useState(result !== undefined);
+
   return (
     <div className="space-y-3">
-      <button onClick={() => setShow(!show)}
-        className="flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition"
-        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
+      <button
+        onClick={() => setShow(s => !s)}
+        className="flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-medium transition"
+        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)", color: "var(--sp-text-2)" }}
+      >
         <ChevronDown size={14} className={`transition-transform ${show ? "rotate-180" : ""}`} />
         {show ? "Hide model answer" : "Show model answer"}
       </button>
-      {show && q.model_answer && (
-        <div className="rounded-xl border p-4"
-          style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.05)" }}>
-          <p className="text-[10px] font-semibold text-emerald-500 mb-2">Model Answer</p>
-          <div className="text-sm leading-7 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
-            <MathRenderer content={q.model_answer} />
+
+      {show && (
+        <>
+          <div
+            className="rounded-2xl border p-4"
+            style={{ borderColor: "rgba(16,185,129,0.25)", background: "rgba(16,185,129,0.05)" }}
+          >
+            <p className="text-xs font-semibold text-emerald-500 mb-2">Model answer</p>
+            <div className="text-[15px] leading-7 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
+              {q.model_answer
+                ? <MathRenderer content={q.model_answer} />
+                : "No model answer available for this question yet."}
+            </div>
           </div>
-        </div>
+
+          <p className="text-xs pt-1" style={{ color: "var(--sp-text-3)" }}>How did you do?</p>
+          <div className="flex gap-2">
+            {([
+              { r: "got" as const,    label: "I got it",    on: "#10b981" },
+              { r: "review" as const, label: "Need review", on: "#f59e0b" },
+            ]).map(b => (
+              <button
+                key={b.r}
+                onClick={() => onGrade(b.r)}
+                className="flex-1 rounded-2xl border px-4 py-3 text-sm font-semibold transition"
+                style={
+                  result === b.r
+                    ? { borderColor: b.on, background: b.on, color: "#fff" }
+                    : { borderColor: "var(--sp-border)", background: "var(--sp-bg-card)", color: "var(--sp-text-2)" }
+                }
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+        </>
       )}
+    </div>
+  );
+}
+
+function ScoreRing({ pct }: { pct: number }) {
+  const r = 54, c = 2 * Math.PI * r;
+  const color = pct >= 70 ? "#10b981" : pct >= 40 ? "#f59e0b" : "#ef4444";
+  return (
+    <div className="relative mx-auto h-36 w-36">
+      <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90">
+        <circle cx="64" cy="64" r={r} fill="none" strokeWidth="10" style={{ stroke: "var(--sp-bg-muted)" }} />
+        <circle
+          cx="64" cy="64" r={r} fill="none" strokeWidth="10" strokeLinecap="round"
+          stroke={color} strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)}
+          style={{ transition: "stroke-dashoffset 0.8s ease" }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-3xl font-extrabold" style={{ color: "var(--sp-text)" }}>{pct}%</span>
+        <span className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>score</span>
+      </div>
     </div>
   );
 }
@@ -322,134 +466,297 @@ function PracticeModal({
   userEmail: string | null;
   onClose: () => void;
 }) {
-  const [index, setIndex] = useState(0);
-
   const freeLimit = Math.max(2, Math.min(questions.length, Math.ceil(questions.length * 0.1)));
-  const visible   = !isPaid ? questions.slice(0, freeLimit) : questions;
-  const hidden    = questions.length - visible.length;
-  const isGated   = !isPaid && hidden > 0;
+  const baseDeck  = useMemo(
+    () => (!isPaid ? questions.slice(0, freeLimit) : questions),
+    [questions, isPaid, freeLimit],
+  );
+  const hidden  = questions.length - baseDeck.length;
+  const isGated = !isPaid && hidden > 0;
 
-  const q           = visible[index];
-  const mcqCount    = visible.filter(q => q.question_type === "mcq").length;
-  const theoryCount = visible.filter(q => q.question_type === "theory").length;
+  const [deck, setDeck]         = useState<ProcessedQuestion[]>(baseDeck);
+  const [index, setIndex]       = useState(0);
+  const [picks, setPicks]       = useState<Record<string, string>>({});
+  const [results, setResults]   = useState<Record<string, Result>>({});
+  const [finished, setFinished] = useState(false);
+
+  const q      = deck[index];
+  const isLast = index === deck.length - 1;
 
   useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = ""; };
   }, []);
 
+  const pickMcq = useCallback((opt: string) => {
+    if (!q || results[q.id]) return;
+    setPicks(p => ({ ...p, [q.id]: opt }));
+    setResults(r => ({ ...r, [q.id]: opt === norm(q.correct_answer) ? "correct" : "wrong" }));
+  }, [q, results]);
+
+  const skipMcq = useCallback(() => {
+    if (!q || results[q.id]) return;
+    setResults(r => ({ ...r, [q.id]: "skipped" }));
+  }, [q, results]);
+
+  const next = useCallback(() => {
+    if (isLast) setFinished(true);
+    else setIndex(i => i + 1);
+  }, [isLast]);
+
+  const prev = useCallback(() => setIndex(i => Math.max(0, i - 1)), []);
+
+  // keyboard: a–d answer, arrows navigate
+  useEffect(() => {
+    if (finished) return;
+    const onKey = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (q?.question_type === "mcq" && ["a", "b", "c", "d"].includes(k)) pickMcq(k);
+      if (e.key === "ArrowRight") next();
+      if (e.key === "ArrowLeft") prev();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [finished, q, pickMcq, next, prev]);
+
+  const stats = useMemo(() => {
+    const mcq     = deck.filter(x => x.question_type === "mcq");
+    const theory  = deck.filter(x => x.question_type === "theory");
+    const correct = mcq.filter(x => results[x.id] === "correct").length;
+    const got     = theory.filter(x => results[x.id] === "got").length;
+    const scored  = mcq.length + theory.length;
+    const pct     = scored ? Math.round(((correct + got) / scored) * 100) : 0;
+    const missed  = deck.filter(x => {
+      const r = results[x.id];
+      return r !== "correct" && r !== "got";
+    });
+    return { correct, got, pct, missed };
+  }, [deck, results]);
+
+  function restart(nextDeck: ProcessedQuestion[]) {
+    setDeck(nextDeck); setIndex(0); setPicks({}); setResults({}); setFinished(false);
+  }
+
+  const answered = deck.filter(x => results[x.id]).length;
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "var(--sp-bg)" }}>
-      {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3.5 border-b shrink-0"
-        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
-        <button onClick={onClose}
-          className="flex items-center justify-center h-8 w-8 rounded-lg transition"
-          style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
-          <X size={15} />
+      {/* Top bar */}
+      <div
+        className="flex items-center gap-3 px-4 py-3 shrink-0 border-b"
+        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
+      >
+        <button
+          onClick={onClose}
+          aria-label="Close quiz"
+          className="flex h-9 w-9 items-center justify-center rounded-full border transition"
+          style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)" }}
+        >
+          <X size={16} />
         </button>
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>Practice Quiz</p>
-          <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-            {visible.length} question{visible.length !== 1 ? "s" : ""}
-            {mcqCount > 0 && ` · ${mcqCount} MCQ`}
-            {theoryCount > 0 && ` · ${theoryCount} Theory`}
-          </p>
-        </div>
-        <span className="text-xs font-semibold shrink-0" style={{ color: "var(--sp-text-3)" }}>
-          {index + 1} / {visible.length}
-        </span>
-      </div>
 
-      {/* Progress bar */}
-      <div className="h-1 shrink-0" style={{ background: "var(--sp-bg-muted)" }}>
-        <div className="h-full bg-indigo-500 transition-all duration-300"
-          style={{ width: `${((index + 1) / visible.length) * 100}%` }} />
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
-        {q && (
-          <SecureWrap userEmail={userEmail} enabled={isPaid}>
-            <div className="rounded-2xl border p-5"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <div className="flex items-center gap-2 mb-4 flex-wrap">
-                <span className="text-xs font-bold text-indigo-500">
-                  Question {q.question_number ?? index + 1}
-                </span>
-                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                  q.question_type === "mcq"
-                    ? "border-blue-500/20 bg-blue-500/10 text-blue-500"
-                    : "border-slate-500/20 bg-slate-500/10 text-slate-500"
-                }`}>
-                  {q.question_type === "mcq" ? "MCQ" : "Theory"}
-                </span>
-                {q.topic_tag && (
-                  <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-500">
-                    {q.topic_tag}
-                  </span>
-                )}
-                {q.marks && (
-                  <span className="ml-auto text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-                    {q.marks} marks
-                  </span>
-                )}
-              </div>
-              <div className="text-sm leading-7 whitespace-pre-wrap mb-4" style={{ color: "var(--sp-text)" }}>
-                <MathRenderer content={q.question_text} />
-              </div>
-              {q.question_type === "mcq" ? <PracticeMCQ q={q} /> : <PracticeTheory q={q} />}
-            </div>
-          </SecureWrap>
-        )}
-
-        {isGated && index === visible.length - 1 && (
-          <div className="rounded-2xl border p-6 text-center"
-            style={{ borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.05)" }}>
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl mx-auto mb-3"
-              style={{ background: "rgba(99,102,241,0.12)" }}>
-              <Lock className="h-4 w-4 text-indigo-500" />
-            </div>
-            <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-              {hidden} more question{hidden !== 1 ? "s" : ""} locked
-            </p>
-            <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-              Free plan limits practice to {freeLimit} question{freeLimit !== 1 ? "s" : ""} (~10% preview)
-            </p>
-            <Link href="/dashboard/subscribe"
-              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition">
-              <Crown className="h-3.5 w-3.5" />
-              Unlock all questions
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
+              {finished ? "Results" : `${index + 1} / ${deck.length}`}
+            </span>
+            <span className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>
+              {answered} answered
+            </span>
           </div>
-        )}
+          <div className="flex gap-[3px]">
+            {deck.map((d, i) => {
+              const r = results[d.id];
+              const bg =
+                r === "correct" || r === "got" ? "#10b981"
+                : r === "wrong" ? "#ef4444"
+                : r === "skipped" || r === "review" ? "#f59e0b"
+                : i === index && !finished ? "#6366f1"
+                : "var(--sp-bg-muted)";
+              return (
+                <button
+                  key={d.id}
+                  onClick={() => { setFinished(false); setIndex(i); }}
+                  aria-label={`Go to question ${i + 1}`}
+                  className="h-1.5 flex-1 rounded-full transition-colors"
+                  style={{ background: bg, minWidth: 4 }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto px-4 py-5">
+        <div className="mx-auto max-w-2xl space-y-5">
+          {!finished && q && (
+            <SecureWrap userEmail={userEmail} enabled={isPaid}>
+              <div
+                className="rounded-3xl border p-5"
+                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+              >
+                <div className="flex items-center gap-2 mb-4 flex-wrap">
+                  <span className="flex items-center gap-1.5 text-sm font-bold text-indigo-500">
+                    <Sparkles size={14} /> Question {q.question_number ?? index + 1}
+                  </span>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                      q.question_type === "mcq"
+                        ? "border-blue-500/20 bg-blue-500/10 text-blue-500"
+                        : "border-slate-500/20 bg-slate-500/10 text-slate-500"
+                    }`}
+                  >
+                    {q.question_type === "mcq" ? "MCQ" : "Theory"}
+                  </span>
+                  {q.topic_tag && (
+                    <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-500">
+                      {q.topic_tag}
+                    </span>
+                  )}
+                  {q.marks ? (
+                    <span className="ml-auto text-[11px]" style={{ color: "var(--sp-text-3)" }}>
+                      {q.marks} marks
+                    </span>
+                  ) : null}
+                </div>
+
+                <div
+                  className="text-[17px] leading-8 whitespace-pre-wrap mb-5"
+                  style={{ color: "var(--sp-text)" }}
+                >
+                  <MathRenderer content={q.question_text} />
+                </div>
+
+                {q.question_type === "mcq" ? (
+                  <PracticeMCQ
+                    key={q.id}
+                    q={q}
+                    pick={picks[q.id]}
+                    result={results[q.id]}
+                    onPick={pickMcq}
+                    onSkip={skipMcq}
+                  />
+                ) : (
+                  <PracticeTheory
+                    key={q.id}
+                    q={q}
+                    result={results[q.id]}
+                    onGrade={r => setResults(prev => ({ ...prev, [q.id]: r }))}
+                  />
+                )}
+              </div>
+            </SecureWrap>
+          )}
+
+          {/* Results */}
+          {finished && (
+            <>
+              <div
+                className="rounded-3xl border p-6 text-center space-y-5"
+                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <Trophy size={18} className="text-amber-500" />
+                  <p className="text-base font-bold" style={{ color: "var(--sp-text)" }}>
+                    {stats.pct >= 70 ? "Great work!" : stats.pct >= 40 ? "Good effort — keep going" : "Let's go over these again"}
+                  </p>
+                </div>
+
+                <ScoreRing pct={stats.pct} />
+
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  {[
+                    { label: "Correct", v: stats.correct + stats.got, c: "#10b981" },
+                    { label: "Missed",  v: deck.filter(x => results[x.id] === "wrong" || results[x.id] === "review").length, c: "#ef4444" },
+                    { label: "Skipped", v: deck.filter(x => !results[x.id] || results[x.id] === "skipped").length, c: "#f59e0b" },
+                  ].map(s => (
+                    <div key={s.label} className="rounded-2xl py-3" style={{ background: "var(--sp-bg-muted)" }}>
+                      <p className="text-xl font-extrabold" style={{ color: s.c }}>{s.v}</p>
+                      <p className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>{s.label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2">
+                  {stats.missed.length > 0 && (
+                    <button
+                      onClick={() => restart(stats.missed)}
+                      className="flex-1 inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hover:bg-indigo-500 transition"
+                    >
+                      <RotateCcw size={14} /> Retry {stats.missed.length} missed
+                    </button>
+                  )}
+                  <button
+                    onClick={() => restart(baseDeck)}
+                    className="flex-1 rounded-2xl border px-5 py-3 text-sm font-semibold transition"
+                    style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }}
+                  >
+                    Start over
+                  </button>
+                </div>
+              </div>
+
+              {isGated && (
+                <div
+                  className="rounded-3xl border p-6 text-center"
+                  style={{ borderColor: "rgba(99,102,241,0.25)", background: "rgba(99,102,241,0.06)" }}
+                >
+                  <div
+                    className="flex h-10 w-10 items-center justify-center rounded-xl mx-auto mb-3"
+                    style={{ background: "rgba(99,102,241,0.14)" }}
+                  >
+                    <Lock className="h-4 w-4 text-indigo-500" />
+                  </div>
+                  <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+                    {hidden} more question{hidden !== 1 ? "s" : ""} locked
+                  </p>
+                  <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+                    Free plan shows {freeLimit} of {questions.length} questions.
+                  </p>
+                  <Link
+                    href="/dashboard/subscribe"
+                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
+                  >
+                    <Crown className="h-3.5 w-3.5" /> Unlock all questions <ArrowRight className="h-3.5 w-3.5" />
+                  </Link>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Footer nav */}
-      <div className="flex items-center gap-3 px-4 py-3.5 border-t shrink-0"
-        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
-        <button onClick={() => setIndex(i => Math.max(0, i - 1))} disabled={index === 0}
-          className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-xs font-semibold transition disabled:opacity-30"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
-          <ArrowLeft size={13} /> Prev
-        </button>
-        <div className="flex-1 flex justify-center gap-1.5 overflow-hidden">
-          {visible.map((_, i) => (
-            <button key={i} onClick={() => setIndex(i)}
-              className="h-1.5 rounded-full transition-all shrink-0"
-              style={{
-                width:      i === index ? "20px" : "6px",
-                background: i === index ? "var(--sp-indigo, #6366f1)" : "var(--sp-border)",
-              }} />
-          ))}
+      {!finished && (
+        <div
+          className="flex items-center gap-3 px-4 py-3 shrink-0 border-t"
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
+        >
+          <button
+            onClick={prev}
+            disabled={index === 0}
+            className="flex items-center gap-1.5 rounded-2xl border px-4 py-3 text-sm font-semibold transition disabled:opacity-30"
+            style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }}
+          >
+            <ArrowLeft size={14} /> Prev
+          </button>
+
+          <button
+            onClick={next}
+            className={`flex-1 flex items-center justify-center gap-1.5 rounded-2xl px-4 py-3 text-sm font-bold transition ${
+              q && results[q.id] ? "bg-indigo-600 text-white hover:bg-indigo-500" : "border"
+            }`}
+            style={
+              q && results[q.id]
+                ? undefined
+                : { borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }
+            }
+          >
+            {isLast ? "See results" : "Next"} <ArrowRight size={14} />
+          </button>
         </div>
-        <button onClick={() => setIndex(i => Math.min(visible.length - 1, i + 1))} disabled={index === visible.length - 1}
-          className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-xs font-semibold transition disabled:opacity-30"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
-          Next <ArrowRight size={13} />
-        </button>
-      </div>
+      )}
     </div>
   );
 }
@@ -505,7 +812,7 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.detail || "Failed to submit. Please try again.");
       }
-      // ── FIX: parse JSON before entering setState callback ──
+      // parse JSON before entering setState callback
       const newId = (await res.json()).id;
       setSubmissions(prev => [{
         id: newId,
