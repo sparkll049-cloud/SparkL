@@ -1,321 +1,315 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
-import {
-  LayoutDashboard,
-  BookOpen,
-  Upload,
-  User,
-  Zap,
-  ShieldCheck,
-  LogOut,
-  Menu,
-  MessageCircle,
-  Loader2,
-  Crown,
-} from "lucide-react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import { LogOut } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
-import { ThemeProvider } from "@/components/ThemeProvider";
-import { ThemeToggle } from "@/components/ThemeToggle";
-import ProfileGuard from "@/components/ProfileGuard";
 
-const navItems = [
-  { href: "/dashboard",         label: "Dashboard",  icon: LayoutDashboard },
-  { href: "/dashboard/courses", label: "My Courses", icon: BookOpen        },
-  { href: "/dashboard/upload",  label: "Upload",     icon: Upload          },
-  { href: "/dashboard/profile", label: "Profile",    icon: User            },
-  { href: "/community",         label: "Community",  icon: MessageCircle   },
-  { href: "/study",             label: "Sparkl Cram",icon: Zap             },
-];
+// ── Constants ──────────────────────────────────────────────────────────────────
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
-  const router   = useRouter();
-  const supabase = createClient();
+const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+const WARNING_BEFORE_MS     = 60 * 1000;       // show warning 60 s before logout
 
-  const [queryClient] = useState(
-    () => new QueryClient({
-      defaultOptions: {
-        queries: { staleTime: 30_000, gcTime: 5 * 60_000, refetchOnWindowFocus: false },
-      },
-    })
-  );
+const ACTIVITY_EVENTS = [
+  "mousemove", "mousedown", "keydown", "touchstart", "scroll", "click",
+] as const;
 
-  const [mobileOpen,      setMobileOpen]      = useState(false);
-  const [sidebarExpanded, setSidebarExpanded] = useState(false);
-  const [loggingOut,      setLoggingOut]      = useState(false);
-  const [isAdmin,         setIsAdmin]         = useState(false);
-  const [userPlan,        setUserPlan]        = useState<string>("free");
-  const [avatarUrl,       setAvatarUrl]       = useState<string | null>(null);
-  const [userInfo, setUserInfo] = useState<{ name: string | null; email: string | null }>({
-    name: null, email: null,
-  });
+// ── Inactivity logout hook ─────────────────────────────────────────────────────
+
+function useInactivityLogout(onLogout: () => Promise<void>) {
+  const [showWarning, setShowWarning] = useState(false);
+  const [countdown, setCountdown]    = useState(60);
+  const logoutTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const warningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isMounted    = useRef(true);
+
+  const clearAllTimers = useCallback(() => {
+    if (logoutTimer.current)  clearTimeout(logoutTimer.current);
+    if (warningTimer.current) clearTimeout(warningTimer.current);
+    if (countdownRef.current) clearInterval(countdownRef.current);
+  }, []);
+
+  const doLogout = useCallback(async () => {
+    clearAllTimers();
+    sessionStorage.removeItem("sp_last_active");
+    await onLogout();
+  }, [clearAllTimers, onLogout]);
+
+  const startCountdown = useCallback(() => {
+    if (!isMounted.current) return;
+    setShowWarning(true);
+    setCountdown(60);
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    countdownRef.current = setInterval(() => {
+      setCountdown(prev => {
+        if (prev <= 1) {
+          if (countdownRef.current) clearInterval(countdownRef.current);
+          doLogout();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, [doLogout]);
+
+  const resetTimer = useCallback(() => {
+    if (!isMounted.current) return;
+    clearAllTimers();
+    setShowWarning(false);
+    sessionStorage.setItem("sp_last_active", String(Date.now()));
+
+    warningTimer.current = setTimeout(() => {
+      startCountdown();
+    }, INACTIVITY_TIMEOUT_MS - WARNING_BEFORE_MS);
+
+    logoutTimer.current = setTimeout(() => {
+      doLogout();
+    }, INACTIVITY_TIMEOUT_MS);
+  }, [clearAllTimers, startCountdown, doLogout]);
 
   useEffect(() => {
-    async function init() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-
-      setUserInfo({ name: null, email: session.user.email ?? null });
-
-      // Profile + plan
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("full_name, subscription_plan")
-        .eq("id", session.user.id)
-        .single();
-
-      // Fall back to the name Google / signup saved on the auth user
-      const meta = (session.user.user_metadata ?? {}) as Record<string, string | undefined>;
-      const displayName =
-        (profile?.full_name && profile.full_name.trim() !== "" ? profile.full_name : null) ??
-        meta.full_name ??
-        meta.name ??
-        null;
-
-      setUserInfo((prev) => ({ ...prev, name: displayName }));
-      setUserPlan(profile?.subscription_plan ?? "free");
-
-      // Avatar from B2
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`,
-          { headers: { Authorization: `Bearer ${session.access_token}` } }
-        );
-        if (res.ok) {
-          const json = await res.json();
-          if (json.avatar_url) setAvatarUrl(json.avatar_url);
-        }
-      } catch { /* silent — no avatar yet */ }
-
-      // Admin check
-      try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/admin/overview`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        setIsAdmin(res.ok);
-      } catch {
-        setIsAdmin(false);
-      }
+    // If the user was away too long (tab close + reopen, phone sleep, etc.)
+    const lastActive = sessionStorage.getItem("sp_last_active");
+    if (lastActive && Date.now() - Number(lastActive) >= INACTIVITY_TIMEOUT_MS) {
+      doLogout();
+      return;
     }
-    init();
-  }, [supabase]);
 
-  async function handleLogout() {
-    setLoggingOut(true);
-    await supabase.auth.signOut();
-    router.push("/auth/login");
-  }
+    resetTimer();
 
-  const initial = (userInfo.name ?? userInfo.email ?? "S").charAt(0).toUpperCase();
-
-  const SidebarContent = ({ mobile = false }: { mobile?: boolean }) => {
-    const isExpanded = mobile || sidebarExpanded;
-
-    return (
-      <div className="flex h-full flex-col">
-
-        {/* ── Logo ── */}
-        <div className={`flex items-center gap-3 py-5 ${isExpanded ? "px-4" : "justify-center px-0"}`}>
-          <img
-            src="/images/logo.jpg"
-            alt="SparkL"
-            className="h-8 w-8 shrink-0 rounded-xl object-cover shadow-sm"
-          />
-          {isExpanded && (
-            <span className="text-base font-black tracking-tight" style={{ color: "var(--sp-text)" }}>
-              SparkL
-            </span>
-          )}
-        </div>
-
-        {/* ── Nav ── */}
-        <nav className="mt-2 flex-1 space-y-0.5 px-2">
-          {navItems.map((item) => {
-            const active =
-              pathname === item.href ||
-              (item.href !== "/dashboard" && pathname?.startsWith(item.href));
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setMobileOpen(false)}
-                title={!isExpanded ? item.label : undefined}
-                className={`group flex items-center gap-3 rounded-xl py-2.5 text-sm font-medium transition-all duration-150 ${
-                  !isExpanded ? "justify-center px-2.5" : "px-3"
-                }`}
-                style={{
-                  background: active ? "rgba(99, 102, 241, 0.12)" : "transparent",
-                  color: active ? "#6366F1" : "var(--sp-text-2)",
-                }}
-              >
-                <Icon
-                  className="h-[18px] w-[18px] shrink-0 transition-colors"
-                  style={{ color: active ? "#6366F1" : "var(--sp-text-3)" }}
-                />
-                {isExpanded && <span>{item.label}</span>}
-              </Link>
-            );
-          })}
-
-          {isAdmin && (
-            <>
-              <div className="mx-1 my-3 border-t" style={{ borderColor: "var(--sp-border)" }} />
-              <Link
-                href="/admin"
-                onClick={() => setMobileOpen(false)}
-                title={!isExpanded ? "Admin" : undefined}
-                className={`group flex items-center gap-3 rounded-xl py-2.5 text-sm font-medium transition-all ${
-                  !isExpanded ? "justify-center px-2.5" : "px-3"
-                }`}
-                style={{
-                  background: pathname?.startsWith("/admin") ? "rgba(99, 102, 241, 0.12)" : "transparent",
-                  color: "#6366F1",
-                }}
-              >
-                <ShieldCheck className="h-[18px] w-[18px] shrink-0" />
-                {isExpanded && "Admin"}
-              </Link>
-            </>
-          )}
-        </nav>
-
-        {/* ── User section ── */}
-        <div className="space-y-0.5 border-t p-2" style={{ borderColor: "var(--sp-border)" }}>
-
-          {/* Theme toggle */}
-          <ThemeToggle expanded={isExpanded} />
-
-          {/* Profile link with real avatar */}
-          <Link
-            href="/dashboard/profile"
-            onClick={() => setMobileOpen(false)}
-            className={`flex items-center gap-3 rounded-xl px-2 py-2.5 transition ${
-              !isExpanded ? "justify-center" : ""
-            }`}
-            style={{ color: "var(--sp-text)" }}
-          >
-            {/* Avatar */}
-            <div className="relative shrink-0">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt="Profile"
-                  className="h-7 w-7 rounded-full object-cover ring-2 ring-indigo-500/30"
-                />
-              ) : (
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white shadow-sm">
-                  {initial}
-                </div>
-              )}
-              {userPlan !== "free" && (
-                <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-indigo-500">
-                  <Crown className="h-2 w-2 text-white" fill="white" />
-                </span>
-              )}
-            </div>
-
-            {isExpanded && (
-              <div className="min-w-0">
-                <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>
-                  {userInfo.name ?? "Student"}
-                </p>
-                <p className="truncate text-[10px] capitalize" style={{ color: "var(--sp-text-3)" }}>
-                  {userPlan === "free" ? "Free plan" : `${userPlan} plan`}
-                </p>
-              </div>
-            )}
-          </Link>
-
-          {/* Logout */}
-          <button
-            onClick={handleLogout}
-            disabled={loggingOut}
-            title={!isExpanded ? "Log out" : undefined}
-            className={`flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-sm font-medium transition hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50 ${
-              !isExpanded ? "justify-center" : ""
-            }`}
-            style={{ color: "var(--sp-text-3)" }}
-          >
-            {loggingOut
-              ? <Loader2 className="h-4 w-4 animate-spin" />
-              : <LogOut className="h-4 w-4 shrink-0" />
-            }
-            {isExpanded && (loggingOut ? "Logging out…" : "Log out")}
-          </button>
-        </div>
-
-      </div>
+    const handler = () => resetTimer();
+    ACTIVITY_EVENTS.forEach(ev =>
+      document.addEventListener(ev, handler, { passive: true }),
     );
-  };
+
+    const visibilityHandler = () => {
+      if (document.visibilityState === "visible") {
+        const last = sessionStorage.getItem("sp_last_active");
+        if (last && Date.now() - Number(last) >= INACTIVITY_TIMEOUT_MS) {
+          doLogout();
+        } else {
+          resetTimer();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", visibilityHandler);
+
+    return () => {
+      isMounted.current = false;
+      clearAllTimers();
+      ACTIVITY_EVENTS.forEach(ev => document.removeEventListener(ev, handler));
+      document.removeEventListener("visibilitychange", visibilityHandler);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return { showWarning, countdown, stayLoggedIn: resetTimer };
+}
+
+// ── Session guard hook ─────────────────────────────────────────────────────────
+// Listens for Supabase SIGNED_OUT (fired when backend revokes the session
+// because another device logged in) and kicks the user to the conflict page.
+
+function useSessionGuard(
+  supabase: ReturnType<typeof createClient>,
+  onKick: () => void,
+) {
+  useEffect(() => {
+    // Assign a stable device ID for this browser
+    if (!localStorage.getItem("sp_device_id")) {
+      localStorage.setItem("sp_device_id", crypto.randomUUID());
+    }
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(event => {
+      if (event === "SIGNED_OUT") onKick();
+    });
+
+    return () => subscription.unsubscribe();
+  }, [supabase, onKick]);
+}
+
+// ── Patched fetch ──────────────────────────────────────────────────────────────
+// Sends X-Device-Id on every request to your API so the backend can compare
+// it against profiles.active_device_id and return 401 if it differs.
+
+function usePatchedFetch() {
+  useEffect(() => {
+    const deviceId = localStorage.getItem("sp_device_id") ?? "";
+    const orig = window.fetch.bind(window);
+
+    window.fetch = function (input: RequestInfo | URL, init: RequestInit = {}) {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+          ? input.href
+          : (input as Request).url;
+
+      if (url.includes(process.env.NEXT_PUBLIC_API_URL ?? "__API__")) {
+        init = {
+          ...init,
+          headers: { ...(init.headers ?? {}), "X-Device-Id": deviceId },
+        };
+      }
+      return orig(input, init);
+    };
+
+    return () => { window.fetch = orig; };
+  }, []);
+}
+
+// ── Inactivity warning modal ───────────────────────────────────────────────────
+
+function InactivityWarning({
+  countdown,
+  onStay,
+  onLogout,
+}: {
+  countdown: number;
+  onStay: () => void;
+  onLogout: () => void;
+}) {
+  const pct = (countdown / 60) * 100;
+  const isUrgent = countdown <= 10;
 
   return (
-    <ThemeProvider>
-      <QueryClientProvider client={queryClient}>
-        <div
-          className="flex min-h-screen transition-colors duration-300"
-          style={{ background: "var(--sp-bg)" }}
-        >
-
-          {/* ── Desktop sidebar ── */}
-          <aside
-            onMouseEnter={() => setSidebarExpanded(true)}
-            onMouseLeave={() => setSidebarExpanded(false)}
-            className={`hidden lg:flex flex-col fixed inset-y-0 left-0 z-30
-              border-r transition-all duration-200 ease-out
-              ${sidebarExpanded ? "w-52" : "w-14"}`}
-            style={{
-              background: "var(--sp-bg-card)",
-              borderColor: "var(--sp-border)",
-            }}
-          >
-            <SidebarContent />
-          </aside>
-
-          {/* ── Mobile floating button ── */}
-          <button
-            onClick={() => setMobileOpen(true)}
-            className="fixed bottom-6 left-4 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-indigo-600 shadow-lg shadow-indigo-500/30 transition hover:bg-indigo-500 lg:hidden"
-          >
-            <Menu className="h-5 w-5 text-white" />
-          </button>
-
-          {/* ── Mobile drawer ── */}
-          {mobileOpen && (
-            <div className="fixed inset-0 z-40 lg:hidden">
-              <div
-                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-                onClick={() => setMobileOpen(false)}
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+      <div
+        className="w-full max-w-sm rounded-3xl border p-7 shadow-2xl text-center"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+      >
+        {/* Countdown ring */}
+        <div className="mb-4 flex justify-center">
+          <div className="relative flex h-16 w-16 items-center justify-center">
+            <svg className="-rotate-90 absolute inset-0" viewBox="0 0 64 64">
+              <circle
+                cx="32" cy="32" r="28"
+                fill="none"
+                stroke="var(--sp-ring-track)"
+                strokeWidth="4"
               />
-              <aside
-                className="absolute inset-y-0 left-0 w-60 border-r"
-                style={{
-                  background: "var(--sp-bg-card)",
-                  borderColor: "var(--sp-border)",
-                }}
-              >
-                <SidebarContent mobile />
-              </aside>
-            </div>
-          )}
-
-          {/* ── Main content ── */}
-          <div
-            className={`flex flex-1 flex-col transition-all duration-200 ${
-              sidebarExpanded ? "lg:ml-52" : "lg:ml-14"
-            }`}
-          >
-            <main className="flex-1">
-              <ProfileGuard>{children}</ProfileGuard>
-            </main>
+              <circle
+                cx="32" cy="32" r="28"
+                fill="none"
+                stroke={isUrgent ? "#EF4444" : "#F59E0B"}
+                strokeWidth="4"
+                strokeDasharray={`${(pct / 100) * 175.9} 175.9`}
+                strokeLinecap="round"
+                style={{ transition: "stroke-dasharray 1s linear" }}
+              />
+            </svg>
+            <LogOut
+              className="h-5 w-5"
+              style={{ color: isUrgent ? "#EF4444" : "#F59E0B" }}
+            />
           </div>
-
         </div>
-      </QueryClientProvider>
-    </ThemeProvider>
+
+        <h2
+          className="text-base font-extrabold mb-1"
+          style={{ color: "var(--sp-text)" }}
+        >
+          Still there?
+        </h2>
+        <p className="text-xs mb-1" style={{ color: "var(--sp-text-3)" }}>
+          You&apos;ve been inactive for a while.
+        </p>
+        <p
+          className="text-sm font-bold mb-5"
+          style={{ color: isUrgent ? "#EF4444" : "var(--sp-text-2)" }}
+        >
+          Logging you out in{" "}
+          <span className="tabular-nums">{countdown}s</span>
+        </p>
+
+        <button
+          onClick={onStay}
+          className="w-full rounded-2xl bg-indigo-600 py-3 text-sm font-bold text-white hover:bg-indigo-500 transition mb-2"
+        >
+          Stay logged in
+        </button>
+        <button
+          onClick={onLogout}
+          className="w-full rounded-2xl py-3 text-xs font-semibold transition hover:bg-red-500/10"
+          style={{ color: "var(--sp-text-3)" }}
+        >
+          Log out now
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Session-conflict banner ────────────────────────────────────────────────────
+// Shown briefly before the redirect fires.
+
+function ConflictBanner() {
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+      <div
+        className="w-full max-w-sm rounded-3xl border p-7 shadow-2xl text-center"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+      >
+        <div className="mb-4 flex justify-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-red-500/10">
+            <LogOut className="h-6 w-6 text-red-500" />
+          </div>
+        </div>
+        <h2 className="text-base font-extrabold mb-1" style={{ color: "var(--sp-text)" }}>
+          Signed in elsewhere
+        </h2>
+        <p className="text-xs leading-relaxed" style={{ color: "var(--sp-text-3)" }}>
+          Your account was signed in on another device. Only one active session
+          is allowed. You are being redirected to login.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Layout ─────────────────────────────────────────────────────────────────────
+
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const supabase = createClient();
+  const router   = useRouter();
+  const [kicked, setKicked] = useState(false);
+
+  // Attach X-Device-Id to all API requests
+  usePatchedFetch();
+
+  // Sign-out callback used by both hooks
+  const signOut = useCallback(async () => {
+    await supabase.auth.signOut();
+    router.push("/auth/login?reason=timeout");
+  }, [supabase, router]);
+
+  // Inactivity logout
+  const { showWarning, countdown, stayLoggedIn } = useInactivityLogout(signOut);
+
+  // Single-device session guard
+  useSessionGuard(supabase, () => {
+    setKicked(true);
+    // Small delay so the banner renders before the push
+    setTimeout(() => router.push("/auth/login?reason=conflict"), 2000);
+  });
+
+  return (
+    <>
+      {kicked && <ConflictBanner />}
+
+      {showWarning && !kicked && (
+        <InactivityWarning
+          countdown={countdown}
+          onStay={stayLoggedIn}
+          onLogout={signOut}
+        />
+      )}
+
+      {children}
+    </>
   );
 }
