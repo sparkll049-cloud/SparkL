@@ -42,7 +42,7 @@ async def list_submissions(
             "mime_type, file_size, created_at, reviewed_at, "
             "question_id, submitted_by, "
             "question:past_questions(id, title, course:courses(name)), "
-            "submitter:profiles!answer_submissions_submitted_by_fkey(full_name, phone)"
+            "submitter:profiles(full_name, phone)"
         )
         .order("created_at", desc=True)
     )
