@@ -12,6 +12,7 @@ from app.routers import (
     admin_community,
     admin_questions,
     admin_users,
+    admin_answers,
     admin_overview,
     avatar,
     viewer,
@@ -46,6 +47,7 @@ app.include_router(admin_lookup.router)
 app.include_router(admin_community.router)
 app.include_router(admin_questions.router)
 app.include_router(admin_users.router)
+app.include_router(admin_answers.router)
 app.include_router(admin_overview.router)
 app.include_router(avatar.router)
 app.include_router(viewer.router)
