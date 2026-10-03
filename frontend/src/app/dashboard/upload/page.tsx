@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   Upload as UploadIcon, FileText, Loader2, CheckCircle2,
   XCircle, Clock, AlertCircle, CloudUpload, RotateCcw,
-  ChevronRight, BookOpen,
+  ChevronRight, BookOpen, Sparkles, PartyPopper,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
@@ -134,6 +134,103 @@ function ProcessingRow({ status, retrying, onRetry }: {
   );
 }
 
+// ── Success screen ────────────────────────────────────────────────────────────
+
+function SuccessScreen({
+  uploadedTitle,
+  totalUploads,
+  onUploadAnother,
+}: {
+  uploadedTitle: string;
+  totalUploads: number;
+  onUploadAnother: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border overflow-hidden" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+      {/* Top accent bar */}
+      <div className="h-1.5 w-full bg-gradient-to-r from-indigo-500 via-blue-500 to-emerald-500" />
+
+      <div className="px-6 py-10 flex flex-col items-center text-center">
+        {/* Icon */}
+        <div className="relative mb-5">
+          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-500/10">
+            <CheckCircle2 className="h-10 w-10 text-emerald-500" />
+          </div>
+          <span className="absolute -right-1 -top-1 flex h-7 w-7 items-center justify-center rounded-full bg-amber-400 text-base">
+            🎉
+          </span>
+        </div>
+
+        <h2 className="text-2xl font-black" style={{ color: "var(--sp-text)" }}>
+          Thank you for contributing!
+        </h2>
+        <p className="mt-2 text-sm leading-relaxed max-w-sm" style={{ color: "var(--sp-text-3)" }}>
+          Your paper <span className="font-semibold" style={{ color: "var(--sp-text-2)" }}>
+            &ldquo;{uploadedTitle}&rdquo;
+          </span> has been submitted. Our team will review it shortly and make it available to students once approved.
+        </p>
+
+        {/* Steps */}
+        <div className="mt-7 w-full max-w-sm space-y-3 text-left">
+          {[
+            { step: "1", label: "Submitted",         sub: "Your paper is in our review queue",       done: true  },
+            { step: "2", label: "Under review",       sub: "Our team checks content and quality",     done: false },
+            { step: "3", label: "Live on SparkL",     sub: "Students can access and practise with it", done: false },
+          ].map(({ step, label, sub, done }) => (
+            <div key={step} className="flex items-start gap-3">
+              <div
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black"
+                style={{
+                  background: done ? "rgba(16,185,129,0.15)" : "var(--sp-ring-track, rgba(148,163,184,0.1))",
+                  color: done ? "#10b981" : "var(--sp-text-3)",
+                }}
+              >
+                {done ? <CheckCircle2 className="h-3.5 w-3.5" /> : step}
+              </div>
+              <div className="min-w-0 pt-0.5">
+                <p className="text-sm font-bold" style={{ color: done ? "#10b981" : "var(--sp-text-2)" }}>{label}</p>
+                <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>{sub}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* XP nudge */}
+        <div
+          className="mt-7 w-full max-w-sm rounded-2xl border px-4 py-3 flex items-center gap-3"
+          style={{ borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.06)" }}
+        >
+          <Sparkles className="h-4 w-4 shrink-0 text-indigo-400" />
+          <p className="text-xs leading-relaxed text-left" style={{ color: "var(--sp-text-2)" }}>
+            You&apos;ll earn <span className="font-black text-indigo-400">+50 XP</span> once your upload is approved. Keep contributing to level up!
+          </p>
+        </div>
+
+        {/* Actions */}
+        <div className="mt-7 flex w-full max-w-sm flex-col gap-3">
+          <button
+            onClick={onUploadAnother}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white transition hover:bg-blue-500"
+          >
+            <UploadIcon className="h-4 w-4" /> Upload another paper
+          </button>
+          <Link
+            href="/dashboard"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border py-3 text-sm font-semibold transition hover:border-indigo-500/40 hover:text-indigo-500"
+            style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)" }}
+          >
+            Back to dashboard
+          </Link>
+        </div>
+
+        <p className="mt-5 text-[11px]" style={{ color: "var(--sp-text-3)" }}>
+          You have <span className="font-bold" style={{ color: "var(--sp-text-2)" }}>{totalUploads}</span> total upload{totalUploads !== 1 ? "s" : ""} — view them below.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
@@ -168,7 +265,10 @@ export default function UploadPage() {
   const [loadingCou, setLoadingCou] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error,      setError]      = useState("");
-  const [success,    setSuccess]    = useState(false);
+
+  // Success state — stores title of what was just uploaded
+  const [successTitle, setSuccessTitle] = useState<string | null>(null);
+
   const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const currentYear = new Date().getFullYear();
@@ -276,7 +376,7 @@ export default function UploadPage() {
   }
 
   async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault(); setError(""); setSuccess(false);
+    e.preventDefault(); setError("");
     if (!compressedFile) { setError("Please choose a file."); return; }
     if (!declarationChecked) { setError("Please confirm the upload declaration."); return; }
     if (year && !isValidYear(year, currentYear)) {
@@ -308,9 +408,11 @@ export default function UploadPage() {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? "Upload failed.");
       }
-      setSuccess(true);
+
+      const submittedTitle = title; // capture before reset
       resetForm();
       await loadMyUploads(session.access_token);
+      setSuccessTitle(submittedTitle); // show success screen
 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -355,155 +457,158 @@ export default function UploadPage() {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit}
-          className="rounded-2xl border p-6 space-y-5 transition-colors"
-          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+        {/* ── Success screen or form ── */}
+        {successTitle ? (
+          <SuccessScreen
+            uploadedTitle={successTitle}
+            totalUploads={myUploads.length}
+            onUploadAnother={() => setSuccessTitle(null)}
+          />
+        ) : (
+          <form onSubmit={handleSubmit}
+            className="rounded-2xl border p-6 space-y-5 transition-colors"
+            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
 
-          {/* Title */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-              Title <span className="text-blue-400">*</span>
-            </label>
-            <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={150}
-              placeholder="e.g. CSC 301 — First Semester 2023"
-              className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-              style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }} />
-          </div>
-
-          {/* Institution + Department */}
-          <div className="grid grid-cols-2 gap-4">
-            <SelectField label="Institution" value={institutionId} onChange={setInstitutionId}
-              disabled={institutions.length === 0} placeholder="Select institution" options={institutions} />
-            <SelectField label="Department" value={departmentId} onChange={setDepartmentId}
-              disabled={!institutionId || loadingDep}
-              placeholder={loadingDep ? "Loading…" : "Select department"} options={departments} />
-          </div>
-
-          {/* Level + Course */}
-          <div className="grid grid-cols-2 gap-4">
-            <SelectField label="Level" value={levelId} onChange={setLevelId}
-              disabled={levels.length === 0} placeholder="Select level" options={levels} />
-            <SelectField label="Course" value={courseId} onChange={setCourseId}
-              disabled={!departmentId || loadingCou}
-              placeholder={loadingCou ? "Loading…" : "Select course"}
-              options={courses} required />
-          </div>
-
-          {/* Semester + Year */}
-          <div className="grid grid-cols-2 gap-4">
-            <SelectField label="Semester" value={semesterId} onChange={setSemesterId}
-              placeholder="Not specified" options={semesters} />
+            {/* Title */}
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>Year</label>
-              <input value={year}
-                onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder="e.g. 2023" inputMode="numeric" maxLength={4}
+              <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
+                Title <span className="text-blue-400">*</span>
+              </label>
+              <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={150}
+                placeholder="e.g. CSC 301 — First Semester 2023"
                 className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                 style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }} />
-              {year && !isValidYear(year, currentYear) && (
-                <p className="text-xs text-red-400">Enter a year between {MIN_YEAR} and {currentYear + 1}.</p>
+            </div>
+
+            {/* Institution + Department */}
+            <div className="grid grid-cols-2 gap-4">
+              <SelectField label="Institution" value={institutionId} onChange={setInstitutionId}
+                disabled={institutions.length === 0} placeholder="Select institution" options={institutions} />
+              <SelectField label="Department" value={departmentId} onChange={setDepartmentId}
+                disabled={!institutionId || loadingDep}
+                placeholder={loadingDep ? "Loading…" : "Select department"} options={departments} />
+            </div>
+
+            {/* Level + Course */}
+            <div className="grid grid-cols-2 gap-4">
+              <SelectField label="Level" value={levelId} onChange={setLevelId}
+                disabled={levels.length === 0} placeholder="Select level" options={levels} />
+              <SelectField label="Course" value={courseId} onChange={setCourseId}
+                disabled={!departmentId || loadingCou}
+                placeholder={loadingCou ? "Loading…" : "Select course"}
+                options={courses} required />
+            </div>
+
+            {/* Semester + Year */}
+            <div className="grid grid-cols-2 gap-4">
+              <SelectField label="Semester" value={semesterId} onChange={setSemesterId}
+                placeholder="Not specified" options={semesters} />
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>Year</label>
+                <input value={year}
+                  onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  placeholder="e.g. 2023" inputMode="numeric" maxLength={4}
+                  className="w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                  style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)", color: "var(--sp-text)" }} />
+                {year && !isValidYear(year, currentYear) && (
+                  <p className="text-xs text-red-400">Enter a year between {MIN_YEAR} and {currentYear + 1}.</p>
+                )}
+              </div>
+            </div>
+
+            {/* File drop zone */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
+                File <span className="text-blue-400">*</span>
+              </label>
+              <label
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleDrop}
+                className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-all ${
+                  dragOver ? "border-blue-500 bg-blue-500/10"
+                  : file    ? "border-emerald-500/40 bg-emerald-500/5"
+                  :           "hover:border-blue-500/40 hover:bg-blue-500/5"
+                }`}
+                style={!dragOver && !file ? { borderColor: "var(--sp-border)" } : {}}>
+                {compressing ? (
+                  <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
+                    <Loader2 className="h-5 w-5 animate-spin text-blue-400" /></div>
+                    <div><p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Compressing image…</p></div>
+                  </>
+                ) : file ? (
+                  <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-400" /></div>
+                    <div>
+                      <p className="text-sm font-semibold text-emerald-400">{compressedFile?.name ?? file.name}</p>
+                      <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
+                        {fmtBytes(compressedFile?.size ?? file.size)}
+                        {savedBytes > 0 && <span className="ml-1.5 text-emerald-400 font-medium">(saved {fmtBytes(savedBytes)})</span>}
+                        {" · tap to change"}
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
+                    <CloudUpload className="h-5 w-5 text-blue-400" /></div>
+                    <div>
+                      <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Drop your file here, or tap to browse</p>
+                      <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>PDF, JPG, PNG — max 20MB</p>
+                    </div>
+                  </>
+                )}
+                <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={handleFileChange} className="hidden" />
+              </label>
+              {fileError && (
+                <p className="flex items-center gap-1.5 text-xs text-red-400">
+                  <AlertCircle className="h-3.5 w-3.5" />{fileError}
+                </p>
               )}
             </div>
-          </div>
 
-          {/* File drop zone */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-              File <span className="text-blue-400">*</span>
-            </label>
-            <label
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-all ${
-                dragOver ? "border-blue-500 bg-blue-500/10"
-                : file    ? "border-emerald-500/40 bg-emerald-500/5"
-                :           "hover:border-blue-500/40 hover:bg-blue-500/5"
-              }`}
-              style={!dragOver && !file ? { borderColor: "var(--sp-border)" } : {}}>
-              {compressing ? (
-                <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
-                  <Loader2 className="h-5 w-5 animate-spin text-blue-400" /></div>
-                  <div><p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Compressing image…</p></div>
-                </>
-              ) : file ? (
-                <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10">
-                  <CheckCircle2 className="h-5 w-5 text-emerald-400" /></div>
-                  <div>
-                    <p className="text-sm font-semibold text-emerald-400">{compressedFile?.name ?? file.name}</p>
-                    <p className="text-xs mt-0.5" style={{ color: "var(--sp-text-3)" }}>
-                      {fmtBytes(compressedFile?.size ?? file.size)}
-                      {savedBytes > 0 && <span className="ml-1.5 text-emerald-400 font-medium">(saved {fmtBytes(savedBytes)})</span>}
-                      {" · tap to change"}
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/10">
-                  <CloudUpload className="h-5 w-5 text-blue-400" /></div>
-                  <div>
-                    <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>Drop your file here, or tap to browse</p>
-                    <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>PDF, JPG, PNG — max 20MB</p>
-                  </div>
-                </>
-              )}
-              <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png"
-                onChange={handleFileChange} className="hidden" />
-            </label>
-            {fileError && (
-              <p className="flex items-center gap-1.5 text-xs text-red-400">
-                <AlertCircle className="h-3.5 w-3.5" />{fileError}
+            {/* Declaration */}
+            <div className="rounded-xl border p-4 space-y-3"
+              style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}>
+              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
+                Upload declaration
               </p>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" checked={declarationChecked}
+                  onChange={(e) => setDeclarationChecked(e.target.checked)}
+                  className="mt-0.5 shrink-0 rounded accent-blue-500" />
+                <span className="text-sm leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
+                  I confirm I have the right to share this material and have not included confidential
+                  or unlawfully obtained content. I understand SparkL may review, watermark, or remove
+                  this upload per the{" "}
+                  <Link href="/content-guidelines" target="_blank"
+                    className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium">
+                    Content Guidelines
+                  </Link>{" "}and{" "}
+                  <Link href="/terms" target="_blank"
+                    className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium">
+                    Terms of Service
+                  </Link>.
+                </span>
+              </label>
+            </div>
+
+            {error && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
+                <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+                <p className="text-sm text-red-400">{error}</p>
+              </div>
             )}
-          </div>
 
-          {/* Declaration */}
-          <div className="rounded-xl border p-4 space-y-3"
-            style={{ background: "var(--sp-bg-muted)", borderColor: "var(--sp-border)" }}>
-            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
-              Upload declaration
-            </p>
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input type="checkbox" checked={declarationChecked}
-                onChange={(e) => setDeclarationChecked(e.target.checked)}
-                className="mt-0.5 shrink-0 rounded accent-blue-500" />
-              <span className="text-sm leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
-                I confirm I have the right to share this material and have not included confidential
-                or unlawfully obtained content. I understand SparkL may review, watermark, or remove
-                this upload per the{" "}
-                <Link href="/content-guidelines" target="_blank"
-                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium">
-                  Content Guidelines
-                </Link>{" "}and{" "}
-                <Link href="/terms" target="_blank"
-                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2 font-medium">
-                  Terms of Service
-                </Link>.
-              </span>
-            </label>
-          </div>
-
-          {error && (
-            <div className="flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
-              <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-              <p className="text-sm text-red-400">{error}</p>
-            </div>
-          )}
-          {success && (
-            <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-              <p className="text-sm text-emerald-400">Uploaded — pending admin review.</p>
-            </div>
-          )}
-
-          <button type="submit" disabled={!formValid || submitting}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40">
-            {submitting
-              ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</>
-              : <><UploadIcon className="h-4 w-4" /> Submit for review</>
-            }
-          </button>
-        </form>
+            <button type="submit" disabled={!formValid || submitting}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40">
+              {submitting
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</>
+                : <><UploadIcon className="h-4 w-4" /> Submit for review</>
+              }
+            </button>
+          </form>
+        )}
 
         {/* My Uploads */}
         <div className="mt-10">
