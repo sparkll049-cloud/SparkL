@@ -41,8 +41,7 @@ async def list_submissions(
             "id, status, feedback, extracted_text, extraction_quality, "
             "mime_type, file_size, created_at, reviewed_at, "
             "question_id, submitted_by, "
-            "question:past_questions(id, title, course:courses(name)), "
-            "submitter:profiles(full_name, phone)"
+            "question:past_questions(id, title, course:courses(name))"
         )
         .order("created_at", desc=True)
     )
