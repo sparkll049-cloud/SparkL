@@ -1,16 +1,13 @@
 """
 Student-facing past-question API.
-Changes:
-- _is_admin: removed redundant DB call — uses user dict passed from auth
-- get_question: excluded extracted_text from response (not needed by students)
-- _can_access: accepts pre-fetched is_admin flag instead of re-querying
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from app.supabase_client import supabase
 
@@ -23,15 +20,11 @@ PROCESSED_COLUMNS = (
 )
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Auth ───────────────────────────────────────────────────────────────────────
 
 async def get_current_user(
     authorization: Optional[str] = Header(None),
 ) -> dict:
-    """
-    Single auth + profile fetch.
-    Returns {id, is_admin, email} — no downstream re-queries needed.
-    """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated.")
     token = authorization.removeprefix("Bearer ").strip()
@@ -63,13 +56,9 @@ async def get_current_user(
     }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _can_access(row: dict, user: dict) -> bool:
-    """
-    Access check using already-fetched user dict.
-    No extra DB call needed.
-    """
     if row.get("status") == "approved":
         return True
     if row.get("uploaded_by") == str(user["id"]):
@@ -113,12 +102,178 @@ def _user_enrolled_in_course(user_id: UUID, course_id: str) -> bool:
         return False
 
 
-# ── Past-questions routes ─────────────────────────────────────────────────────
+# ── Global search ──────────────────────────────────────────────────────────────
+# NOTE: This MUST stay before /{question_id} so FastAPI doesn't treat
+#       "search" as a UUID param.
+
+@router.get("/search")
+async def search_questions(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(default=10, ge=1, le=30),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Search past questions AND courses across ALL departments & institutions.
+    Matches on: question title, course name, department name, institution name.
+    No department filter — searches the entire SparkL database.
+    """
+    term = q.strip()
+    if not term:
+        return {"results": [], "courses": [], "query": term}
+
+    def fetch_questions():
+        """Search past questions by title across all departments."""
+        return (
+            supabase.table("past_questions")
+            .select(
+                "id, title, year, created_at, "
+                "course:courses(id, name, "
+                "  department:departments(name, "
+                "    institution:institutions(name)"
+                "  )"
+                ")"
+            )
+            .ilike("title", f"%{term}%")
+            .eq("status", "approved")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+
+    def fetch_courses_by_name():
+        """Search courses by name."""
+        return (
+            supabase.table("courses")
+            .select(
+                "id, name, "
+                "department:departments(name, "
+                "  institution:institutions(name)"
+                ")"
+            )
+            .ilike("name", f"%{term}%")
+            .order("name")
+            .limit(limit)
+            .execute()
+        )
+
+    def fetch_departments_by_name():
+        """Find departments whose name matches — then we'll get their courses."""
+        return (
+            supabase.table("departments")
+            .select("id, name, institution:institutions(name)")
+            .ilike("name", f"%{term}%")
+            .limit(15)
+            .execute()
+        )
+
+    def fetch_institutions_by_name():
+        """Find institutions whose name matches — then we'll get their depts."""
+        return (
+            supabase.table("institutions")
+            .select("id, name")
+            .ilike("name", f"%{term}%")
+            .limit(10)
+            .execute()
+        )
+
+    # Run all four lookups in parallel
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        q_future    = pool.submit(fetch_questions)
+        c_future    = pool.submit(fetch_courses_by_name)
+        d_future    = pool.submit(fetch_departments_by_name)
+        i_future    = pool.submit(fetch_institutions_by_name)
+
+        questions_res = q_future.result()
+        courses_res   = c_future.result()
+        depts_res     = d_future.result()
+        inst_res      = i_future.result()
+
+    # ── Collect department IDs from dept + institution matches ─────────────────
+
+    dept_ids: list[str] = [
+        d["id"] for d in (depts_res.data or [])
+    ]
+
+    # For each matched institution, fetch its department IDs
+    inst_ids = [i["id"] for i in (inst_res.data or [])]
+    if inst_ids:
+        depts_from_inst = (
+            supabase.table("departments")
+            .select("id")
+            .in_("institution_id", inst_ids)
+            .execute()
+        )
+        dept_ids += [d["id"] for d in (depts_from_inst.data or [])]
+
+    # Fetch courses belonging to matched departments
+    dept_courses: list[dict] = []
+    if dept_ids:
+        dept_courses_res = (
+            supabase.table("courses")
+            .select(
+                "id, name, "
+                "department:departments(name, institution:institutions(name))"
+            )
+            .in_("department_id", list(set(dept_ids)))
+            .order("name")
+            .limit(limit)
+            .execute()
+        )
+        dept_courses = dept_courses_res.data or []
+
+    # ── Deduplicate and shape course results ───────────────────────────────────
+
+    seen_course_ids: set[str] = set()
+    merged_courses: list[dict] = []
+
+    for row in (
+        (courses_res.data or []) +
+        dept_courses
+    ):
+        if not row or row.get("id") in seen_course_ids:
+            continue
+        seen_course_ids.add(row["id"])
+        dept = row.get("department") or {}
+        inst = dept.get("institution") or {}
+        merged_courses.append({
+            "id":          row["id"],
+            "name":        row["name"],
+            "department":  dept.get("name"),
+            "institution": inst.get("name"),
+        })
+
+    # ── Shape question results ─────────────────────────────────────────────────
+
+    shaped_questions: list[dict] = []
+    for row in (questions_res.data or []):
+        course = row.get("course") or {}
+        dept   = course.get("department") or {}
+        inst   = dept.get("institution") or {}
+        shaped_questions.append({
+            "id":    row["id"],
+            "title": row["title"],
+            "year":  row.get("year"),
+            "course": {
+                "id":          course.get("id"),
+                "name":        course.get("name"),
+                "department":  dept.get("name"),
+                "institution": inst.get("name"),
+            },
+        })
+
+    return {
+        "results": shaped_questions[:limit],
+        "courses": merged_courses[:limit],
+        "query":   term,
+    }
+
+
+# ── Past-questions routes ──────────────────────────────────────────────────────
 
 @router.get("/{question_id}")
 async def get_question(
     question_id: str,
-    user:        dict = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
     row = _get_paper(question_id)
     if not _can_access(row, user):
@@ -127,7 +282,6 @@ async def get_question(
     response = (
         supabase.table("past_questions")
         .select(
-            # extracted_text excluded — students don't need raw text
             "id, title, year, status, extraction_quality, "
             "mime_type, created_at, "
             "course:courses(id, name), semester:semesters(id, name)"
@@ -144,7 +298,7 @@ async def get_question(
 @router.get("/{question_id}/processed")
 async def get_processed_questions(
     question_id: str,
-    user:        dict = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
     row = _get_paper(question_id)
     if not _can_access(row, user):
@@ -160,12 +314,12 @@ async def get_processed_questions(
     return response.data or []
 
 
-# ── Section routes ────────────────────────────────────────────────────────────
+# ── Section routes ─────────────────────────────────────────────────────────────
 
 @router.get("/section/{section_id}")
 async def get_section_detail(
     section_id: str,
-    user:       dict = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
     _check_uuid(section_id, "section id")
 
@@ -195,7 +349,7 @@ async def get_section_detail(
 @router.get("/section/{section_id}/processed")
 async def get_section_processed_questions(
     section_id: str,
-    user:       dict = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
     _check_uuid(section_id, "section id")
 
@@ -226,12 +380,12 @@ async def get_section_processed_questions(
     return response.data or []
 
 
-# ── Course-level aggregation ──────────────────────────────────────────────────
+# ── Course-level aggregation ───────────────────────────────────────────────────
 
 @router.get("/course/{course_id}/all")
 async def get_all_course_questions(
     course_id: str,
-    user:      dict = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
     _check_uuid(course_id, "course id")
 
