@@ -5,12 +5,12 @@ import { BookOpen, FileQuestion, GraduationCap, MessageCircleQuestion } from "lu
 
 const stats = [
   {
-    value: "12K+",
+    value: "100+",
     label: "Students",
     icon: GraduationCap,
   },
   {
-    value: "8.5K+",
+    value: "100+",
     label: "Past Questions",
     icon: FileQuestion,
   },
@@ -20,7 +20,7 @@ const stats = [
     icon: MessageCircleQuestion,
   },
   {
-    value: "500+",
+    value: "50+",
     label: "Courses",
     icon: BookOpen,
   },
