@@ -5,7 +5,6 @@ import { useRef } from "react";
 import {
   ArrowRight,
   BookOpen,
-  CheckCircle2,
   MessageCircleQuestion,
   Search,
   Sparkles,
@@ -13,27 +12,19 @@ import {
   Zap,
 } from "lucide-react";
 
-/* ============================================================
-   ANIMATION VARIANTS
-============================================================ */
-
 const fadeUp = {
-  hidden: { opacity: 0, y: 24 },
+  hidden: { opacity: 0, y: 28 },
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.55, ease: [0.22, 1, 0.36, 1] },
+    transition: { duration: 0.6, ease: [0.22, 1, 0.36, 1] },
   },
 };
 
 const stagger = {
   hidden: {},
-  visible: { transition: { staggerChildren: 0.12 } },
+  visible: { transition: { staggerChildren: 0.13 } },
 };
-
-/* ============================================================
-   DATA
-============================================================ */
 
 const steps = [
   {
@@ -45,9 +36,6 @@ const steps = [
       "Type your course code or topic — MTH 201, CHM 101, whatever you need. SparkL surfaces the right past questions instantly.",
     detail: "MTH 201 • Engineering Mathematics",
     detailSub: "847 past questions available",
-    iconBg: "bg-blue-600/10",
-    iconColor: "text-blue-600",
-    numberColor: "text-blue-100",
     accent: "bg-blue-600",
   },
   {
@@ -56,12 +44,9 @@ const steps = [
     color: "indigo",
     title: "Practice with past questions",
     description:
-      "Work through real exam questions from your school. Track your progress and see where you need to focus more.",
+      "Work through real exam questions from your school. Track your progress and see exactly where to focus more.",
     detail: "68% complete",
     detailSub: "Keep going — you're doing great",
-    iconBg: "bg-indigo-600/10",
-    iconColor: "text-indigo-600",
-    numberColor: "text-indigo-100",
     accent: "bg-indigo-600",
   },
   {
@@ -70,12 +55,9 @@ const steps = [
     color: "violet",
     title: "Ask when you're stuck",
     description:
-      "Post your question to the student community. Get explanations from peers who've been through the same course.",
+      "Post your question to the student community. Get clear explanations from peers who've been through the same course.",
     detail: "Solution found",
     detailSub: "Community answer • 4 min ago",
-    iconBg: "bg-violet-600/10",
-    iconColor: "text-violet-600",
-    numberColor: "text-violet-100",
     accent: "bg-violet-600",
   },
   {
@@ -87,56 +69,18 @@ const steps = [
       "SparkL's AI study assistant explains difficult concepts and guides you to understand — not just memorise answers.",
     detail: "AI Study Assistant",
     detailSub: "Coming soon to SparkL",
-    iconBg: "bg-emerald-600/10",
-    iconColor: "text-emerald-600",
-    numberColor: "text-emerald-100",
     accent: "bg-emerald-500",
   },
 ];
 
-const colorMap: Record<
-  string,
-  { ring: string; badge: string; badgeText: string; line: string }
-> = {
-  blue: {
-    ring: "ring-blue-100",
-    badge: "bg-blue-50 text-blue-700 border-blue-100",
-    badgeText: "text-blue-700",
-    line: "bg-blue-200",
-  },
-  indigo: {
-    ring: "ring-indigo-100",
-    badge: "bg-indigo-50 text-indigo-700 border-indigo-100",
-    badgeText: "text-indigo-700",
-    line: "bg-indigo-200",
-  },
-  violet: {
-    ring: "ring-violet-100",
-    badge: "bg-violet-50 text-violet-700 border-violet-100",
-    badgeText: "text-violet-700",
-    line: "bg-violet-200",
-  },
-  emerald: {
-    ring: "ring-emerald-100",
-    badge: "bg-emerald-50 text-emerald-700 border-emerald-100",
-    badgeText: "text-emerald-700",
-    line: "bg-emerald-200",
-  },
+const colorMap: Record<string, { ring: string; badge: string; line: string; iconColor: string; iconBg: string }> = {
+  blue:    { ring: "ring-blue-100",    badge: "bg-blue-50 text-blue-700 border-blue-100",       line: "from-blue-200 to-indigo-200",    iconColor: "text-blue-600",    iconBg: "bg-blue-50"    },
+  indigo:  { ring: "ring-indigo-100",  badge: "bg-indigo-50 text-indigo-700 border-indigo-100", line: "from-indigo-200 to-violet-200",  iconColor: "text-indigo-600",  iconBg: "bg-indigo-50"  },
+  violet:  { ring: "ring-violet-100",  badge: "bg-violet-50 text-violet-700 border-violet-100", line: "from-violet-200 to-emerald-200", iconColor: "text-violet-600",  iconBg: "bg-violet-50"  },
+  emerald: { ring: "ring-emerald-100", badge: "bg-emerald-50 text-emerald-700 border-emerald-100", line: "",                            iconColor: "text-emerald-600", iconBg: "bg-emerald-50" },
 };
 
-/* ============================================================
-   STEP CARD
-============================================================ */
-
-function StepCard({
-  step,
-  index,
-  isLast,
-}: {
-  step: (typeof steps)[number];
-  index: number;
-  isLast: boolean;
-}) {
+function StepCard({ step, index, isLast }: { step: typeof steps[number]; index: number; isLast: boolean }) {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-80px" });
   const colors = colorMap[step.color];
@@ -148,66 +92,73 @@ function StepCard({
       initial="hidden"
       animate={inView ? "visible" : "hidden"}
       variants={fadeUp}
-      transition={{ delay: index * 0.1 }}
-      className="relative flex gap-5 sm:gap-7"
+      transition={{ delay: index * 0.08 }}
+      className="relative flex gap-6 sm:gap-8"
     >
-      {/* ── Left column: number + connector line ── */}
+      {/* Left: icon + line */}
       <div className="flex flex-col items-center">
-        {/* Step number bubble */}
         <motion.div
-          initial={{ scale: 0.7, opacity: 0 }}
-          animate={inView ? { scale: 1, opacity: 1 } : {}}
-          transition={{
-            delay: index * 0.1 + 0.1,
-            duration: 0.4,
-            ease: [0.22, 1, 0.36, 1],
-          }}
-          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ring-4 ${colors.ring} bg-white shadow-sm`}
+          initial={{ scale: 0.4, opacity: 0, rotate: -25 }}
+          animate={inView ? { scale: 1, opacity: 1, rotate: 0 } : {}}
+          transition={{ delay: index * 0.08 + 0.1, duration: 0.5, type: "spring", stiffness: 260, damping: 18 }}
+          whileHover={{ scale: 1.12, rotate: 5, transition: { duration: 0.2 } }}
+          className={`flex h-12 w-12 shrink-0 cursor-default items-center justify-center rounded-2xl ring-4 ${colors.ring} ${colors.iconBg} shadow-sm`}
         >
-          <Icon className={`h-5 w-5 ${step.iconColor}`} />
+          <Icon className={`h-5 w-5 ${colors.iconColor}`} />
         </motion.div>
 
-        {/* Connector line */}
         {!isLast && (
           <motion.div
-            initial={{ scaleY: 0 }}
-            animate={inView ? { scaleY: 1 } : {}}
-            transition={{
-              delay: index * 0.1 + 0.3,
-              duration: 0.5,
-              ease: "easeOut",
-            }}
+            initial={{ scaleY: 0, opacity: 0 }}
+            animate={inView ? { scaleY: 1, opacity: 1 } : {}}
+            transition={{ delay: index * 0.08 + 0.35, duration: 0.6, ease: "easeOut" }}
             style={{ originY: 0 }}
-            className={`mt-3 w-px flex-1 ${colors.line} min-h-[2.5rem]`}
+            className={`mt-3 w-0.5 flex-1 bg-gradient-to-b ${colors.line} min-h-[3rem]`}
           />
         )}
       </div>
 
-      {/* ── Right column: content ── */}
-      <div className="pb-10 sm:pb-12">
-        {/* Step badge */}
-        <span
+      {/* Right: content */}
+      <div className="pb-12 sm:pb-14">
+        <motion.span
+          initial={{ opacity: 0, x: -12 }}
+          animate={inView ? { opacity: 1, x: 0 } : {}}
+          transition={{ delay: index * 0.08 + 0.15, duration: 0.4 }}
           className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${colors.badge}`}
         >
           Step {step.number}
-        </span>
+        </motion.span>
 
-        <h3 className="mt-3 text-xl font-black tracking-tight text-slate-900 sm:text-2xl">
-          {step.title}
-        </h3>
-
-        <p className="mt-2 max-w-lg text-sm leading-6 text-slate-500 sm:text-base sm:leading-7">
-          {step.description}
-        </p>
-
-        {/* Mini product callout */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
+        <motion.h3
+          initial={{ opacity: 0, y: 12 }}
           animate={inView ? { opacity: 1, y: 0 } : {}}
-          transition={{ delay: index * 0.1 + 0.25, duration: 0.45 }}
-          className="mt-4 inline-flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-2.5"
+          transition={{ delay: index * 0.08 + 0.2, duration: 0.5 }}
+          className="mt-3 text-xl font-black tracking-tight text-slate-900 sm:text-2xl"
         >
-          <div className={`h-2 w-2 rounded-full ${step.accent}`} />
+          {step.title}
+        </motion.h3>
+
+        <motion.p
+          initial={{ opacity: 0, y: 10 }}
+          animate={inView ? { opacity: 1, y: 0 } : {}}
+          transition={{ delay: index * 0.08 + 0.25, duration: 0.5 }}
+          className="mt-2 max-w-lg text-sm leading-6 text-slate-500 sm:text-base sm:leading-7"
+        >
+          {step.description}
+        </motion.p>
+
+        <motion.div
+          initial={{ opacity: 0, y: 10, scale: 0.96 }}
+          animate={inView ? { opacity: 1, y: 0, scale: 1 } : {}}
+          transition={{ delay: index * 0.08 + 0.32, duration: 0.45 }}
+          whileHover={{ scale: 1.02, x: 3, transition: { duration: 0.2 } }}
+          className="mt-4 inline-flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-2.5 shadow-sm"
+        >
+          <motion.div
+            animate={{ scale: [1, 1.3, 1], opacity: [0.7, 1, 0.7] }}
+            transition={{ duration: 2, repeat: Infinity, delay: index * 0.5 }}
+            className={`h-2 w-2 rounded-full ${step.accent}`}
+          />
           <div>
             <p className="text-xs font-bold text-slate-800">{step.detail}</p>
             <p className="text-[10px] text-slate-400">{step.detailSub}</p>
@@ -218,42 +169,57 @@ function StepCard({
   );
 }
 
-/* ============================================================
-   MAIN EXPORT
-============================================================ */
-
 export default function HowItWorks() {
   const headerRef = useRef(null);
   const headerInView = useInView(headerRef, { once: true, margin: "-60px" });
 
   return (
     <section className="relative overflow-hidden bg-white py-20 sm:py-28">
-      {/* ── Background decoration ── */}
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -right-40 top-0 h-96 w-96 rounded-full bg-blue-50/60 blur-3xl" />
-        <div className="absolute -left-40 bottom-0 h-96 w-96 rounded-full bg-indigo-50/50 blur-3xl" />
+        <motion.div
+          animate={{ opacity: [0.4, 0.65, 0.4], x: [0, 15, 0] }}
+          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+          className="absolute -right-40 top-0 h-96 w-96 rounded-full bg-blue-50/70 blur-3xl"
+        />
+        <motion.div
+          animate={{ opacity: [0.3, 0.55, 0.3], x: [0, -15, 0] }}
+          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+          className="absolute -left-40 bottom-0 h-96 w-96 rounded-full bg-indigo-50/60 blur-3xl"
+        />
+        <div
+          className="absolute inset-0 opacity-[0.015]"
+          style={{
+            backgroundImage: "radial-gradient(circle, #1e40af 1px, transparent 1px)",
+            backgroundSize: "40px 40px",
+          }}
+        />
       </div>
 
       <div className="relative mx-auto max-w-5xl px-5 sm:px-8 lg:px-10">
-        {/* ── Section header ── */}
+        {/* Header */}
         <motion.div
           ref={headerRef}
           initial="hidden"
           animate={headerInView ? "visible" : "hidden"}
           variants={stagger}
-          className="mb-14 max-w-2xl sm:mb-16"
+          className="mb-16 max-w-2xl"
         >
           <motion.div
             variants={fadeUp}
-            className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50/70 px-3.5 py-1.5 text-sm font-semibold text-blue-700"
+            className="mb-5 inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50/70 px-4 py-2 text-sm font-semibold text-blue-700"
           >
-            <Sparkles className="h-3.5 w-3.5" />
+            <motion.span
+              animate={{ rotate: [0, 15, -10, 15, 0], scale: [1, 1.2, 1.1, 1.2, 1] }}
+              transition={{ duration: 2, repeat: Infinity, repeatDelay: 4 }}
+            >
+              <Sparkles className="h-4 w-4" />
+            </motion.span>
             How it works
           </motion.div>
 
           <motion.h2
             variants={fadeUp}
-            className="text-4xl font-black leading-[1.05] tracking-[-0.035em] text-slate-950 sm:text-5xl"
+            className="text-4xl font-black leading-[1.05] tracking-[-0.038em] text-slate-950 sm:text-5xl"
           >
             From stuck to{" "}
             <span className="text-blue-600">sorted</span>
@@ -263,54 +229,57 @@ export default function HowItWorks() {
 
           <motion.p
             variants={fadeUp}
-            className="mt-4 text-base leading-7 text-slate-500 sm:text-lg sm:leading-8"
+            className="mt-5 text-base leading-7 text-slate-500 sm:text-lg sm:leading-8"
           >
             SparkL is built around how students actually study — searching,
             practising, asking, and understanding.
           </motion.p>
         </motion.div>
 
-        {/* ── Steps ── */}
+        {/* Steps */}
         <div>
           {steps.map((step, i) => (
-            <StepCard
-              key={step.number}
-              step={step}
-              index={i}
-              isLast={i === steps.length - 1}
-            />
+            <StepCard key={step.number} step={step} index={i} isLast={i === steps.length - 1} />
           ))}
         </div>
 
-        {/* ── Bottom CTA ── */}
+        {/* Bottom CTA */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 24 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: "-60px" }}
-          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-          className="mt-4 flex flex-col items-start gap-4 rounded-2xl border border-blue-100 bg-blue-50/60 px-6 py-6 sm:flex-row sm:items-center sm:justify-between sm:px-8"
+          transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+          className="mt-4 flex flex-col items-start gap-5 overflow-hidden rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 to-indigo-50/60 px-6 py-7 sm:flex-row sm:items-center sm:justify-between sm:px-8"
         >
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600">
+          <div className="flex items-start gap-4">
+            <motion.div
+              animate={{ scale: [1, 1.08, 1], rotate: [0, -5, 5, 0] }}
+              transition={{ duration: 3, repeat: Infinity, repeatDelay: 2 }}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-600 shadow-[0_8px_20px_-6px_rgba(37,99,235,0.5)]"
+            >
               <Users className="h-5 w-5 text-white" />
-            </div>
+            </motion.div>
             <div>
-              <p className="text-sm font-bold text-slate-900">
-                Join thousands of Nigerian students
-              </p>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Already using SparkL to study smarter every day.
-              </p>
+              <p className="text-sm font-bold text-slate-900">Join thousands of Nigerian students</p>
+              <p className="mt-0.5 text-xs text-slate-500">Already using SparkL to study smarter every day.</p>
             </div>
           </div>
 
-          <a
+          <motion.a
             href="/dashboard/courses"
-            className="group inline-flex shrink-0 items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-[0_8px_20px_-8px_rgba(37,99,235,0.5)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-blue-700"
+            whileHover={{ scale: 1.04, y: -2 }}
+            whileTap={{ scale: 0.97 }}
+            transition={{ type: "spring", stiffness: 400, damping: 20 }}
+            className="group inline-flex shrink-0 items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-[0_8px_20px_-8px_rgba(37,99,235,0.55)] hover:bg-blue-700"
           >
             Get started free
-            <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
-          </a>
+            <motion.span
+              animate={{ x: [0, 4, 0] }}
+              transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut", repeatDelay: 1 }}
+            >
+              <ArrowRight className="h-4 w-4" />
+            </motion.span>
+          </motion.a>
         </motion.div>
       </div>
     </section>
