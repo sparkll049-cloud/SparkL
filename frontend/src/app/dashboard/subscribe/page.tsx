@@ -356,7 +356,7 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }
           })()}
 
           {(() => {
-            const total = plan.price + 200; // plan + processing (₦100) + VAT (₦100)
+            const total = plan.price + 100; // plan + processing (₦100) + VAT (₦100)
             return (
               <button
                 onClick={onConfirm}
