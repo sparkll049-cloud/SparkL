@@ -36,7 +36,7 @@ interface QuestionResult {
 }
 interface SidebarUser {
   fullName: string | null; avatarUrl: string | null; isAdmin: boolean;
-  streak: number; xp: number;
+  streak: number; xp: number; department: string | null;
   tier: { label: string; color: string; isPaid: boolean; isTrial: boolean; detail: string };
 }
 
@@ -265,7 +265,6 @@ function SearchDropdown({
 
   return (
     <div className="p-2 max-h-[420px] overflow-y-auto">
-      {/* ── Courses ── */}
       {courses.length > 0 && (
         <>
           <p className="px-2 pb-1 pt-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
@@ -276,8 +275,7 @@ function SearchDropdown({
             const { code } = splitCourseName(c.name);
             return (
               <Link key={c.id} href={`/dashboard/courses/${c.id}`} onClick={onSelect}
-                className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-500/5"
-              >
+                className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-500/5">
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-black text-white"
                   style={{ background: accent }}>
                   {code?.split(" ")[0] ?? courseInitials(c.name)}
@@ -297,7 +295,6 @@ function SearchDropdown({
         </>
       )}
 
-      {/* ── Past Questions ── */}
       {questionResults.length > 0 && (
         <>
           <p className="px-2 pb-1 pt-3 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
@@ -308,8 +305,7 @@ function SearchDropdown({
             const courseCode = q.course?.name ? splitCourseName(q.course.name).code : null;
             return (
               <Link key={q.id} href={`/questions/${q.id}`} onClick={onSelect}
-                className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-500/5"
-              >
+                className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-500/5">
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-white"
                   style={{ background: accent }}>
                   <FileText className="h-3.5 w-3.5"/>
@@ -327,7 +323,6 @@ function SearchDropdown({
         </>
       )}
 
-      {/* View all link */}
       <div className="border-t mt-2 pt-2" style={{ borderColor: "var(--sp-border)" }}>
         <Link href={`/dashboard/courses?q=${encodeURIComponent(query)}`} onClick={onSelect}
           className="flex items-center justify-center gap-1.5 rounded-xl py-2 text-[11px] font-bold text-indigo-500 hover:bg-indigo-500/5 transition-colors">
@@ -341,10 +336,15 @@ function SearchDropdown({
 // ── Topbar ─────────────────────────────────────────────────────────────────────
 
 function Topbar({
-  onMenuOpen, avatarUrl, firstName, courses, getToken,
+  onMenuOpen, avatarUrl, firstName, courses, getToken, department, sidebarOpen,
 }: {
-  onMenuOpen: () => void; avatarUrl: string | null; firstName: string;
-  courses: Course[]; getToken: () => Promise<string | null>;
+  onMenuOpen: () => void;
+  avatarUrl: string | null;
+  firstName: string;
+  courses: Course[];
+  getToken: () => Promise<string | null>;
+  department: string | null;
+  sidebarOpen: boolean;
 }) {
   const [query, setQuery]              = useState("");
   const [focused, setFocused]          = useState(false);
@@ -354,16 +354,14 @@ function Topbar({
   const searchRef   = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Debounced API search for past questions + cross-dept courses
+  const searchPlaceholder = department
+    ? `Search ${department}…`
+    : "Search courses or past questions…";
+
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     const q = query.trim();
-    if (!q) {
-      setQResults([]);
-      setApiCourses([]);
-      setSearching(false);
-      return;
-    }
+    if (!q) { setQResults([]); setApiCourses([]); setSearching(false); return; }
     setSearching(true);
     debounceRef.current = setTimeout(async () => {
       try {
@@ -376,11 +374,10 @@ function Topbar({
         if (res.ok) {
           const j = await res.json();
           setQResults(j.results ?? []);
-          setApiCourses(j.courses ?? []); // cross-department courses from backend
+          setApiCourses(j.courses ?? []);
         }
       } catch {
-        setQResults([]);
-        setApiCourses([]);
+        setQResults([]); setApiCourses([]);
       } finally {
         setSearching(false);
       }
@@ -388,7 +385,6 @@ function Topbar({
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query, getToken]);
 
-  // Close dropdown on outside click
   useEffect(() => {
     const h = (e: MouseEvent) => {
       if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
@@ -402,23 +398,19 @@ function Topbar({
   const showDropdown = focused && query.trim().length > 0;
   const handleSelect = () => { setQuery(""); setFocused(false); setQResults([]); setApiCourses([]); };
 
-  // Merge enrolled courses (local filter) + cross-dept courses from API (deduplicated)
   const mergedCourses: ApiCourse[] = [
-    ...courses
-      .filter(c => c.name.toLowerCase().includes(query.toLowerCase()))
-      .slice(0, 5),
+    ...courses.filter(c => c.name.toLowerCase().includes(query.toLowerCase())).slice(0, 5),
     ...apiCourses.filter(ac => !courses.some(c => c.id === ac.id)),
   ];
 
   return (
     <header className="sticky top-0 z-40 border-b backdrop-blur-xl"
       style={{ background: "var(--sp-header-bg)", borderColor: "var(--sp-border)" }}>
-      <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 lg:px-6">
+      <div className="flex h-16 items-center gap-3 px-4 lg:px-6">
 
-        {/* Logo */}
-        <Link className="flex shrink-0 items-center gap-2.5" href="/dashboard">
+        {/* Logo — hidden on lg when sidebar is visible */}
+        <Link className="flex shrink-0 items-center gap-2.5 lg:hidden" href="/dashboard">
           <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={32} src="/images/logo.jpg" width={32}/>
-          <span className="hidden text-base font-black tracking-tight lg:block" style={{ color: "var(--sp-text)" }}>SparkL</span>
         </Link>
 
         {/* Search */}
@@ -429,7 +421,7 @@ function Topbar({
             value={query}
             onChange={e => setQuery(e.target.value)}
             onFocus={() => setFocused(true)}
-            placeholder="Search courses or past questions…"
+            placeholder={searchPlaceholder}
             className="w-full rounded-full border py-2.5 pl-11 pr-4 text-sm outline-none transition-all"
             style={{
               background: "var(--sp-input-bg)",
@@ -438,7 +430,6 @@ function Topbar({
               boxShadow: focused ? "0 0 0 3px rgba(99,102,241,0.10)" : "none",
             }}
           />
-          {/* Clear button */}
           {query && (
             <button onClick={() => { setQuery(""); setQResults([]); setApiCourses([]); }}
               className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold px-1.5 py-0.5 rounded-full hover:bg-indigo-500/10 transition-colors"
@@ -446,7 +437,6 @@ function Topbar({
               ✕
             </button>
           )}
-          {/* Dropdown */}
           {showDropdown && (
             <div className="absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border shadow-2xl"
               style={{ background: "var(--sp-search-popup, var(--sp-bg-card))", borderColor: "var(--sp-border)" }}>
@@ -477,8 +467,9 @@ function Topbar({
               </div>
             )}
           </Link>
+          {/* Hamburger — only on mobile (lg has permanent sidebar) */}
           <button onClick={onMenuOpen}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 lg:hidden"
             style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
             aria-label="Open menu">
             <Menu className="h-4 w-4" style={{ color: "var(--sp-text-2)" }}/>
@@ -489,13 +480,16 @@ function Topbar({
   );
 }
 
-// ── Sidebar ────────────────────────────────────────────────────────────────────
+// ── Sidebar inner content (shared between mobile drawer + desktop rail) ─────────
 
-function Sidebar({
-  open, onClose, user, onLogout, darkMode, onToggleDark,
+function SidebarContent({
+  user, onLogout, darkMode, onToggleDark, onClose,
 }: {
-  open: boolean; onClose: () => void; user: SidebarUser | null;
-  onLogout: () => void; darkMode: boolean; onToggleDark: () => void;
+  user: SidebarUser | null;
+  onLogout: () => void;
+  darkMode: boolean;
+  onToggleDark: () => void;
+  onClose?: () => void; // only passed in mobile drawer
 }) {
   const pathname  = usePathname();
   const firstName = (user?.fullName ?? "You").split(" ")[0];
@@ -512,205 +506,228 @@ function Sidebar({
   const fill        = Math.min(streak / 7, 1) * circ;
   const streakColor = streak >= 7 ? "#F59E0B" : streak >= 3 ? "#6366F1" : "#94A3B8";
 
+  const isActive = (href: string) =>
+    href === "/dashboard" ? pathname === href : pathname.startsWith(href);
+
+  const handleNav = () => { onClose?.(); };
+
+  return (
+    <div className="flex h-full flex-col" style={{ background: "var(--sp-bg-card)" }}>
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: "var(--sp-border)" }}>
+        <div className="flex items-center gap-2.5">
+          <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={30} src="/images/logo.jpg" width={30}/>
+          <span className="text-sm font-black tracking-tight" style={{ color: "var(--sp-text)" }}>SparkL</span>
+        </div>
+        {/* Close button only in mobile drawer */}
+        {onClose && (
+          <button onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-xl border transition hover:bg-red-500/10 lg:hidden"
+            style={{ borderColor: "var(--sp-border)" }} aria-label="Close menu">
+            <X className="h-4 w-4" style={{ color: "var(--sp-text-3)" }}/>
+          </button>
+        )}
+      </div>
+
+      {/* Profile mini */}
+      <div className="px-5 py-4 border-b" style={{ borderColor: "var(--sp-border)" }}>
+        <div className="flex items-center gap-3 mb-3">
+          {user?.avatarUrl ? (
+            <img src={user.avatarUrl} alt="Avatar" className="h-11 w-11 rounded-2xl object-cover ring-2 ring-indigo-500/20"/>
+          ) : (
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-black text-white">
+              {firstName.slice(0, 2).toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-black" style={{ color: "var(--sp-text)" }}>{user?.fullName ?? firstName}</p>
+            <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>Level {level} · {levelName}</p>
+          </div>
+          {user?.isAdmin && (
+            <span className="flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[9px] font-black text-red-500 shrink-0">
+              <ShieldAlert className="h-2.5 w-2.5"/>Admin
+            </span>
+          )}
+        </div>
+
+        {/* XP bar */}
+        <div className="mb-3">
+          <div className="flex justify-between mb-1">
+            <span className="flex items-center gap-1 text-[10px] font-bold" style={{ color: "var(--sp-text-3)" }}>
+              <Zap className="h-2.5 w-2.5 text-indigo-500"/>{xp} XP
+            </span>
+            <span className="text-[10px] font-bold text-indigo-500">{100 - progress} to next</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full" style={{ background: "var(--sp-ring-track)" }}>
+            <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-1000"
+              style={{ width: `${progress}%` }}/>
+          </div>
+        </div>
+
+        {/* Tier pill */}
+        {tier && (
+          <Link href="/dashboard/subscribe" onClick={handleNav}
+            className="flex items-center gap-2 rounded-xl border px-3 py-2 transition hover:opacity-80"
+            style={{ background: `${tier.color}12`, borderColor: `${tier.color}38` }}>
+            <span className="flex h-5 w-5 items-center justify-center rounded-lg text-white" style={{ background: tier.color }}>
+              {tier.isPaid ? <Crown className="h-2.5 w-2.5" fill="currentColor"/> : tier.isTrial ? <Timer className="h-2.5 w-2.5"/> : <Sparkles className="h-2.5 w-2.5"/>}
+            </span>
+            <span className="text-[11px] font-black" style={{ color: tier.color }}>{tier.label}</span>
+            <span className="ml-auto text-[9px]" style={{ color: "var(--sp-text-3)" }}>{tier.detail}</span>
+            <ChevronRight className="h-3 w-3 shrink-0" style={{ color: tier.color }}/>
+          </Link>
+        )}
+      </div>
+
+      {/* Streak mini */}
+      <div className="px-5 py-3 border-b" style={{ borderColor: "var(--sp-border)" }}>
+        <div className="flex items-center gap-3">
+          <div className="relative flex items-center justify-center shrink-0" style={{ width: size, height: size }}>
+            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
+              <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--sp-ring-track)" strokeWidth="4"/>
+              <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={streakColor} strokeWidth="4"
+                strokeDasharray={`${fill} ${circ}`} strokeLinecap="round"
+                style={{ transition: "stroke-dasharray 1.2s cubic-bezier(0.34,1.56,0.64,1)" }}/>
+            </svg>
+            <div className="absolute flex flex-col items-center leading-none">
+              <Flame className="h-3 w-3" style={{ color: streakColor }}/>
+              <span className="text-[10px] font-black" style={{ color: "var(--sp-text)" }}>{streak}</span>
+            </div>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>{streak} day streak</p>
+            <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+              {streak === 0 ? "Start today!" : streak >= 7 ? "🔥 Full week! Amazing!" : `${7 - streak} more to hit 7`}
+            </p>
+            <div className="flex gap-1 mt-1.5">
+              {["M","T","W","T","F","S","S"].map((d, i) => {
+                const todayMF = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
+                const done    = i <= todayMF && (todayMF - i) < streak;
+                const isToday = i === todayMF;
+                return (
+                  <div key={i} className="h-4 w-4 rounded-full flex items-center justify-center text-[7px] font-black"
+                    style={{
+                      background: done ? "#6366F1" : isToday ? "rgba(99,102,241,0.18)" : "var(--sp-ring-track)",
+                      color: done ? "white" : isToday ? "#6366F1" : "var(--sp-text-3)",
+                      outline: isToday && !done ? "1.5px solid rgba(99,102,241,0.45)" : "none",
+                    }}>{d}</div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Nav links */}
+      <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
+        <p className="px-3 pb-1 text-[9px] font-black uppercase tracking-widest" style={{ color: "var(--sp-text-3)" }}>Navigate</p>
+        {NAV_LINKS.map(({ href, icon: Icon, label }) => {
+          const active = isActive(href);
+          return (
+            <Link key={href} href={href} onClick={handleNav}
+              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all"
+              style={{
+                background: active ? "rgba(99,102,241,0.10)" : "transparent",
+                color: active ? "#6366F1" : "var(--sp-text-2)",
+                borderLeft: active ? "3px solid #6366F1" : "3px solid transparent",
+              }}>
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg"
+                style={{ background: active ? "rgba(99,102,241,0.15)" : "var(--sp-ring-track)" }}>
+                <Icon className="h-3.5 w-3.5"/>
+              </span>
+              {label}
+              {href === "/study" && (
+                <span className="ml-1 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[8px] font-black text-violet-500">AI</span>
+              )}
+              {active && <ChevronRight className="ml-auto h-3 w-3"/>}
+            </Link>
+          );
+        })}
+
+        {user?.isAdmin && (
+          <>
+            <p className="px-3 pt-3 pb-1 text-[9px] font-black uppercase tracking-widest text-red-500">Admin</p>
+            <Link href="/admin" onClick={handleNav}
+              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all"
+              style={{
+                background: pathname.startsWith("/admin") ? "rgba(239,68,68,0.10)" : "transparent",
+                color: pathname.startsWith("/admin") ? "#EF4444" : "var(--sp-text-2)",
+                borderLeft: pathname.startsWith("/admin") ? "3px solid #EF4444" : "3px solid transparent",
+              }}>
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-500/10">
+                <ShieldAlert className="h-3.5 w-3.5 text-red-500"/>
+              </span>
+              Admin panel
+              {pathname.startsWith("/admin") && <ChevronRight className="ml-auto h-3 w-3 text-red-500"/>}
+            </Link>
+          </>
+        )}
+      </nav>
+
+      {/* Footer */}
+      <div className="border-t px-4 py-4 space-y-2" style={{ borderColor: "var(--sp-border)" }}>
+        <button onClick={onToggleDark}
+          className="flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-sm font-semibold transition-all hover:border-indigo-500/30"
+          style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg)" }}>
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: "var(--sp-ring-track)" }}>
+            {darkMode ? <Sun className="h-3.5 w-3.5 text-amber-400"/> : <Moon className="h-3.5 w-3.5 text-indigo-400"/>}
+          </span>
+          {darkMode ? "Light mode" : "Dark mode"}
+          <div className="ml-auto flex h-5 w-9 items-center rounded-full p-0.5 transition-colors duration-300"
+            style={{ background: darkMode ? "#6366F1" : "var(--sp-ring-track)" }}>
+            <div className="h-4 w-4 rounded-full bg-white shadow transition-transform duration-300"
+              style={{ transform: darkMode ? "translateX(16px)" : "translateX(0)" }}/>
+          </div>
+        </button>
+        <button onClick={onLogout}
+          className="flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-sm font-semibold transition-all hover:border-red-500/30 hover:bg-red-500/5"
+          style={{ borderColor: "var(--sp-border)", color: "#EF4444" }}>
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-500/10">
+            <LogOut className="h-3.5 w-3.5 text-red-500"/>
+          </span>
+          Log out
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Mobile drawer sidebar ──────────────────────────────────────────────────────
+
+function MobileDrawer({
+  open, onClose, user, onLogout, darkMode, onToggleDark,
+}: {
+  open: boolean; onClose: () => void; user: SidebarUser | null;
+  onLogout: () => void; darkMode: boolean; onToggleDark: () => void;
+}) {
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
   }, [open]);
 
-  const isActive = (href: string) =>
-    href === "/dashboard" ? pathname === href : pathname.startsWith(href);
-
   return (
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm transition-opacity duration-300"
+        className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm transition-opacity duration-300 lg:hidden"
         style={{ opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none" }}
         onClick={onClose}
       />
-
       {/* Panel */}
       <div
-        className="fixed inset-y-0 left-0 z-[81] flex w-72 flex-col shadow-2xl transition-transform duration-300 ease-out"
+        className="fixed inset-y-0 left-0 z-[81] w-72 shadow-2xl transition-transform duration-300 ease-out lg:hidden"
         style={{
-          background: "var(--sp-bg-card)",
           borderRight: "1px solid var(--sp-border)",
           transform: open ? "translateX(0)" : "translateX(-100%)",
         }}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: "var(--sp-border)" }}>
-          <div className="flex items-center gap-2.5">
-            <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={30} src="/images/logo.jpg" width={30}/>
-            <span className="text-sm font-black tracking-tight" style={{ color: "var(--sp-text)" }}>SparkL</span>
-          </div>
-          <button onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-xl border transition hover:bg-red-500/10"
-            style={{ borderColor: "var(--sp-border)" }} aria-label="Close menu">
-            <X className="h-4 w-4" style={{ color: "var(--sp-text-3)" }}/>
-          </button>
-        </div>
-
-        {/* Profile mini */}
-        <div className="px-5 py-4 border-b" style={{ borderColor: "var(--sp-border)" }}>
-          <div className="flex items-center gap-3 mb-3">
-            {user?.avatarUrl ? (
-              <img src={user.avatarUrl} alt="Avatar" className="h-11 w-11 rounded-2xl object-cover ring-2 ring-indigo-500/20"/>
-            ) : (
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-black text-white">
-                {firstName.slice(0, 2).toUpperCase()}
-              </div>
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-black" style={{ color: "var(--sp-text)" }}>{user?.fullName ?? firstName}</p>
-              <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>Level {level} · {levelName}</p>
-            </div>
-            {user?.isAdmin && (
-              <span className="flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[9px] font-black text-red-500 shrink-0">
-                <ShieldAlert className="h-2.5 w-2.5"/>Admin
-              </span>
-            )}
-          </div>
-
-          {/* XP bar */}
-          <div className="mb-3">
-            <div className="flex justify-between mb-1">
-              <span className="flex items-center gap-1 text-[10px] font-bold" style={{ color: "var(--sp-text-3)" }}>
-                <Zap className="h-2.5 w-2.5 text-indigo-500"/>{xp} XP
-              </span>
-              <span className="text-[10px] font-bold text-indigo-500">{100 - progress} to next</span>
-            </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full" style={{ background: "var(--sp-ring-track)" }}>
-              <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-1000"
-                style={{ width: `${progress}%` }}/>
-            </div>
-          </div>
-
-          {/* Tier pill */}
-          {tier && (
-            <Link href="/dashboard/subscribe" onClick={onClose}
-              className="flex items-center gap-2 rounded-xl border px-3 py-2 transition hover:opacity-80"
-              style={{ background: `${tier.color}12`, borderColor: `${tier.color}38` }}>
-              <span className="flex h-5 w-5 items-center justify-center rounded-lg text-white" style={{ background: tier.color }}>
-                {tier.isPaid ? <Crown className="h-2.5 w-2.5" fill="currentColor"/> : tier.isTrial ? <Timer className="h-2.5 w-2.5"/> : <Sparkles className="h-2.5 w-2.5"/>}
-              </span>
-              <span className="text-[11px] font-black" style={{ color: tier.color }}>{tier.label}</span>
-              <span className="ml-auto text-[9px]" style={{ color: "var(--sp-text-3)" }}>{tier.detail}</span>
-              <ChevronRight className="h-3 w-3 shrink-0" style={{ color: tier.color }}/>
-            </Link>
-          )}
-        </div>
-
-        {/* Streak mini */}
-        <div className="px-5 py-3 border-b" style={{ borderColor: "var(--sp-border)" }}>
-          <div className="flex items-center gap-3">
-            <div className="relative flex items-center justify-center shrink-0" style={{ width: size, height: size }}>
-              <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
-                <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--sp-ring-track)" strokeWidth="4"/>
-                <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={streakColor} strokeWidth="4"
-                  strokeDasharray={`${fill} ${circ}`} strokeLinecap="round"
-                  style={{ transition: "stroke-dasharray 1.2s cubic-bezier(0.34,1.56,0.64,1)" }}/>
-              </svg>
-              <div className="absolute flex flex-col items-center leading-none">
-                <Flame className="h-3 w-3" style={{ color: streakColor }}/>
-                <span className="text-[10px] font-black" style={{ color: "var(--sp-text)" }}>{streak}</span>
-              </div>
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>{streak} day streak</p>
-              <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-                {streak === 0 ? "Start today!" : streak >= 7 ? "🔥 Full week! Amazing!" : `${7 - streak} more to hit 7`}
-              </p>
-              <div className="flex gap-1 mt-1.5">
-                {["M","T","W","T","F","S","S"].map((d, i) => {
-                  const todayMF = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
-                  const done    = i <= todayMF && (todayMF - i) < streak;
-                  const isToday = i === todayMF;
-                  return (
-                    <div key={i} className="h-4 w-4 rounded-full flex items-center justify-center text-[7px] font-black"
-                      style={{
-                        background: done ? "#6366F1" : isToday ? "rgba(99,102,241,0.18)" : "var(--sp-ring-track)",
-                        color: done ? "white" : isToday ? "#6366F1" : "var(--sp-text-3)",
-                        outline: isToday && !done ? "1.5px solid rgba(99,102,241,0.45)" : "none",
-                      }}>{d}</div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Nav links */}
-        <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
-          <p className="px-3 pb-1 text-[9px] font-black uppercase tracking-widest" style={{ color: "var(--sp-text-3)" }}>Navigate</p>
-          {NAV_LINKS.map(({ href, icon: Icon, label }) => {
-            const active = isActive(href);
-            return (
-              <Link key={href} href={href} onClick={onClose}
-                className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all"
-                style={{
-                  background: active ? "rgba(99,102,241,0.10)" : "transparent",
-                  color: active ? "#6366F1" : "var(--sp-text-2)",
-                  borderLeft: active ? "3px solid #6366F1" : "3px solid transparent",
-                }}>
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg"
-                  style={{ background: active ? "rgba(99,102,241,0.15)" : "var(--sp-ring-track)" }}>
-                  <Icon className="h-3.5 w-3.5"/>
-                </span>
-                {label}
-                {href === "/study" && (
-                  <span className="ml-1 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[8px] font-black text-violet-500">AI</span>
-                )}
-                {active && <ChevronRight className="ml-auto h-3 w-3"/>}
-              </Link>
-            );
-          })}
-
-          {/* Admin link */}
-{user?.isAdmin && (
-  <>
-    <p className="px-3 pt-3 pb-1 text-[9px] font-black uppercase tracking-widest text-red-500">Admin</p>
-    <Link href="/admin" onClick={onClose}
-      className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all"
-      style={{
-        background: pathname.startsWith("/admin") ? "rgba(239,68,68,0.10)" : "transparent",
-        color: pathname.startsWith("/admin") ? "#EF4444" : "var(--sp-text-2)",
-        borderLeft: pathname.startsWith("/admin") ? "3px solid #EF4444" : "3px solid transparent",
-      }}>
-      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-500/10">
-        <ShieldAlert className="h-3.5 w-3.5 text-red-500"/>
-      </span>
-      Admin panel
-      {pathname.startsWith("/admin") && <ChevronRight className="ml-auto h-3 w-3 text-red-500"/>}
-    </Link>
-  </>
-)}
-        </nav>
-
-        {/* Footer */}
-        <div className="border-t px-4 py-4 space-y-2" style={{ borderColor: "var(--sp-border)" }}>
-          <button onClick={onToggleDark}
-            className="flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-sm font-semibold transition-all hover:border-indigo-500/30"
-            style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg)" }}>
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: "var(--sp-ring-track)" }}>
-              {darkMode ? <Sun className="h-3.5 w-3.5 text-amber-400"/> : <Moon className="h-3.5 w-3.5 text-indigo-400"/>}
-            </span>
-            {darkMode ? "Light mode" : "Dark mode"}
-            <div className="ml-auto flex h-5 w-9 items-center rounded-full p-0.5 transition-colors duration-300"
-              style={{ background: darkMode ? "#6366F1" : "var(--sp-ring-track)" }}>
-              <div className="h-4 w-4 rounded-full bg-white shadow transition-transform duration-300"
-                style={{ transform: darkMode ? "translateX(16px)" : "translateX(0)" }}/>
-            </div>
-          </button>
-          <button onClick={onLogout}
-            className="flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-sm font-semibold transition-all hover:border-red-500/30 hover:bg-red-500/5"
-            style={{ borderColor: "var(--sp-border)", color: "#EF4444" }}>
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-500/10">
-              <LogOut className="h-3.5 w-3.5 text-red-500"/>
-            </span>
-            Log out
-          </button>
-        </div>
+        <SidebarContent
+          user={user}
+          onLogout={onLogout}
+          darkMode={darkMode}
+          onToggleDark={onToggleDark}
+          onClose={onClose}
+        />
       </div>
     </>
   );
@@ -729,7 +746,6 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
   usePatchedFetch();
 
-  // Dark mode persistence
   useEffect(() => {
     const saved = localStorage.getItem("sp_dark");
     if (saved === "1") { setDarkMode(true); document.documentElement.classList.add("dark"); }
@@ -744,7 +760,6 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  // Logout handlers
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
     router.push("/auth/login?reason=timeout");
@@ -756,20 +771,17 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
     router.push("/auth/login");
   }, [supabase, router]);
 
-  // Inactivity + session enforcement
   const { showWarning, countdown, stayLoggedIn } = useInactivityLogout(signOut);
   useSessionGuard(supabase, () => {
     setKicked(true);
     setTimeout(() => router.push("/auth/login?reason=conflict"), 2000);
   });
 
-  // Stable token getter passed to Topbar search
   const getToken = useCallback(async (): Promise<string | null> => {
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token ?? null;
   }, [supabase]);
 
-  // Load sidebar data + courses for search
   useEffect(() => {
     async function load() {
       const { data: { session } } = await supabase.auth.getSession();
@@ -785,13 +797,19 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           fetch(`${base}/api/payments/subscription/status`,   { headers: h }),
         ]);
 
-        let fullName: string | null = null, isAdmin = false, streak = 0, xp = 0;
+        let fullName: string | null  = null;
+        let isAdmin                  = false;
+        let streak                   = 0;
+        let xp                       = 0;
+        let department: string | null = null;
+
         if (profileRes.status === "fulfilled" && profileRes.value.ok) {
           const j = await profileRes.value.json();
-          fullName = j.profile?.full_name ?? null;
-          isAdmin  = j.profile?.is_admin === true;
-          streak   = j.profile?.streak ?? 0;
-          xp       = j.profile?.xp ?? 0;
+          fullName   = j.profile?.full_name ?? null;
+          isAdmin    = j.profile?.is_admin === true;
+          streak     = j.profile?.streak ?? 0;
+          xp         = j.profile?.xp ?? 0;
+          department = j.profile?.department?.name ?? null;
           setCourses(j.profile?.courses ?? []);
         }
 
@@ -816,7 +834,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           }
         }
 
-        setSidebarUser({ fullName, avatarUrl, isAdmin, streak, xp, tier });
+        setSidebarUser({ fullName, avatarUrl, isAdmin, streak, xp, tier, department });
       } catch {}
     }
     load();
@@ -831,21 +849,44 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <InactivityWarning countdown={countdown} onStay={stayLoggedIn} onLogout={signOut}/>
       )}
 
-      <Sidebar
-        open={drawerOpen} onClose={() => setDrawerOpen(false)}
-        user={sidebarUser} onLogout={manualLogout}
-        darkMode={darkMode} onToggleDark={toggleDark}
+      {/* Mobile drawer (hidden on lg) */}
+      <MobileDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        user={sidebarUser}
+        onLogout={manualLogout}
+        darkMode={darkMode}
+        onToggleDark={toggleDark}
       />
 
-      <Topbar
-        onMenuOpen={() => setDrawerOpen(true)}
-        avatarUrl={sidebarUser?.avatarUrl ?? null}
-        firstName={firstName}
-        courses={courses}
-        getToken={getToken}
-      />
+      {/* Desktop permanent sidebar (visible only on lg+) */}
+      <div
+        className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:w-64 lg:flex-col"
+        style={{ borderRight: "1px solid var(--sp-border)" }}
+      >
+        <SidebarContent
+          user={sidebarUser}
+          onLogout={manualLogout}
+          darkMode={darkMode}
+          onToggleDark={toggleDark}
+        />
+      </div>
 
-      {children}
+      {/* Main area — offset by sidebar width on lg */}
+      <div className="flex flex-col lg:pl-64">
+        <Topbar
+          onMenuOpen={() => setDrawerOpen(true)}
+          avatarUrl={sidebarUser?.avatarUrl ?? null}
+          firstName={firstName}
+          courses={courses}
+          getToken={getToken}
+          department={sidebarUser?.department ?? null}
+          sidebarOpen={true}
+        />
+        <main className="flex-1">
+          {children}
+        </main>
+      </div>
     </>
   );
 }
