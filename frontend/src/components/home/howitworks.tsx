@@ -1,125 +1,488 @@
 "use client";
 
+import Link from "next/link";
 import { motion } from "framer-motion";
 import {
   ArrowRight,
   BookOpen,
+  CheckCircle2,
   FileQuestion,
+  GraduationCap,
   MessageCircleQuestion,
-  UserPlus,
+  Search,
+  Sparkles,
+  Users,
 } from "lucide-react";
 
-const steps = [
-  {
-    number: "01",
-    title: "Create your account",
-    description: "Set up your student profile and get started with SparkL.",
-    icon: UserPlus,
+const fadeUp = {
+  hidden: {
+    opacity: 0,
+    y: 24,
   },
-  {
-    number: "02",
-    title: "Find what you need",
-    description: "Explore past questions, courses, and academic resources.",
-    icon: FileQuestion,
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: {
+      duration: 0.6,
+      ease: [0.22, 1, 0.36, 1],
+    },
   },
-  {
-    number: "03",
-    title: "Ask & learn",
-    description: "Ask questions, share solutions, and learn with other students.",
-    icon: MessageCircleQuestion,
-  },
-  {
-    number: "04",
-    title: "Keep improving",
-    description: "Practice consistently and build confidence in your courses.",
-    icon: BookOpen,
-  },
-];
+};
 
-export default function HowItWorks() {
+const staggerContainer = {
+  hidden: {},
+  visible: {
+    transition: {
+      staggerChildren: 0.09,
+      delayChildren: 0.08,
+    },
+  },
+};
+
+const previewContainer = {
+  hidden: {},
+  visible: {
+    transition: {
+      staggerChildren: 0.1,
+      delayChildren: 0.25,
+    },
+  },
+};
+
+const previewItem = {
+  hidden: {
+    opacity: 0,
+    y: 14,
+  },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: {
+      duration: 0.45,
+      ease: [0.22, 1, 0.36, 1],
+    },
+  },
+};
+
+export default function HeroSection() {
   return (
-    <section className="relative overflow-hidden bg-[#f8f9ff] py-16 sm:py-20 lg:py-24">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-gradient-to-r from-transparent via-blue-100 to-transparent" />
-        <div className="absolute -left-32 bottom-0 h-64 w-64 rounded-full bg-blue-100/40 blur-3xl" />
-        <div className="absolute -right-32 top-20 h-64 w-64 rounded-full bg-indigo-100/40 blur-3xl" />
+    <section className="relative overflow-hidden bg-white">
+      {/* =========================================================
+          BACKGROUND
+      ========================================================= */}
+
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        {/* Left glow */}
+        <motion.div
+          initial={{ opacity: 0.45, scale: 0.95 }}
+          animate={{
+            opacity: [0.4, 0.55, 0.4],
+            scale: [0.95, 1.04, 0.95],
+          }}
+          transition={{
+            duration: 8,
+            repeat: Infinity,
+            ease: "easeInOut",
+          }}
+          className="absolute -left-32 top-24 h-72 w-72 rounded-full bg-blue-50 blur-3xl"
+        />
+
+        {/* Right glow */}
+        <motion.div
+          initial={{ opacity: 0.4, scale: 0.95 }}
+          animate={{
+            opacity: [0.35, 0.5, 0.35],
+            scale: [0.95, 1.05, 0.95],
+          }}
+          transition={{
+            duration: 10,
+            repeat: Infinity,
+            ease: "easeInOut",
+            delay: 1,
+          }}
+          className="absolute -right-32 bottom-0 h-72 w-72 rounded-full bg-indigo-50/70 blur-3xl"
+        />
+
+        <div className="absolute left-0 top-1/2 h-px w-24 bg-gradient-to-r from-transparent to-blue-100" />
+
+        <div className="absolute right-0 top-1/3 h-px w-24 bg-gradient-to-l from-transparent to-blue-100" />
       </div>
 
-      <div className="relative mx-auto max-w-7xl px-5 sm:px-8 lg:px-10">
-        {/* Section heading */}
-        <motion.div
-          initial={{ opacity: 0, y: 14 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, amount: 0.4 }}
-          transition={{ duration: 0.5, ease: "easeOut" }}
-          className="mx-auto max-w-2xl text-center"
-        >
-      
-          <h2 className="mt-4 text-4xl font-black tracking-[-0.04em] text-slate-950 sm:text-5xl">
-            How It Works
-          </h2>
+      {/* =========================================================
+          MAIN CONTENT
+      ========================================================= */}
 
-          <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-slate-500 sm:text-lg">
-            Everything you need to make studying more focused, connected, and
-            productive.
-          </p>
+      <div className="relative mx-auto grid min-h-[calc(100vh-80px)] max-w-7xl items-center gap-12 px-5 py-8 sm:px-8 sm:py-10 lg:grid-cols-[1.02fr_0.98fr] lg:gap-14 lg:px-10 lg:py-12">
+        {/* =======================================================
+            LEFT — HERO COPY
+        ======================================================= */}
+
+        <motion.div
+          variants={staggerContainer}
+          initial="hidden"
+          animate="visible"
+          className="relative z-10 max-w-2xl"
+        >
+          {/* Eyebrow */}
+          <motion.div
+            variants={fadeUp}
+            className="mb-5 inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50/70 px-3.5 py-1.5 text-sm font-semibold text-blue-700"
+          >
+            <motion.span
+              animate={{
+                scale: [1, 1.12, 1],
+              }}
+              transition={{
+                duration: 2.5,
+                repeat: Infinity,
+                ease: "easeInOut",
+              }}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+            </motion.span>
+
+            Your academic companion
+          </motion.div>
+
+          {/* Heading */}
+          <motion.h1
+            variants={fadeUp}
+            className="max-w-3xl text-[3.35rem] font-black leading-[0.98] tracking-[-0.045em] text-slate-950 sm:text-6xl lg:text-[4.35rem]"
+          >
+            Learn smarter.
+            <br />
+            <span className="text-blue-600">Grow together.</span>
+          </motion.h1>
+
+          {/* Description */}
+          <motion.p
+            variants={fadeUp}
+            className="mt-6 max-w-xl text-base leading-7 text-slate-600 sm:text-lg sm:leading-8"
+          >
+            Find past questions, get help when you’re stuck, and learn from
+            other students — all in one place.
+          </motion.p>
+
+          {/* CTA */}
+          <motion.div
+            variants={fadeUp}
+            className="mt-7 flex flex-col gap-3 sm:flex-row"
+          >
+            <Link
+              href="/dashboard/courses"
+              className="group inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-3.5 text-sm font-bold text-white shadow-[0_10px_25px_-10px_rgba(37,99,235,0.55)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-[0_14px_30px_-10px_rgba(37,99,235,0.6)]"
+            >
+              Explore Past Questions
+
+              <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
+            </Link>
+
+            <Link
+              href="/community"
+              className="group inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-6 py-3.5 text-sm font-bold text-slate-700 transition-all duration-300 hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/60 hover:text-blue-600"
+            >
+              Ask the Community
+
+              <MessageCircleQuestion className="h-4 w-4 transition-transform duration-300 group-hover:scale-105" />
+            </Link>
+          </motion.div>
+
+          {/* Value points */}
+          <motion.div
+            variants={fadeUp}
+            className="mt-7 flex flex-wrap gap-x-6 gap-y-3"
+          >
+            <div className="flex items-center gap-2 text-sm text-slate-500">
+              <CheckCircle2 className="h-4 w-4 text-blue-600" />
+              Past questions
+            </div>
+
+            <div className="flex items-center gap-2 text-sm text-slate-500">
+              <CheckCircle2 className="h-4 w-4 text-blue-600" />
+              Student community
+            </div>
+
+            <div className="flex items-center gap-2 text-sm text-slate-500">
+              <CheckCircle2 className="h-4 w-4 text-blue-600" />
+              Academic support
+            </div>
+          </motion.div>
         </motion.div>
 
-        {/* Steps */}
-        <div className="relative mt-12 lg:mt-14">
-          {/* Connecting line — desktop */}
-          <div className="pointer-events-none absolute left-[12.5%] right-[12.5%] top-[2.35rem] hidden h-px bg-gradient-to-r from-blue-100 via-blue-200 to-blue-100 lg:block" />
+        {/* =======================================================
+            RIGHT — PRODUCT PREVIEW
+        ======================================================= */}
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:gap-5">
-            {steps.map((step, index) => {
-              const Icon = step.icon;
-
-              return (
+        <motion.div
+          initial={{
+            opacity: 0,
+            x: 30,
+            scale: 0.97,
+          }}
+          animate={{
+            opacity: 1,
+            x: 0,
+            scale: 1,
+          }}
+          transition={{
+            duration: 0.75,
+            delay: 0.18,
+            ease: [0.22, 1, 0.36, 1],
+          }}
+          className="relative mx-auto w-full max-w-xl"
+        >
+          <div className="relative">
+            {/* Outer frame */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.97 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{
+                duration: 0.7,
+                delay: 0.25,
+                ease: [0.22, 1, 0.36, 1],
+              }}
+              className="rounded-[1.75rem] border border-slate-200 bg-slate-50 p-2.5 shadow-[0_28px_80px_-30px_rgba(15,23,42,0.38)]"
+            >
+              {/* DARK PRODUCT INTERFACE */}
+              <div className="overflow-hidden rounded-[1.35rem] bg-slate-950">
+                {/* Product header */}
                 <motion.div
-                  key={step.number}
-                  initial={{ opacity: 0, y: 18 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true, amount: 0.25 }}
-                  transition={{
-                    duration: 0.45,
-                    delay: index * 0.08,
-                    ease: "easeOut",
-                  }}
-                  className="group relative rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_10px_35px_-25px_rgba(15,23,42,0.25)] transition-all duration-300 hover:-translate-y-1 hover:border-blue-100 hover:shadow-[0_18px_40px_-25px_rgba(37,99,235,0.25)] sm:p-6"
+                  variants={previewItem}
+                  initial="hidden"
+                  animate="visible"
+                  className="flex items-center justify-between border-b border-white/[0.08] px-5 py-4 sm:px-6"
                 >
-                  {/* Number + icon */}
-                  <div className="relative z-10 flex items-center justify-between">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 shadow-sm shadow-blue-600/20">
-                      <Icon className="h-5 w-5 text-white" />
-                    </div>
+                  <div className="flex items-center gap-3">
+                    <motion.div
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{
+                        delay: 0.45,
+                        duration: 0.35,
+                      }}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600"
+                    >
+                      <GraduationCap className="h-4 w-4 text-white" />
+                    </motion.div>
 
-                    <span className="text-sm font-black tracking-widest text-blue-100 transition-colors duration-300 group-hover:text-blue-200">
-                      {step.number}
+                    <div>
+                      <p className="text-xs font-bold text-white">SparkL</p>
+
+                      <p className="text-[10px] text-slate-500">
+                        Student workspace
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <motion.span
+                      animate={{
+                        opacity: [1, 0.45, 1],
+                      }}
+                      transition={{
+                        duration: 2,
+                        repeat: Infinity,
+                        ease: "easeInOut",
+                      }}
+                      className="h-1.5 w-1.5 rounded-full bg-emerald-400"
+                    />
+
+                    <span className="text-[10px] font-medium text-slate-500">
+                      Online
                     </span>
                   </div>
+                </motion.div>
 
-                  {/* Content */}
-                  <div className="mt-7">
-                    <h3 className="text-lg font-extrabold tracking-[-0.02em] text-slate-950">
-                      {step.title}
-                    </h3>
+                {/* Search */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{
+                    delay: 0.42,
+                    duration: 0.4,
+                  }}
+                  className="px-5 pt-5 sm:px-6"
+                >
+                  <div className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.045] px-4 py-3">
+                    <Search className="h-4 w-4 shrink-0 text-slate-500" />
 
-                    <p className="mt-2 text-sm leading-6 text-slate-500">
-                      {step.description}
-                    </p>
-                  </div>
-
-                  {/* Bottom action cue */}
-                  <div className="mt-5 flex items-center gap-1.5 text-xs font-bold text-blue-600 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-                    <span>Step {index + 1}</span>
-                    <ArrowRight className="h-3.5 w-3.5" />
+                    <span className="text-xs text-slate-500">
+                      Search courses, questions, topics...
+                    </span>
                   </div>
                 </motion.div>
-              );
-            })}
+
+                {/* Main cards */}
+                <motion.div
+                  variants={previewContainer}
+                  initial="hidden"
+                  animate="visible"
+                  className="grid gap-3 p-5 sm:grid-cols-2 sm:p-6"
+                >
+                  {/* Past Questions */}
+                  <motion.div
+                    variants={previewItem}
+                    whileHover={{
+                      y: -3,
+                      transition: { duration: 0.2 },
+                    }}
+                    className="rounded-2xl border border-white/[0.05] bg-white/[0.055] p-4 transition-colors duration-300 hover:bg-white/[0.07]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600/15">
+                        <FileQuestion className="h-4 w-4 text-blue-400" />
+                      </div>
+
+                      <span className="text-[10px] font-semibold text-emerald-400">
+                        Available
+                      </span>
+                    </div>
+
+                    <p className="mt-5 text-xl font-black text-white">
+                      Past Questions
+                    </p>
+
+                    <p className="mt-1 max-w-[180px] text-xs leading-5 text-slate-500">
+                      Practice with questions from your courses.
+                    </p>
+
+                    <div className="mt-5 flex items-center gap-1.5 text-[10px] font-medium text-blue-400">
+                      <span>Browse collection</span>
+
+                      <ArrowRight className="h-3 w-3" />
+                    </div>
+                  </motion.div>
+
+                  {/* Community */}
+                  <motion.div
+                    variants={previewItem}
+                    whileHover={{
+                      y: -3,
+                      transition: { duration: 0.2 },
+                    }}
+                    className="rounded-2xl bg-blue-600 p-4 shadow-[0_12px_30px_-15px_rgba(37,99,235,0.65)]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/15">
+                        <Users className="h-4 w-4 text-white" />
+                      </div>
+
+                      <span className="text-[10px] font-semibold text-blue-100">
+                        Community
+                      </span>
+                    </div>
+
+                    <p className="mt-5 text-xl font-black text-white">
+                      Ask & Learn
+                    </p>
+
+                    <p className="mt-1 max-w-[180px] text-xs leading-5 text-blue-100">
+                      Get help from students who understand.
+                    </p>
+
+                    <div className="mt-5 flex items-center gap-1.5 text-[10px] font-medium text-white">
+                      <span>Join the discussion</span>
+
+                      <ArrowRight className="h-3 w-3" />
+                    </div>
+                  </motion.div>
+
+                  {/* Continue studying */}
+                  <motion.div
+                    variants={previewItem}
+                    whileHover={{
+                      y: -2,
+                      transition: { duration: 0.2 },
+                    }}
+                    className="rounded-2xl border border-white/[0.05] bg-white/[0.055] p-4 sm:col-span-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.07]">
+                          <BookOpen className="h-4 w-4 text-blue-400" />
+                        </div>
+
+                        <div>
+                          <p className="text-xs font-bold text-white">
+                            Continue studying
+                          </p>
+
+                          <p className="mt-0.5 text-[11px] text-slate-500">
+                            MTH 201 • Engineering Mathematics
+                          </p>
+                        </div>
+                      </div>
+
+                      <span className="hidden text-[10px] font-medium text-slate-500 sm:block">
+                        Practice
+                      </span>
+                    </div>
+
+                    {/* Progress bar */}
+                    <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: "68%" }}
+                        transition={{
+                          delay: 1,
+                          duration: 1,
+                          ease: [0.22, 1, 0.36, 1],
+                        }}
+                        className="h-full rounded-full bg-blue-500"
+                      />
+                    </div>
+
+                    <div className="mt-2 flex items-center justify-between text-[10px] text-slate-500">
+                      <span>68% complete</span>
+                      <span>Keep going</span>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              </div>
+            </motion.div>
+
+            {/* ===================================================
+                FLOATING NOTIFICATION
+            =================================================== */}
+
+            <motion.div
+              initial={{
+                opacity: 0,
+                y: 12,
+                scale: 0.96,
+              }}
+              animate={{
+                opacity: 1,
+                y: 0,
+                scale: 1,
+              }}
+              transition={{
+                delay: 1,
+                duration: 0.5,
+                ease: [0.22, 1, 0.36, 1],
+              }}
+              whileHover={{
+                y: -2,
+                transition: { duration: 0.2 },
+              }}
+              className="absolute -right-3 top-16 hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_16px_40px_-18px_rgba(15,23,42,0.35)] sm:block"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                </div>
+
+                <div>
+                  <p className="text-xs font-bold text-slate-900">
+                    Solution found
+                  </p>
+
+                  <p className="mt-0.5 text-[10px] text-slate-500">
+                    Community answer
+                  </p>
+                </div>
+              </div>
+            </motion.div>
           </div>
-        </div>
-      </div>
-    </section>
-  );
-}
+
+          {/* Supporting label */}
