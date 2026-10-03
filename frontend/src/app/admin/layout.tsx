@@ -8,21 +8,17 @@ import {
   LayoutDashboard, Users, FileText, School,
   BookOpen, GraduationCap, CalendarDays, LogOut,
   Menu, Loader2, ChevronLeft, ShieldCheck, X, ChevronRight,
+  MessageSquare,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-// ── Role-gated nav definition ──────────────────────────────────────────────────
-// Each item declares which roles can see it.
-// "super_admin" always sees everything.
-// Omitting `roles` means all admins see it.
-
 type NavItem = {
   href:   string;
   label:  string;
   icon:   React.ElementType;
-  roles?: string[]; // if set, only these roles (+ super_admin) see it
+  roles?: string[];
 };
 
 type NavGroup = {
@@ -40,30 +36,23 @@ const ALL_NAV: NavGroup[] = [
   {
     label: "Moderation",
     items: [
-      // Moderators and above can approve/reject past questions
-      { href: "/admin/questions", label: "Past Questions", icon: FileText,
-        roles: ["moderator", "content_manager"] },
-      // Only super_admin sees the full users panel
-      { href: "/admin/users",     label: "Users",          icon: Users,
-        roles: [] }, // empty = super_admin only (handled below)
+      { href: "/admin/questions", label: "Past Questions",       icon: FileText,      roles: ["moderator", "content_manager"] },
+      { href: "/admin/answers",   label: "Answer Submissions",   icon: MessageSquare, roles: ["moderator", "content_manager"] },
+      { href: "/admin/users",     label: "Users",                icon: Users,         roles: [] },
     ],
   },
   {
     label: "Site Data",
     items: [
-      { href: "/admin/institutions", label: "Institutions", icon: School,         roles: ["content_manager"] },
-      { href: "/admin/departments",  label: "Departments",  icon: BookOpen,       roles: ["content_manager"] },
-      { href: "/admin/courses",      label: "Courses",      icon: GraduationCap,  roles: ["content_manager"] },
-      { href: "/admin/semesters",    label: "Semesters",    icon: CalendarDays,   roles: ["content_manager"] },
-      { href: "/admin/reports",      label: "Reports",      icon: ShieldCheck },  // all admins
+      { href: "/admin/institutions", label: "Institutions", icon: School,        roles: ["content_manager"] },
+      { href: "/admin/departments",  label: "Departments",  icon: BookOpen,      roles: ["content_manager"] },
+      { href: "/admin/courses",      label: "Courses",      icon: GraduationCap, roles: ["content_manager"] },
+      { href: "/admin/semesters",    label: "Semesters",    icon: CalendarDays,  roles: ["content_manager"] },
+      { href: "/admin/reports",      label: "Reports",      icon: ShieldCheck },
     ],
   },
 ];
 
-/**
- * Returns the nav groups visible to an admin with `role`.
- * super_admin always sees every item.
- */
 function buildNav(role: string | null): NavGroup[] {
   if (!role) return [];
   if (role === "super_admin") return ALL_NAV;
@@ -71,14 +60,13 @@ function buildNav(role: string | null): NavGroup[] {
   return ALL_NAV.map((group) => ({
     ...group,
     items: group.items.filter((item) => {
-      if (!item.roles) return true;                  // no restriction — everyone sees it
-      if (item.roles.length === 0) return false;     // super_admin-only — hide
+      if (!item.roles) return true;
+      if (item.roles.length === 0) return false;
       return item.roles.includes(role);
     }),
   })).filter((group) => group.items.length > 0);
 }
 
-// ── Role badge shown in the sidebar header ─────────────────────────────────────
 const ROLE_META: Record<string, { label: string; color: string }> = {
   moderator:       { label: "Moderator",       color: "#0EA5E9" },
   content_manager: { label: "Content Manager", color: "#8B5CF6" },
@@ -102,7 +90,6 @@ function AdminShell({ children }: { children: React.ReactNode }) {
   const [authChecked, setAuthChecked] = useState(false);
   const [adminRole,   setAdminRole]   = useState<string | null>(null);
 
-  // ── Auth guard + role fetch ────────────────────────────────────────────────
   useEffect(() => {
     let active = true;
     async function verifyAdmin() {
@@ -130,7 +117,6 @@ function AdminShell({ children }: { children: React.ReactNode }) {
     return () => { active = false; };
   }, [supabase, router]);
 
-  // Route guard — if someone navigates to a URL they don't have access to, send them back.
   useEffect(() => {
     if (!authChecked || adminRole === "super_admin") return;
     const nav = buildNav(adminRole);
@@ -192,7 +178,6 @@ function AdminShell({ children }: { children: React.ReactNode }) {
             className="rounded-xl object-cover shadow-md" />
           <div>
             <p className="text-sm font-black tracking-tight" style={{ color: "var(--sp-text)" }}>SparkL</p>
-            {/* Role badge — colour reflects the role */}
             <p className="flex items-center gap-1 text-[10px] font-bold"
               style={{ color: roleMeta.color }}>
               <ShieldCheck className="h-3 w-3" />
@@ -210,7 +195,7 @@ function AdminShell({ children }: { children: React.ReactNode }) {
         </button>
       </div>
 
-      {/* Nav — only items the role is allowed to see */}
+      {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
         {navGroups.map((group) => (
           <div key={group.label}>
