@@ -30,6 +30,7 @@ function getQueryClient() {
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 interface Course { id: string; name: string; }
+interface ApiCourse { id: string; name: string; department?: string; institution?: string; }
 interface QuestionResult {
   id: string; title: string; course: { name: string } | null; year: number | null;
 }
@@ -235,16 +236,15 @@ function ConflictBanner() {
 function SearchDropdown({
   query, courses, questionResults, searching, onSelect,
 }: {
-  query: string; courses: Course[]; questionResults: QuestionResult[];
-  searching: boolean; onSelect: () => void;
+  query: string;
+  courses: ApiCourse[];
+  questionResults: QuestionResult[];
+  searching: boolean;
+  onSelect: () => void;
 }) {
-  const courseResults = courses
-    .filter(c => c.name.toLowerCase().includes(query.toLowerCase()))
-    .slice(0, 5);
+  const hasResults = courses.length > 0 || questionResults.length > 0;
 
-  const hasResults = courseResults.length > 0 || questionResults.length > 0;
-
-  if (searching && courseResults.length === 0) {
+  if (searching && !hasResults) {
     return (
       <div className="flex items-center justify-center gap-2 py-8">
         <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent"/>
@@ -266,12 +266,12 @@ function SearchDropdown({
   return (
     <div className="p-2 max-h-[420px] overflow-y-auto">
       {/* ── Courses ── */}
-      {courseResults.length > 0 && (
+      {courses.length > 0 && (
         <>
           <p className="px-2 pb-1 pt-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>
-            Courses ({courseResults.length})
+            Courses ({courses.length})
           </p>
-          {courseResults.map((c, i) => {
+          {courses.map((c, i) => {
             const accent = COURSE_PALETTE[i % COURSE_PALETTE.length];
             const { code } = splitCourseName(c.name);
             return (
@@ -284,7 +284,11 @@ function SearchDropdown({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{c.name}</p>
-                  <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>Course · Past questions & practice</p>
+                  <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+                    {c.department && c.institution
+                      ? `${c.department} · ${c.institution}`
+                      : c.department ?? c.institution ?? "Course · Past questions & practice"}
+                  </p>
                 </div>
                 <ArrowRight className="ml-auto h-3 w-3 shrink-0" style={{ color: accent }}/>
               </Link>
@@ -300,7 +304,7 @@ function SearchDropdown({
             Past Questions ({questionResults.length})
           </p>
           {questionResults.map((q, i) => {
-            const accent = COURSE_PALETTE[(courseResults.length + i) % COURSE_PALETTE.length];
+            const accent = COURSE_PALETTE[(courses.length + i) % COURSE_PALETTE.length];
             const courseCode = q.course?.name ? splitCourseName(q.course.name).code : null;
             return (
               <Link key={q.id} href={`/questions/${q.id}`} onClick={onSelect}
@@ -345,15 +349,21 @@ function Topbar({
   const [query, setQuery]              = useState("");
   const [focused, setFocused]          = useState(false);
   const [questionResults, setQResults] = useState<QuestionResult[]>([]);
+  const [apiCourses, setApiCourses]    = useState<ApiCourse[]>([]);
   const [searching, setSearching]      = useState(false);
   const searchRef   = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Debounced API search for past questions
+  // Debounced API search for past questions + cross-dept courses
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     const q = query.trim();
-    if (!q) { setQResults([]); setSearching(false); return; }
+    if (!q) {
+      setQResults([]);
+      setApiCourses([]);
+      setSearching(false);
+      return;
+    }
     setSearching(true);
     debounceRef.current = setTimeout(async () => {
       try {
@@ -366,9 +376,14 @@ function Topbar({
         if (res.ok) {
           const j = await res.json();
           setQResults(j.results ?? []);
+          setApiCourses(j.courses ?? []); // cross-department courses from backend
         }
-      } catch { setQResults([]); }
-      finally  { setSearching(false); }
+      } catch {
+        setQResults([]);
+        setApiCourses([]);
+      } finally {
+        setSearching(false);
+      }
     }, 350);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query, getToken]);
@@ -377,7 +392,7 @@ function Topbar({
   useEffect(() => {
     const h = (e: MouseEvent) => {
       if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setFocused(false); setQuery(""); setQResults([]);
+        setFocused(false); setQuery(""); setQResults([]); setApiCourses([]);
       }
     };
     document.addEventListener("mousedown", h);
@@ -385,7 +400,15 @@ function Topbar({
   }, []);
 
   const showDropdown = focused && query.trim().length > 0;
-  const handleSelect = () => { setQuery(""); setFocused(false); setQResults([]); };
+  const handleSelect = () => { setQuery(""); setFocused(false); setQResults([]); setApiCourses([]); };
+
+  // Merge enrolled courses (local filter) + cross-dept courses from API (deduplicated)
+  const mergedCourses: ApiCourse[] = [
+    ...courses
+      .filter(c => c.name.toLowerCase().includes(query.toLowerCase()))
+      .slice(0, 5),
+    ...apiCourses.filter(ac => !courses.some(c => c.id === ac.id)),
+  ];
 
   return (
     <header className="sticky top-0 z-40 border-b backdrop-blur-xl"
@@ -417,7 +440,7 @@ function Topbar({
           />
           {/* Clear button */}
           {query && (
-            <button onClick={() => { setQuery(""); setQResults([]); }}
+            <button onClick={() => { setQuery(""); setQResults([]); setApiCourses([]); }}
               className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold px-1.5 py-0.5 rounded-full hover:bg-indigo-500/10 transition-colors"
               style={{ color: "var(--sp-text-3)" }}>
               ✕
@@ -428,8 +451,10 @@ function Topbar({
             <div className="absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border shadow-2xl"
               style={{ background: "var(--sp-search-popup, var(--sp-bg-card))", borderColor: "var(--sp-border)" }}>
               <SearchDropdown
-                query={query.trim()} courses={courses}
-                questionResults={questionResults} searching={searching}
+                query={query.trim()}
+                courses={mergedCourses}
+                questionResults={questionResults}
+                searching={searching}
                 onSelect={handleSelect}
               />
             </div>
@@ -633,7 +658,6 @@ function Sidebar({
                   <Icon className="h-3.5 w-3.5"/>
                 </span>
                 {label}
-                {/* Cram badge */}
                 {href === "/study" && (
                   <span className="ml-1 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[8px] font-black text-violet-500">AI</span>
                 )}
@@ -642,7 +666,7 @@ function Sidebar({
             );
           })}
 
-          {/* Admin link — only shown to admins */}
+          {/* Admin link */}
           {user?.isAdmin && (
             <>
               <p className="px-3 pt-3 pb-1 text-[9px] font-black uppercase tracking-widest text-red-500">Admin</p>
@@ -768,7 +792,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           isAdmin  = j.profile?.is_admin === true;
           streak   = j.profile?.streak ?? 0;
           xp       = j.profile?.xp ?? 0;
-          setCourses(j.profile?.courses ?? []); // ← for search
+          setCourses(j.profile?.courses ?? []);
         }
 
         let avatarUrl: string | null = null;
