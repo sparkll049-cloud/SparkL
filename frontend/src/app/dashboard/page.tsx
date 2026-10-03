@@ -8,12 +8,10 @@ import {
   Search, BookOpen, Upload, FileText, GraduationCap,
   ChevronRight, ArrowRight, Plus, Flame,
   Users, AlertCircle, Crown, Sparkles,
-  Target, Trophy, Zap, Bell, BarChart2,
+  Target, Trophy, Zap, BarChart2,
   CheckCircle2, Calendar, Award, ChevronUp, Timer,
-  Menu, X,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
-import Image from "next/image";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -206,8 +204,17 @@ function PageSkeleton() {
 // ── Streak ring ────────────────────────────────────────────────────────────────
 
 function StreakRing({ streak = 0, size = 80 }: { streak: number; size?: number }) {
-  const r = (size / 2) - 6, circ = 2 * Math.PI * r, fill = Math.min(streak / 7, 1) * circ;
+  // Animate from 0 → actual fill on mount so the ring doesn't flash empty
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setMounted(true), 80); return () => clearTimeout(t); }, []);
+
+  const r     = (size / 2) - 6;
+  const circ  = 2 * Math.PI * r;
+  // streak >= 7 fills the ring completely; beyond 7 stays full (golden)
+  const ratio = streak === 0 ? 0 : Math.min(streak / 7, 1);
+  const fill  = mounted ? ratio * circ : 0;
   const color = streak >= 7 ? "#F59E0B" : streak >= 3 ? "#6366F1" : "#94A3B8";
+
   return (
     <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
@@ -216,9 +223,9 @@ function StreakRing({ streak = 0, size = 80 }: { streak: number; size?: number }
           strokeDasharray={`${fill} ${circ}`} strokeLinecap="round"
           style={{ transition: "stroke-dasharray 1.2s cubic-bezier(0.34,1.56,0.64,1)" }}/>
       </svg>
-      <div className="absolute flex flex-col items-center">
+      <div className="absolute flex flex-col items-center leading-none gap-0.5">
         <Flame className="h-4 w-4" style={{ color }}/>
-        <span className="text-sm font-black" style={{ color: "var(--sp-text)" }}>{streak}</span>
+        <span className="text-sm font-black tabular-nums" style={{ color: "var(--sp-text)" }}>{streak}</span>
       </div>
     </div>
   );
@@ -506,139 +513,9 @@ function StreakSection({ streak }: { streak: number }) {
   );
 }
 
-// ── Mobile nav drawer ─────────────────────────────────────────────────────────
+// ── (drawer moved to layout.tsx) ──────────────────────────────────────────────
 
-function MobileDrawer({
-  open,
-  onClose,
-  profile,
-  avatarUrl,
-  tier,
-  streak,
-  xp,
-}: {
-  open: boolean;
-  onClose: () => void;
-  profile: Profile;
-  avatarUrl: string | null;
-  tier: Tier;
-  streak: number;
-  xp: number;
-}) {
-  const firstName = (profile.full_name ?? "there").split(" ")[0];
-  const level = Math.floor(xp / 100) + 1;
-  const LEVEL_NAMES = ["Newcomer", "Explorer", "Scholar", "Achiever", "Expert", "Master", "Legend"];
-  const levelName = LEVEL_NAMES[Math.min(level - 1, LEVEL_NAMES.length - 1)];
 
-  // Lock body scroll when open
-  useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
-    return () => { document.body.style.overflow = ""; };
-  }, [open]);
-
-  const navLinks = [
-    { href: "/dashboard",         icon: <BookOpen className="h-4 w-4"/>,     label: "Home"          },
-    { href: "/dashboard/courses", icon: <BookOpen className="h-4 w-4"/>,     label: "Browse courses"  },
-    { href: "/dashboard/upload",  icon: <Upload className="h-4 w-4"/>,       label: "Upload paper"    },
-    { href: "/dashboard/subscribe", icon: <Crown className="h-4 w-4"/>,      label: "Plans & billing" },
-    { href: "/dashboard/profile", icon: <GraduationCap className="h-4 w-4"/>,label: "My profile"      },
-  ];
-
-  return (
-    <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm transition-opacity duration-300 lg:hidden"
-        style={{ opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none" }}
-        onClick={onClose}
-      />
-
-      {/* Drawer panel */}
-      <div
-        className="fixed inset-y-0 right-0 z-[81] flex w-72 flex-col shadow-2xl transition-transform duration-300 ease-out lg:hidden"
-        style={{
-          background: "var(--sp-bg-card)",
-          transform: open ? "translateX(0)" : "translateX(100%)",
-        }}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between border-b px-5 py-4" style={{ borderColor: "var(--sp-border)" }}>
-          <div className="flex items-center gap-2.5">
-            <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={28} src="/images/logo.jpg" width={28}/>
-            <span className="text-sm font-black" style={{ color: "var(--sp-text)" }}>SparkL</span>
-          </div>
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-xl transition hover:bg-red-500/10"
-          >
-            <X className="h-4 w-4" style={{ color: "var(--sp-text-3)" }}/>
-          </button>
-        </div>
-
-        {/* Profile mini */}
-        <div className="border-b px-5 py-4" style={{ borderColor: "var(--sp-border)" }}>
-          <div className="flex items-center gap-3">
-            {avatarUrl ? (
-              <img src={avatarUrl} alt="Avatar" className="h-11 w-11 rounded-2xl object-cover ring-2 ring-indigo-500/20"/>
-            ) : (
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-black text-white">
-                {firstName.slice(0, 2).toUpperCase()}
-              </div>
-            )}
-            <div className="min-w-0">
-              <p className="truncate text-sm font-black" style={{ color: "var(--sp-text)" }}>{profile.full_name ?? firstName}</p>
-              <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>Level {level} · {levelName}</p>
-            </div>
-          </div>
-          {/* Tier pill */}
-          <Link
-            href="/dashboard/subscribe"
-            onClick={onClose}
-            className="mt-3 flex items-center gap-2 rounded-xl border px-3 py-2 transition hover:opacity-80"
-            style={{ background: `${tier.color}12`, borderColor: `${tier.color}38` }}
-          >
-            <span className="flex h-5 w-5 items-center justify-center rounded-lg text-white text-[10px]" style={{ background: tier.color }}>
-              {tier.isPaid ? <Crown className="h-3 w-3" fill="currentColor"/> : <Sparkles className="h-3 w-3"/>}
-            </span>
-            <span className="text-[11px] font-black" style={{ color: tier.color }}>{tier.label}</span>
-            <span className="ml-auto text-[10px]" style={{ color: "var(--sp-text-3)" }}>{tier.detail}</span>
-          </Link>
-        </div>
-
-        {/* Nav links */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-          {navLinks.map(({ href, icon, label }) => (
-            <Link
-              key={href}
-              href={href}
-              onClick={onClose}
-              className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-all hover:bg-indigo-500/8"
-              style={{ color: "var(--sp-text-2)" }}
-            >
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-500">
-                {icon}
-              </span>
-              {label}
-            </Link>
-          ))}
-        </nav>
-
-        {/* Streak footer */}
-        <div className="border-t px-5 py-4" style={{ borderColor: "var(--sp-border)" }}>
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: streak >= 7 ? "rgba(245,158,11,0.15)" : "rgba(99,102,241,0.10)" }}>
-              <Flame className="h-4 w-4" style={{ color: streak >= 7 ? "#F59E0B" : "#6366F1" }}/>
-            </div>
-            <div>
-              <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>{streak} day streak</p>
-              <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>{streak >= 7 ? "🔥 Full week! Amazing!" : `${7 - streak} more to hit 7 days`}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 
@@ -650,7 +527,6 @@ export default function DashboardHomePage() {
   const [avatarUrl, setAvatarUrl]         = useState<string | null>(null);
   const [sub, setSub]                     = useState<SubStatus | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
-  const [drawerOpen, setDrawerOpen]       = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
   const { data, isLoading, error } = useQuery({
@@ -729,96 +605,6 @@ export default function DashboardHomePage() {
         .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
       `}</style>
-
-      {/* Mobile drawer */}
-      <MobileDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        profile={data.profile}
-        avatarUrl={avatarUrl}
-        tier={tier}
-        streak={streak}
-        xp={xp}
-      />
-
-      {/* ══ TOPBAR ══ */}
-      <header className="sticky top-0 z-40 border-b backdrop-blur-xl transition-colors" style={{ background: "var(--sp-header-bg)", borderColor: "var(--sp-border)" }}>
-        <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 lg:gap-4 lg:px-6">
-
-          <Link className="flex shrink-0 items-center gap-2.5 mr-1" href="/dashboard">
-            <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={32} src="/images/logo.jpg" width={32}/>
-            <span className="hidden text-base font-black tracking-tight sm:block" style={{ color: "var(--sp-text)" }}>SparkL</span>
-          </Link>
-
-          <div className="relative min-w-0 flex-1 max-w-md mx-auto" ref={searchRef}>
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 transition-colors" style={{ color: searchFocused ? "#6366F1" : "var(--sp-text-3)" }}/>
-            <input value={query} onChange={e => setQuery(e.target.value)} onFocus={() => setSearchFocused(true)}
-              placeholder="Search all courses…"
-              className="w-full rounded-full border py-2.5 pl-11 pr-4 text-sm outline-none transition-all"
-              style={{ background: "var(--sp-input-bg)", borderColor: searchFocused ? "rgba(99,102,241,0.5)" : "var(--sp-border)", color: "var(--sp-text)", boxShadow: searchFocused ? "0 0 0 3px rgba(99,102,241,0.10)" : "none" }}
-            />
-            {query.trim() && (
-              <div className="anim-slide absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border shadow-2xl" style={{ background: "var(--sp-search-popup)", borderColor: "var(--sp-border)" }}>
-                {searchLoading ? (
-                  <div className="flex items-center justify-center gap-2 py-8">
-                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent"/>
-                    <span className="text-xs" style={{ color: "var(--sp-text-3)" }}>Searching…</span>
-                  </div>
-                ) : searchResults.length === 0 ? (
-                  <div className="flex flex-col items-center py-8 gap-2">
-                    <Search className="h-5 w-5 opacity-30" style={{ color: "var(--sp-text-3)" }}/>
-                    <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>No courses match &ldquo;{query}&rdquo;</p>
-                  </div>
-                ) : (
-                  <div className="p-2">
-                    <p className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>All courses</p>
-                    {searchResults.map((c, i) => {
-                      const p = COURSE_PALETTE[i % COURSE_PALETTE.length];
-                      return (
-                        <Link key={c.id} href={`/dashboard/courses/${c.id}`} onClick={() => { setQuery(""); setSearchFocused(false); }}
-                          className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-500/5"
-                        >
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-black text-white" style={{ background: p.accent }}>{courseInitials(c.name)}</div>
-                          <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{c.name}</p></div>
-                          <ArrowRight className="ml-auto h-3 w-3 shrink-0" style={{ color: p.accent }}/>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <TierPill tier={tier}/>
-            {/* Bell — desktop only */}
-            <button className="relative hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 sm:flex" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <Bell className="h-4 w-4" style={{ color: "var(--sp-text-2)" }}/>
-              <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-indigo-500"/>
-            </button>
-            {/* Avatar — desktop only */}
-            <Link href="/dashboard/profile" className="hidden sm:block">
-              {avatarUrl ? (
-                <img src={avatarUrl} alt="Profile" className="h-9 w-9 rounded-xl object-cover ring-2 ring-indigo-500/30 transition hover:ring-indigo-500/60"/>
-              ) : (
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-[11px] font-black text-white shadow-md shadow-indigo-500/30">
-                  {firstName.slice(0, 2).toUpperCase()}
-                </div>
-              )}
-            </Link>
-            {/* Hamburger — mobile only */}
-            <button
-              onClick={() => setDrawerOpen(true)}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 sm:hidden"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-              aria-label="Open menu"
-            >
-              <Menu className="h-4 w-4" style={{ color: "var(--sp-text-2)" }}/>
-            </button>
-          </div>
-        </div>
-      </header>
 
       {/* ══ MAIN LAYOUT ══ */}
       <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
