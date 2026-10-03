@@ -25,7 +25,7 @@ const PLANS = [
       "All courses unlocked",
       "Unlimited read mode",
       "Unlimited practice mode",
-      "10 downloads/day",
+    
     ],
     popular: false,
   },
@@ -42,7 +42,6 @@ const PLANS = [
     perks: [
       "Everything in Basic",
       "All institutions access",
-      "50 downloads/day",
       "Priority support",
     ],
   },
@@ -58,7 +57,6 @@ const PLANS = [
     popular: false,
     perks: [
       "Everything in Pro",
-      "Unlimited downloads",
       "Early access to new features",
       "Premium badge",
     ],
