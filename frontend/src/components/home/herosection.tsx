@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   ArrowRight,
   BookOpen,
@@ -15,11 +15,11 @@ import {
 } from "lucide-react";
 
 const fadeUp = {
-  hidden: { opacity: 0, y: 24 },
+  hidden: { opacity: 0, y: 28 },
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.6, ease: [0.22, 1, 0.36, 1] },
+    transition: { duration: 0.65, ease: [0.22, 1, 0.36, 1] },
   },
 };
 
@@ -47,51 +47,74 @@ const previewItem = {
 };
 
 export default function HeroSection() {
+  const shouldReduceMotion = useReducedMotion();
+
   return (
     <section className="relative overflow-hidden bg-white">
-      {/* =========================================================
-          BACKGROUND
-      ========================================================= */}
+      {/* ── BACKGROUND ── */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        {/* Animated gradient orbs */}
         <motion.div
-          initial={{ opacity: 0.45, scale: 0.95 }}
-          animate={{ opacity: [0.4, 0.55, 0.4], scale: [0.95, 1.04, 0.95] }}
-          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute -left-32 top-24 h-72 w-72 rounded-full bg-blue-50 blur-3xl"
+          animate={shouldReduceMotion ? {} : {
+            opacity: [0.4, 0.65, 0.4],
+            scale: [0.95, 1.08, 0.95],
+            x: [0, 20, 0],
+          }}
+          transition={{ duration: 9, repeat: Infinity, ease: "easeInOut" }}
+          className="absolute -left-40 top-10 h-96 w-96 rounded-full bg-blue-100/70 blur-3xl"
         />
         <motion.div
-          initial={{ opacity: 0.4, scale: 0.95 }}
-          animate={{ opacity: [0.35, 0.5, 0.35], scale: [0.95, 1.05, 0.95] }}
-          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 1 }}
-          className="absolute -right-32 bottom-0 h-72 w-72 rounded-full bg-indigo-50/70 blur-3xl"
+          animate={shouldReduceMotion ? {} : {
+            opacity: [0.3, 0.55, 0.3],
+            scale: [0.95, 1.1, 0.95],
+            x: [0, -20, 0],
+          }}
+          transition={{ duration: 11, repeat: Infinity, ease: "easeInOut", delay: 1.5 }}
+          className="absolute -right-40 -top-10 h-96 w-96 rounded-full bg-indigo-100/60 blur-3xl"
         />
-        <div className="absolute left-0 top-1/2 h-px w-24 bg-gradient-to-r from-transparent to-blue-100" />
-        <div className="absolute right-0 top-1/3 h-px w-24 bg-gradient-to-l from-transparent to-blue-100" />
+        <motion.div
+          animate={shouldReduceMotion ? {} : {
+            opacity: [0.2, 0.4, 0.2],
+            scale: [1, 1.15, 1],
+          }}
+          transition={{ duration: 13, repeat: Infinity, ease: "easeInOut", delay: 3 }}
+          className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-violet-100/40 blur-3xl"
+        />
+
+        {/* Grid pattern overlay */}
+        <div
+          className="absolute inset-0 opacity-[0.018]"
+          style={{
+            backgroundImage:
+              "linear-gradient(#1e40af 1px, transparent 1px), linear-gradient(90deg, #1e40af 1px, transparent 1px)",
+            backgroundSize: "60px 60px",
+          }}
+        />
       </div>
 
-      {/* =========================================================
-          MAIN CONTENT
-      ========================================================= */}
-      <div className="relative mx-auto grid min-h-[calc(100vh-80px)] max-w-7xl items-center gap-12 px-5 py-8 sm:px-8 sm:py-10 lg:grid-cols-[1.02fr_0.98fr] lg:gap-14 lg:px-10 lg:py-12">
-        {/* =======================================================
-            LEFT — HERO COPY
-        ======================================================= */}
+      {/* ── MAIN CONTENT ── */}
+      <div className="relative mx-auto flex min-h-[calc(100vh-80px)] max-w-7xl flex-col justify-center px-5 py-16 sm:px-8 sm:py-20 lg:grid lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:gap-16 lg:px-10 lg:py-0">
+
+        {/* ── LEFT — COPY ── */}
         <motion.div
           variants={staggerContainer}
           initial="hidden"
           animate="visible"
           className="relative z-10 max-w-2xl"
         >
-          {/* Eyebrow */}
+          {/* Eyebrow pill */}
           <motion.div
             variants={fadeUp}
-            className="mb-5 inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50/70 px-3.5 py-1.5 text-sm font-semibold text-blue-700"
+            className="mb-6 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm"
           >
             <motion.span
-              animate={{ scale: [1, 1.12, 1] }}
-              transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
+              animate={shouldReduceMotion ? {} : {
+                rotate: [0, 15, -10, 15, 0],
+                scale: [1, 1.2, 1.1, 1.2, 1],
+              }}
+              transition={{ duration: 2, repeat: Infinity, repeatDelay: 3, ease: "easeInOut" }}
             >
-              <Sparkles className="h-3.5 w-3.5" />
+              <Sparkles className="h-4 w-4 text-blue-600" />
             </motion.span>
             Your academic companion
           </motion.div>
@@ -99,42 +122,72 @@ export default function HeroSection() {
           {/* Heading */}
           <motion.h1
             variants={fadeUp}
-            className="max-w-3xl text-[3.35rem] font-black leading-[0.98] tracking-[-0.045em] text-slate-950 sm:text-6xl lg:text-[4.35rem]"
+            className="text-[3.5rem] font-black leading-[0.95] tracking-[-0.045em] text-slate-950 sm:text-6xl lg:text-[4.5rem] xl:text-[5rem]"
           >
-            Learn smarter.
-            <br />
-            <span className="text-blue-600">Grow together.</span>
+            <motion.span
+              className="block"
+              initial={{ opacity: 0, x: -30 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.7, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
+            >
+              Learn smarter.
+            </motion.span>
+            <motion.span
+              className="block text-blue-600"
+              initial={{ opacity: 0, x: -30 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.7, delay: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            >
+              Grow together.
+            </motion.span>
           </motion.h1>
 
           {/* Description */}
           <motion.p
             variants={fadeUp}
-            className="mt-6 max-w-xl text-base leading-7 text-slate-600 sm:text-lg sm:leading-8"
+            className="mt-6 max-w-xl text-base leading-7 text-slate-500 sm:text-lg sm:leading-8"
           >
             Find past questions, get help when you&apos;re stuck, and learn from
             other students — all in one place.
           </motion.p>
 
-          {/* CTA */}
+          {/* CTAs */}
           <motion.div
             variants={fadeUp}
-            className="mt-7 flex flex-col gap-3 sm:flex-row"
+            className="mt-8 flex flex-col gap-3 sm:flex-row"
           >
-            <Link
-              href="/dashboard/courses"
-              className="group inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-3.5 text-sm font-bold text-white shadow-[0_10px_25px_-10px_rgba(37,99,235,0.55)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-[0_14px_30px_-10px_rgba(37,99,235,0.6)]"
+            <motion.div
+              whileHover={shouldReduceMotion ? {} : { scale: 1.03, y: -2 }}
+              whileTap={shouldReduceMotion ? {} : { scale: 0.97 }}
+              transition={{ type: "spring", stiffness: 400, damping: 20 }}
             >
-              Explore Past Questions
-              <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
-            </Link>
+              <Link
+                href="/dashboard/courses"
+                className="group inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-3.5 text-sm font-bold text-white shadow-[0_10px_30px_-8px_rgba(37,99,235,0.6)] transition-all duration-300 hover:bg-blue-700 hover:shadow-[0_16px_35px_-8px_rgba(37,99,235,0.65)]"
+              >
+                Explore Past Questions
+                <motion.span
+                  animate={shouldReduceMotion ? {} : { x: [0, 4, 0] }}
+                  transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut", repeatDelay: 1 }}
+                >
+                  <ArrowRight className="h-4 w-4" />
+                </motion.span>
+              </Link>
+            </motion.div>
 
-            <Link
-              href="/community"
-              className="group inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-6 py-3.5 text-sm font-bold text-slate-700 transition-all duration-300 hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/60 hover:text-blue-600"
+            <motion.div
+              whileHover={shouldReduceMotion ? {} : { scale: 1.03, y: -2 }}
+              whileTap={shouldReduceMotion ? {} : { scale: 0.97 }}
+              transition={{ type: "spring", stiffness: 400, damping: 20 }}
             >
-              Ask the Community
-              <MessageCircleQuestion className="h-4 w-4 transition-transform duration-300 group-hover:scale-105" />
-            </Link>
+              <Link
+                href="/community"
+                className="group inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-6 py-3.5 text-sm font-bold text-slate-700 shadow-sm transition-all duration-300 hover:border-blue-200 hover:bg-blue-50/60 hover:text-blue-600"
+              >
+                Ask the Community
+                <MessageCircleQuestion className="h-4 w-4 transition-transform duration-300 group-hover:scale-110" />
+              </Link>
+            </motion.div>
           </motion.div>
 
           {/* Value points */}
@@ -142,41 +195,56 @@ export default function HeroSection() {
             variants={fadeUp}
             className="mt-7 flex flex-wrap gap-x-6 gap-y-3"
           >
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              <CheckCircle2 className="h-4 w-4 text-blue-600" />
-              Past questions
-            </div>
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              <CheckCircle2 className="h-4 w-4 text-blue-600" />
-              Student community
-            </div>
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              <CheckCircle2 className="h-4 w-4 text-blue-600" />
-              Academic support
-            </div>
+            {["Past questions", "Student community", "Academic support"].map((item, i) => (
+              <motion.div
+                key={item}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.6 + i * 0.1, duration: 0.4 }}
+                className="flex items-center gap-2 text-sm text-slate-500"
+              >
+                <motion.div
+                  animate={shouldReduceMotion ? {} : { scale: [1, 1.2, 1] }}
+                  transition={{ duration: 2, delay: i * 0.4, repeat: Infinity, repeatDelay: 4 }}
+                >
+                  <CheckCircle2 className="h-4 w-4 text-blue-600" />
+                </motion.div>
+                {item}
+              </motion.div>
+            ))}
           </motion.div>
         </motion.div>
 
-        {/* =======================================================
-            RIGHT — PRODUCT PREVIEW
-        ======================================================= */}
+        {/* ── RIGHT — PRODUCT PREVIEW ── */}
         <motion.div
-          initial={{ opacity: 0, x: 30, scale: 0.97 }}
+          initial={{ opacity: 0, x: 50, scale: 0.95 }}
           animate={{ opacity: 1, x: 0, scale: 1 }}
-          transition={{ duration: 0.75, delay: 0.18, ease: [0.22, 1, 0.36, 1] }}
-          className="relative mx-auto w-full max-w-xl"
+          transition={{ duration: 0.85, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
+          className="relative mx-auto mt-14 w-full max-w-xl lg:mt-0"
         >
+          {/* Glow behind card */}
+          <motion.div
+            animate={shouldReduceMotion ? {} : {
+              opacity: [0.3, 0.6, 0.3],
+              scale: [0.95, 1.05, 0.95],
+            }}
+            transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+            className="absolute inset-0 -z-10 rounded-[2rem] bg-blue-400/20 blur-2xl"
+          />
+
           <div className="relative">
             {/* Outer frame */}
             <motion.div
-              initial={{ opacity: 0, scale: 0.97 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.7, delay: 0.25, ease: [0.22, 1, 0.36, 1] }}
-              className="rounded-[1.75rem] border border-slate-200 bg-slate-50 p-2.5 shadow-[0_28px_80px_-30px_rgba(15,23,42,0.38)]"
+              animate={shouldReduceMotion ? {} : {
+                y: [0, -6, 0],
+              }}
+              transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
+              className="rounded-[1.75rem] border border-slate-200 bg-slate-50 p-2.5 shadow-[0_32px_90px_-30px_rgba(15,23,42,0.4)]"
             >
-              {/* DARK PRODUCT INTERFACE */}
+              {/* Dark interface */}
               <div className="overflow-hidden rounded-[1.35rem] bg-slate-950">
-                {/* Product header */}
+
+                {/* Header */}
                 <motion.div
                   variants={previewItem}
                   initial="hidden"
@@ -185,9 +253,9 @@ export default function HeroSection() {
                 >
                   <div className="flex items-center gap-3">
                     <motion.div
-                      initial={{ scale: 0.8, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      transition={{ delay: 0.45, duration: 0.35 }}
+                      initial={{ scale: 0.5, opacity: 0, rotate: -20 }}
+                      animate={{ scale: 1, opacity: 1, rotate: 0 }}
+                      transition={{ delay: 0.5, duration: 0.5, type: "spring", stiffness: 260, damping: 20 }}
                       className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600"
                     >
                       <GraduationCap className="h-4 w-4 text-white" />
@@ -199,7 +267,7 @@ export default function HeroSection() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <motion.span
-                      animate={{ opacity: [1, 0.45, 1] }}
+                      animate={shouldReduceMotion ? {} : { opacity: [1, 0.3, 1], scale: [1, 0.8, 1] }}
                       transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
                       className="h-1.5 w-1.5 rounded-full bg-emerald-400"
                     />
@@ -222,26 +290,24 @@ export default function HeroSection() {
                   </div>
                 </motion.div>
 
-                {/* Main cards */}
+                {/* Cards */}
                 <motion.div
                   variants={previewContainer}
                   initial="hidden"
                   animate="visible"
                   className="grid gap-3 p-5 sm:grid-cols-2 sm:p-6"
                 >
-                  {/* Past Questions */}
+                  {/* Past Questions card */}
                   <motion.div
                     variants={previewItem}
-                    whileHover={{ y: -3, transition: { duration: 0.2 } }}
-                    className="rounded-2xl border border-white/[0.05] bg-white/[0.055] p-4 transition-colors duration-300 hover:bg-white/[0.07]"
+                    whileHover={shouldReduceMotion ? {} : { y: -4, scale: 1.02, transition: { duration: 0.2 } }}
+                    className="rounded-2xl border border-white/[0.05] bg-white/[0.055] p-4 transition-colors duration-300 hover:bg-white/[0.08]"
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600/15">
                         <FileQuestion className="h-4 w-4 text-blue-400" />
                       </div>
-                      <span className="text-[10px] font-semibold text-emerald-400">
-                        Available
-                      </span>
+                      <span className="text-[10px] font-semibold text-emerald-400">Available</span>
                     </div>
                     <p className="mt-5 text-xl font-black text-white">Past Questions</p>
                     <p className="mt-1 max-w-[180px] text-xs leading-5 text-slate-500">
@@ -253,19 +319,17 @@ export default function HeroSection() {
                     </div>
                   </motion.div>
 
-                  {/* Community */}
+                  {/* Community card */}
                   <motion.div
                     variants={previewItem}
-                    whileHover={{ y: -3, transition: { duration: 0.2 } }}
+                    whileHover={shouldReduceMotion ? {} : { y: -4, scale: 1.02, transition: { duration: 0.2 } }}
                     className="rounded-2xl bg-blue-600 p-4 shadow-[0_12px_30px_-15px_rgba(37,99,235,0.65)]"
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/15">
                         <Users className="h-4 w-4 text-white" />
                       </div>
-                      <span className="text-[10px] font-semibold text-blue-100">
-                        Community
-                      </span>
+                      <span className="text-[10px] font-semibold text-blue-100">Community</span>
                     </div>
                     <p className="mt-5 text-xl font-black text-white">Ask & Learn</p>
                     <p className="mt-1 max-w-[180px] text-xs leading-5 text-blue-100">
@@ -280,7 +344,7 @@ export default function HeroSection() {
                   {/* Continue studying */}
                   <motion.div
                     variants={previewItem}
-                    whileHover={{ y: -2, transition: { duration: 0.2 } }}
+                    whileHover={shouldReduceMotion ? {} : { y: -3, transition: { duration: 0.2 } }}
                     className="rounded-2xl border border-white/[0.05] bg-white/[0.055] p-4 sm:col-span-2"
                   >
                     <div className="flex items-center justify-between">
@@ -290,22 +354,16 @@ export default function HeroSection() {
                         </div>
                         <div>
                           <p className="text-xs font-bold text-white">Continue studying</p>
-                          <p className="mt-0.5 text-[11px] text-slate-500">
-                            MTH 201 • Engineering Mathematics
-                          </p>
+                          <p className="mt-0.5 text-[11px] text-slate-500">MTH 201 • Engineering Mathematics</p>
                         </div>
                       </div>
-                      <span className="hidden text-[10px] font-medium text-slate-500 sm:block">
-                        Practice
-                      </span>
+                      <span className="hidden text-[10px] font-medium text-slate-500 sm:block">Practice</span>
                     </div>
-
-                    {/* Progress bar */}
                     <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
                       <motion.div
                         initial={{ width: 0 }}
                         animate={{ width: "68%" }}
-                        transition={{ delay: 1, duration: 1, ease: [0.22, 1, 0.36, 1] }}
+                        transition={{ delay: 1.1, duration: 1.2, ease: [0.22, 1, 0.36, 1] }}
                         className="h-full rounded-full bg-blue-500"
                       />
                     </div>
@@ -318,20 +376,22 @@ export default function HeroSection() {
               </div>
             </motion.div>
 
-            {/* =================================================
-                FLOATING NOTIFICATION
-            ================================================= */}
+            {/* Floating notification */}
             <motion.div
-              initial={{ opacity: 0, y: 12, scale: 0.96 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ delay: 1, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-              whileHover={{ y: -2, transition: { duration: 0.2 } }}
-              className="absolute -right-3 top-16 hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_16px_40px_-18px_rgba(15,23,42,0.35)] sm:block"
+              initial={{ opacity: 0, y: 20, scale: 0.85, x: 10 }}
+              animate={{ opacity: 1, y: 0, scale: 1, x: 0 }}
+              transition={{ delay: 1.2, duration: 0.6, type: "spring", stiffness: 200, damping: 20 }}
+              whileHover={shouldReduceMotion ? {} : { y: -3, scale: 1.03, transition: { duration: 0.2 } }}
+              className="absolute -right-3 top-14 hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_16px_40px_-18px_rgba(15,23,42,0.35)] sm:block"
             >
               <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50">
+                <motion.div
+                  animate={shouldReduceMotion ? {} : { scale: [1, 1.15, 1] }}
+                  transition={{ duration: 2, repeat: Infinity, repeatDelay: 2 }}
+                  className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50"
+                >
                   <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                </div>
+                </motion.div>
                 <div>
                   <p className="text-xs font-bold text-slate-900">Solution found</p>
                   <p className="mt-0.5 text-[10px] text-slate-500">Community answer</p>
@@ -344,8 +404,8 @@ export default function HeroSection() {
           <motion.p
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ delay: 1.2, duration: 0.5 }}
-            className="mt-4 text-center text-[11px] text-slate-400"
+            transition={{ delay: 1.4, duration: 0.6 }}
+            className="mt-5 text-center text-[11px] text-slate-400"
           >
             Trusted by students across Nigerian universities
           </motion.p>
