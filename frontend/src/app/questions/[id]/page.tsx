@@ -14,7 +14,6 @@ import {
 import InlinePaperViewer from "@/components/InlinePaperViewer";
 import { createClient } from "@/utils/supabase/client";
 
-// Import KaTeX styles and rendering components
 import "katex/dist/katex.min.css";
 import { InlineMath, BlockMath } from "react-katex";
 
@@ -70,21 +69,14 @@ const LOW_QUALITY_THRESHOLD = 0.5;
 
 type Tab = "paper" | "submit";
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ── MATH RENDERER COMPONENT ───────────────────────────────────────────────────
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Math renderer ─────────────────────────────────────────────────────────────
 
 function MathRenderer({ content, className = "" }: { content: string | null; className?: string }) {
   const parts = useMemo(() => {
     if (!content) return [];
-
-    // Normalize LaTeX bracket delimiters to $ / $$
     const normalized = content
-      .replace(/\\\[/g, "$$")
-      .replace(/\\\]/g, "$$")
-      .replace(/\\\(/g, "$")
-      .replace(/\\\)/g, "$");
-
+      .replace(/\\\[/g, "$$").replace(/\\\]/g, "$$")
+      .replace(/\\\(/g, "$").replace(/\\\)/g, "$");
     return normalized.split(/(\$\$.*?\$\$|\$.*?\$)/gs);
   }, [content]);
 
@@ -94,7 +86,6 @@ function MathRenderer({ content, className = "" }: { content: string | null; cla
     <span className={className}>
       {parts.map((part, index) => {
         if (!part) return null;
-
         if (part.startsWith("$$") && part.endsWith("$$")) {
           const math = part.slice(2, -2).trim();
           if (!math) return null;
@@ -104,22 +95,18 @@ function MathRenderer({ content, className = "" }: { content: string | null; cla
             </span>
           );
         }
-
         if (part.startsWith("$") && part.endsWith("$")) {
           const math = part.slice(1, -1).trim();
           if (!math) return null;
           return <InlineMath key={index} math={math} />;
         }
-
         return <span key={index}>{part}</span>;
       })}
     </span>
   );
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ── SECURITY LAYER ────────────────────────────────────────────────────────────
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Security layer ────────────────────────────────────────────────────────────
 
 function useHardSecurity(enabled: boolean) {
   const [obscured, setObscured] = useState(false);
@@ -214,12 +201,8 @@ function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
           style={{ background: "var(--sp-bg-card)", backdropFilter: "blur(24px)" }}
         >
           <Lock className="h-8 w-8 mb-2" style={{ color: "var(--sp-text-3)" }} />
-          <p className="text-sm font-bold" style={{ color: "var(--sp-text)" }}>
-            Content hidden
-          </p>
-          <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>
-            Return to SparkL to continue
-          </p>
+          <p className="text-sm font-bold" style={{ color: "var(--sp-text)" }}>Content hidden</p>
+          <p className="text-xs mt-1" style={{ color: "var(--sp-text-3)" }}>Return to SparkL to continue</p>
         </div>
       )}
 
@@ -254,9 +237,7 @@ function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
   );
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ── Practice modal (quiz) ─────────────────────────────────────────────────────
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Practice modal ────────────────────────────────────────────────────────────
 
 function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
   const [selected, setSelected] = useState<string | null>(null);
@@ -280,31 +261,22 @@ function PracticeMCQ({ q }: { q: ProcessedQuestion }) {
         const text = q[`option_${opt}` as keyof ProcessedQuestion] as string | null;
         if (!text) return null;
         return (
-          <button
-            key={opt}
-            onClick={() => { if (!revealed) setSelected(opt); }}
-            disabled={revealed}
+          <button key={opt} onClick={() => { if (!revealed) setSelected(opt); }} disabled={revealed}
             className="w-full rounded-xl border px-4 py-3 text-left text-sm transition-all disabled:cursor-default flex items-start gap-2"
-            style={style(opt)}
-          >
+            style={style(opt)}>
             <span className="font-bold uppercase shrink-0 mt-0.5">{opt}.</span>
             <MathRenderer content={text} className="flex-1" />
           </button>
         );
       })}
       {!revealed ? (
-        <button
-          onClick={() => setRevealed(true)}
-          disabled={!selected}
-          className="mt-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
-        >
+        <button onClick={() => setRevealed(true)} disabled={!selected}
+          className="mt-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed">
           Submit answer
         </button>
       ) : (
-        <div
-          className="rounded-xl border p-4 space-y-1.5 mt-1"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}
-        >
+        <div className="rounded-xl border p-4 space-y-1.5 mt-1"
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
           <p className={`text-sm font-semibold ${selected === q.correct_answer ? "text-emerald-500" : "text-red-500"}`}>
             {selected === q.correct_answer ? "✓ Correct!" : `✗ Incorrect — answer is ${q.correct_answer?.toUpperCase()}`}
           </p>
@@ -323,19 +295,15 @@ function PracticeTheory({ q }: { q: ProcessedQuestion }) {
   const [show, setShow] = useState(false);
   return (
     <div className="space-y-3">
-      <button
-        onClick={() => setShow(!show)}
+      <button onClick={() => setShow(!show)}
         className="flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition"
-        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
-      >
+        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
         <ChevronDown size={14} className={`transition-transform ${show ? "rotate-180" : ""}`} />
         {show ? "Hide model answer" : "Show model answer"}
       </button>
       {show && q.model_answer && (
-        <div
-          className="rounded-xl border p-4"
-          style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.05)" }}
-        >
+        <div className="rounded-xl border p-4"
+          style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.05)" }}>
           <p className="text-[10px] font-semibold text-emerald-500 mb-2">Model Answer</p>
           <div className="text-sm leading-7 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
             <MathRenderer content={q.model_answer} />
@@ -347,10 +315,7 @@ function PracticeTheory({ q }: { q: ProcessedQuestion }) {
 }
 
 function PracticeModal({
-  questions,
-  isPaid,
-  userEmail,
-  onClose,
+  questions, isPaid, userEmail, onClose,
 }: {
   questions: ProcessedQuestion[];
   isPaid: boolean;
@@ -359,12 +324,11 @@ function PracticeModal({
 }) {
   const [index, setIndex] = useState(0);
 
-  // Free practice limit calculation (~10%, minimum 2 questions)
   const freeLimit = Math.max(2, Math.min(questions.length, Math.ceil(questions.length * 0.1)));
   const visible   = !isPaid ? questions.slice(0, freeLimit) : questions;
   const hidden    = questions.length - visible.length;
   const isGated   = !isPaid && hidden > 0;
-  
+
   const q           = visible[index];
   const mcqCount    = visible.filter(q => q.question_type === "mcq").length;
   const theoryCount = visible.filter(q => q.question_type === "theory").length;
@@ -375,25 +339,17 @@ function PracticeModal({
   }, []);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex flex-col"
-      style={{ background: "var(--sp-bg)" }}
-    >
-      <div
-        className="flex items-center gap-3 px-4 py-3.5 border-b shrink-0"
-        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
-      >
-        <button
-          onClick={onClose}
+    <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "var(--sp-bg)" }}>
+      {/* Header */}
+      <div className="flex items-center gap-3 px-4 py-3.5 border-b shrink-0"
+        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
+        <button onClick={onClose}
           className="flex items-center justify-center h-8 w-8 rounded-lg transition"
-          style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
-        >
+          style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
           <X size={15} />
         </button>
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>
-            Practice Quiz
-          </p>
+          <p className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>Practice Quiz</p>
           <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
             {visible.length} question{visible.length !== 1 ? "s" : ""}
             {mcqCount > 0 && ` · ${mcqCount} MCQ`}
@@ -405,31 +361,27 @@ function PracticeModal({
         </span>
       </div>
 
+      {/* Progress bar */}
       <div className="h-1 shrink-0" style={{ background: "var(--sp-bg-muted)" }}>
-        <div
-          className="h-full bg-indigo-500 transition-all duration-300"
-          style={{ width: `${((index + 1) / visible.length) * 100}%` }}
-        />
+        <div className="h-full bg-indigo-500 transition-all duration-300"
+          style={{ width: `${((index + 1) / visible.length) * 100}%` }} />
       </div>
 
+      {/* Content */}
       <div className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
         {q && (
           <SecureWrap userEmail={userEmail} enabled={isPaid}>
-            <div
-              className="rounded-2xl border p-5"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-            >
+            <div className="rounded-2xl border p-5"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               <div className="flex items-center gap-2 mb-4 flex-wrap">
                 <span className="text-xs font-bold text-indigo-500">
                   Question {q.question_number ?? index + 1}
                 </span>
-                <span
-                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                    q.question_type === "mcq"
-                      ? "border-blue-500/20 bg-blue-500/10 text-blue-500"
-                      : "border-slate-500/20 bg-slate-500/10 text-slate-500"
-                  }`}
-                >
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                  q.question_type === "mcq"
+                    ? "border-blue-500/20 bg-blue-500/10 text-blue-500"
+                    : "border-slate-500/20 bg-slate-500/10 text-slate-500"
+                }`}>
                   {q.question_type === "mcq" ? "MCQ" : "Theory"}
                 </span>
                 {q.topic_tag && (
@@ -443,25 +395,19 @@ function PracticeModal({
                   </span>
                 )}
               </div>
-
               <div className="text-sm leading-7 whitespace-pre-wrap mb-4" style={{ color: "var(--sp-text)" }}>
                 <MathRenderer content={q.question_text} />
               </div>
-
               {q.question_type === "mcq" ? <PracticeMCQ q={q} /> : <PracticeTheory q={q} />}
             </div>
           </SecureWrap>
         )}
 
         {isGated && index === visible.length - 1 && (
-          <div
-            className="rounded-2xl border p-6 text-center"
-            style={{ borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.05)" }}
-          >
-            <div
-              className="flex h-10 w-10 items-center justify-center rounded-xl mx-auto mb-3"
-              style={{ background: "rgba(99,102,241,0.12)" }}
-            >
+          <div className="rounded-2xl border p-6 text-center"
+            style={{ borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.05)" }}>
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl mx-auto mb-3"
+              style={{ background: "rgba(99,102,241,0.12)" }}>
               <Lock className="h-4 w-4 text-indigo-500" />
             </div>
             <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
@@ -470,10 +416,8 @@ function PracticeModal({
             <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
               Free plan limits practice to {freeLimit} question{freeLimit !== 1 ? "s" : ""} (~10% preview)
             </p>
-            <Link
-              href="/dashboard/subscribe"
-              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
-            >
+            <Link href="/dashboard/subscribe"
+              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition">
               <Crown className="h-3.5 w-3.5" />
               Unlock all questions
               <ArrowRight className="h-3.5 w-3.5" />
@@ -482,39 +426,27 @@ function PracticeModal({
         )}
       </div>
 
-      <div
-        className="flex items-center gap-3 px-4 py-3.5 border-t shrink-0"
-        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
-      >
-        <button
-          onClick={() => setIndex(i => Math.max(0, i - 1))}
-          disabled={index === 0}
+      {/* Footer nav */}
+      <div className="flex items-center gap-3 px-4 py-3.5 border-t shrink-0"
+        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
+        <button onClick={() => setIndex(i => Math.max(0, i - 1))} disabled={index === 0}
           className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-xs font-semibold transition disabled:opacity-30"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
-        >
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
           <ArrowLeft size={13} /> Prev
         </button>
-
         <div className="flex-1 flex justify-center gap-1.5 overflow-hidden">
           {visible.map((_, i) => (
-            <button
-              key={i}
-              onClick={() => setIndex(i)}
+            <button key={i} onClick={() => setIndex(i)}
               className="h-1.5 rounded-full transition-all shrink-0"
               style={{
                 width:      i === index ? "20px" : "6px",
                 background: i === index ? "var(--sp-indigo, #6366f1)" : "var(--sp-border)",
-              }}
-            />
+              }} />
           ))}
         </div>
-
-        <button
-          onClick={() => setIndex(i => Math.min(visible.length - 1, i + 1))}
-          disabled={index === visible.length - 1}
+        <button onClick={() => setIndex(i => Math.min(visible.length - 1, i + 1))} disabled={index === visible.length - 1}
           className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-xs font-semibold transition disabled:opacity-30"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
-        >
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
           Next <ArrowRight size={13} />
         </button>
       </div>
@@ -522,9 +454,7 @@ function PracticeModal({
   );
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
 // ── Submit solution section ───────────────────────────────────────────────────
-// ══════════════════════════════════════════════════════════════════════════════
 
 function SubmitSolutionSection({ questionId }: { questionId: string }) {
   const supabase = createClient();
@@ -562,13 +492,11 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
     setSubmitError("");
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { router.push("/auth/login"); return; }
-
     try {
       const formData = new FormData();
       formData.append("question_id", questionId);
       if (text.trim()) formData.append("solution_text", text.trim());
       if (file) formData.append("file", file);
-
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/answers/submit`,
         { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, body: formData },
@@ -577,9 +505,8 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.detail || "Failed to submit. Please try again.");
       }
-      const newSub = await res.json();
       setSubmissions(prev => [{
-        id: newSub.id,
+        id: (await res.json()).id,
         status: "pending",
         feedback: null,
         extracted_text: text.trim() || null,
@@ -588,8 +515,7 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         created_at: new Date().toISOString(),
         reviewed_at: null,
       }, ...prev]);
-      setText("");
-      setFile(null);
+      setText(""); setFile(null);
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
@@ -609,11 +535,8 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
             Your submissions ({submissions.length})
           </p>
           {submissions.map(sub => (
-            <div
-              key={sub.id}
-              className="rounded-2xl border p-4 space-y-3"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-            >
+            <div key={sub.id} className="rounded-2xl border p-4 space-y-3"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-xs" style={{ color: "var(--sp-text-3)" }}>
                   {new Date(sub.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}
@@ -663,32 +586,22 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         </div>
       )}
 
-      <div
-        className="rounded-2xl border p-5 space-y-4"
-        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-      >
+      <div className="rounded-2xl border p-5 space-y-4"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
         <div>
           <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
             {submissions.length > 0 ? "Submit another solution" : "Submit your solution"}
           </p>
-          <p className="mt-0.5 text-xs" style={{ color: "var(--sp-text-3)" }}>
-            Share your worked answers for feedback.
-          </p>
+          <p className="mt-0.5 text-xs" style={{ color: "var(--sp-text-3)" }}>Share your worked answers for feedback.</p>
         </div>
-        <textarea
-          value={text}
-          onChange={e => setText(e.target.value)}
-          placeholder="Type your solution here…"
-          rows={5}
+        <textarea value={text} onChange={e => setText(e.target.value)}
+          placeholder="Type your solution here…" rows={5}
           className="w-full rounded-xl border px-4 py-3 text-sm outline-none transition resize-none"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text)" }}
-        />
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text)" }} />
         <div className="flex items-center gap-3 flex-wrap">
-          <button
-            onClick={() => fileRef.current?.click()}
+          <button onClick={() => fileRef.current?.click()}
             className="flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition"
-            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
-          >
+            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
             <Paperclip size={13} />
             {file ? "Change file" : "Attach file"}
           </button>
@@ -696,18 +609,11 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
             <div className="flex items-center gap-2 rounded-xl border px-3 py-1.5"
               style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
               <span className="text-xs truncate max-w-[160px]" style={{ color: "var(--sp-text-2)" }}>{file.name}</span>
-              <button onClick={() => setFile(null)}>
-                <X size={12} style={{ color: "var(--sp-text-3)" }} />
-              </button>
+              <button onClick={() => setFile(null)}><X size={12} style={{ color: "var(--sp-text-3)" }} /></button>
             </div>
           )}
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*,application/pdf"
-            className="hidden"
-            onChange={e => setFile(e.target.files?.[0] ?? null)}
-          />
+          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
+            onChange={e => setFile(e.target.files?.[0] ?? null)} />
         </div>
         {submitError && (
           <div className="flex items-start gap-2 rounded-xl border px-3 py-2.5"
@@ -716,11 +622,8 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
             <p className="text-xs text-red-400">{submitError}</p>
           </div>
         )}
-        <button
-          onClick={handleSubmit}
-          disabled={(!text.trim() && !file) || submitting}
-          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
-        >
+        <button onClick={handleSubmit} disabled={(!text.trim() && !file) || submitting}
+          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed">
           {submitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
           {submitting ? "Submitting…" : "Submit solution"}
         </button>
@@ -729,9 +632,7 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
   );
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ── MAIN PAGE ─────────────────────────────────────────────────────────────────
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function QuestionDetailPage() {
   const supabase   = createClient();
@@ -747,9 +648,7 @@ export default function QuestionDetailPage() {
   const [processedQuestions, setProcessedQuestions] = useState<ProcessedQuestion[]>([]);
   const [questionsLoading, setQuestionsLoading]     = useState(false);
 
-  const [limits, setLimits] = useState<QuestionLimits>({
-    is_paid: false, plan: "free"
-  });
+  const [limits, setLimits] = useState<QuestionLimits>({ is_paid: false, plan: "free" });
 
   const [tab, setTab]                   = useState<Tab>("paper");
   const [showPractice, setShowPractice] = useState(false);
@@ -772,7 +671,7 @@ export default function QuestionDetailPage() {
         ]);
         if (detailRes.status === 404) throw new Error("This past question wasn't found.");
         if (!detailRes.ok) throw new Error("Failed to load this past question.");
-        
+
         const detailData = await detailRes.json();
         setData(detailData);
 
@@ -845,28 +744,21 @@ export default function QuestionDetailPage() {
         />
       )}
 
-      <div
-        className="min-h-screen px-4 py-8 sm:px-6 pb-28"
-        style={{ background: "var(--sp-bg)" }}
-      >
+      <div className="min-h-screen px-4 py-8 sm:px-6 pb-28" style={{ background: "var(--sp-bg)" }}>
         <div className="mx-auto max-w-3xl">
           <Link
             href={data.course ? `/dashboard/courses/${data.course.id}` : "/dashboard"}
             className="inline-flex items-center gap-1.5 text-sm font-medium transition-colors"
-            style={{ color: "var(--sp-text-3)" }}
-          >
+            style={{ color: "var(--sp-text-3)" }}>
             <ArrowLeft size={15} /> Back
           </Link>
 
-          <div
-            className="mt-4 rounded-2xl border p-5"
-            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-          >
+          {/* Header card */}
+          <div className="mt-4 rounded-2xl border p-5"
+            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
             <div className="flex items-start gap-3">
-              <div
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
-                style={{ background: "rgba(99,102,241,0.1)" }}
-              >
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
+                style={{ background: "rgba(99,102,241,0.1)" }}>
                 <FileText size={20} className="text-indigo-500" />
               </div>
               <div className="min-w-0 flex-1">
@@ -880,10 +772,8 @@ export default function QuestionDetailPage() {
             </div>
 
             {isLowQuality && (
-              <div
-                className="mt-4 flex items-start gap-2 rounded-xl border px-3 py-2.5"
-                style={{ borderColor: "rgba(245,158,11,0.2)", background: "rgba(245,158,11,0.06)" }}
-              >
+              <div className="mt-4 flex items-start gap-2 rounded-xl border px-3 py-2.5"
+                style={{ borderColor: "rgba(245,158,11,0.2)", background: "rgba(245,158,11,0.06)" }}>
                 <AlertCircle size={13} className="mt-0.5 shrink-0" style={{ color: "#f59e0b" }} />
                 <p className="text-xs" style={{ color: "#f59e0b" }}>
                   This scan quality is low — some content may be unclear.
@@ -891,26 +781,21 @@ export default function QuestionDetailPage() {
               </div>
             )}
 
-            <div
-              className="mt-5 flex items-center gap-1 flex-wrap border-t pt-4"
-              style={{ borderColor: "var(--sp-border)" }}
-            >
+            {/* Tabs */}
+            <div className="mt-5 flex items-center gap-1 flex-wrap border-t pt-4"
+              style={{ borderColor: "var(--sp-border)" }}>
               <TabBtn active={tab === "paper"} onClick={() => setTab("paper")}>
                 <FileText size={12} /> View paper
                 {!limits.is_paid && (
-                  <span
-                    className="rounded-full px-1.5 py-0.5 text-[8px] font-bold"
-                    style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b" }}
-                  >
+                  <span className="rounded-full px-1.5 py-0.5 text-[8px] font-bold"
+                    style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b" }}>
                     1 Page Preview
                   </span>
                 )}
               </TabBtn>
-
               <TabBtn active={tab === "submit"} onClick={() => setTab("submit")}>
                 <Send size={12} /> Submit solution
               </TabBtn>
-
               {hasProcessed && (
                 <div className="ml-auto flex items-center gap-3">
                   {mcqCount > 0 && (
@@ -928,17 +813,14 @@ export default function QuestionDetailPage() {
             </div>
           </div>
 
+          {/* Tab content */}
           <div className="mt-4 space-y-4">
             {tab === "paper" && isPdf && (
-              <div
-                className="rounded-2xl border p-5 space-y-4"
-                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-              >
-                <button
-                  onClick={() => setShowPreview(v => !v)}
+              <div className="rounded-2xl border p-5 space-y-4"
+                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+                <button onClick={() => setShowPreview(v => !v)}
                   className="flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition w-full justify-center"
-                  style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
-                >
+                  style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
                   {showPreview
                     ? <><EyeOff size={14} /> Hide paper preview</>
                     : <><Eye size={14} /> Show paper preview</>}
@@ -956,20 +838,16 @@ export default function QuestionDetailPage() {
                 )}
 
                 {!limits.is_paid && (
-                  <div
-                    className="rounded-xl border p-4 text-center space-y-2 mt-4"
-                    style={{ borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.05)" }}
-                  >
+                  <div className="rounded-xl border p-4 text-center space-y-2 mt-4"
+                    style={{ borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.05)" }}>
                     <p className="text-xs font-semibold" style={{ color: "var(--sp-text)" }}>
                       Viewing 1-page free preview
                     </p>
                     <p className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>
                       Upgrade to Basic, Pro, or Premium to access all pages and full downloads.
                     </p>
-                    <Link
-                      href="/dashboard/subscribe"
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-indigo-500 transition"
-                    >
+                    <Link href="/dashboard/subscribe"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-indigo-500 transition">
                       <Crown className="h-3 w-3" />
                       Upgrade now
                     </Link>
@@ -986,44 +864,32 @@ export default function QuestionDetailPage() {
               />
             )}
 
-            {tab === "submit" && (
-              <SubmitSolutionSection questionId={questionId} />
-            )}
+            {tab === "submit" && <SubmitSolutionSection questionId={questionId} />}
           </div>
         </div>
       </div>
 
+      {/* Floating quiz button */}
       {(hasProcessed || questionsLoading) && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 px-4 w-full max-w-xs">
           {questionsLoading ? (
-            <div
-              className="flex items-center gap-3 rounded-2xl border px-5 py-3.5 shadow-xl backdrop-blur-sm"
-              style={{
-                background:   "var(--sp-bg-card)",
-                borderColor:  "var(--sp-border)",
-              }}
-            >
+            <div className="flex items-center gap-3 rounded-2xl border px-5 py-3.5 shadow-xl backdrop-blur-sm"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               <Loader2 size={16} className="animate-spin text-indigo-500 shrink-0" />
-              <span className="text-sm font-medium" style={{ color: "var(--sp-text-2)" }}>
-                Loading questions…
-              </span>
+              <span className="text-sm font-medium" style={{ color: "var(--sp-text-2)" }}>Loading questions…</span>
             </div>
           ) : (
-            <button
-              onClick={() => setShowPractice(true)}
+            <button onClick={() => setShowPractice(true)}
               className="w-full flex items-center gap-3 rounded-2xl px-5 py-3.5 shadow-2xl transition active:scale-95"
               style={{
-                background:  "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
-                boxShadow:   "0 8px 32px rgba(99,102,241,0.45)",
-              }}
-            >
+                background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+                boxShadow:  "0 8px 32px rgba(99,102,241,0.45)",
+              }}>
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/20">
                 <Play size={14} className="text-white" fill="white" />
               </div>
               <div className="text-left min-w-0 flex-1">
-                <p className="text-sm font-bold text-white leading-none">
-                  Take Quiz
-                </p>
+                <p className="text-sm font-bold text-white leading-none">Take Quiz</p>
                 <p className="text-[11px] text-indigo-200 mt-0.5">
                   {processedQuestions.length} question{processedQuestions.length !== 1 ? "s" : ""}
                   {mcqCount > 0 && ` · ${mcqCount} MCQ`}
@@ -1039,46 +905,28 @@ export default function QuestionDetailPage() {
   );
 }
 
-// ── Small helpers ──────────────────────────────────────────────────────────────
+// ── Small helpers ─────────────────────────────────────────────────────────────
 
-function TabBtn({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
+function TabBtn({ active, onClick, children }: {
+  active: boolean; onClick: () => void; children: React.ReactNode;
 }) {
   return (
-    <button
-      onClick={onClick}
+    <button onClick={onClick}
       className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all"
-      style={
-        active
-          ? { background: "#4f46e5", color: "#fff" }
-          : { background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }
-      }
-    >
+      style={active
+        ? { background: "#4f46e5", color: "#fff" }
+        : { background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}>
       {children}
     </button>
   );
 }
 
-function EmptyState({
-  icon,
-  title,
-  body,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  body: string;
+function EmptyState({ icon, title, body }: {
+  icon: React.ReactNode; title: string; body: string;
 }) {
   return (
-    <div
-      className="rounded-2xl border p-10 text-center"
-      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-    >
+    <div className="rounded-2xl border p-10 text-center"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
       <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl"
         style={{ background: "rgba(99,102,241,0.1)" }}>
         {icon}
