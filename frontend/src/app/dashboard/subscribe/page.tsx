@@ -25,7 +25,7 @@ const PLANS = [
       "All courses unlocked",
       "Unlimited read mode",
       "Unlimited practice mode",
-    
+      "Bookmark & save questions",
     ],
     popular: false,
   },
@@ -42,6 +42,7 @@ const PLANS = [
     perks: [
       "Everything in Basic",
       "All institutions access",
+      "AI Study Assistant access",
       "Priority support",
     ],
   },
@@ -57,6 +58,7 @@ const PLANS = [
     popular: false,
     perks: [
       "Everything in Pro",
+      "Performance analytics",
       "Early access to new features",
       "Premium badge",
     ],
@@ -324,31 +326,51 @@ function CheckoutSummary({ plan, user, onConfirm, onCancel, loading, isUpgrade }
             </div>
           </div>
 
-          <div
-            className="rounded-xl border px-4 py-3 mb-6 space-y-2"
-            style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)" }}
-          >
-            <div className="flex justify-between text-xs">
-              <span style={{ color: "var(--sp-text-3)" }}>Plan fee</span>
-              <span style={{ color: "var(--sp-text-2)" }}>₦{plan.price.toLocaleString()}</span>
-            </div>
-            <div className="border-t pt-2 flex justify-between text-sm font-bold" style={{ borderColor: "var(--sp-border)" }}>
-              <span style={{ color: "var(--sp-text)" }}>Total</span>
-              <span style={{ color: "var(--sp-text)" }}>₦{plan.price.toLocaleString()}</span>
-            </div>
-          </div>
+          {(() => {
+            const processingFee = 100; // PayVessel flat processing fee (NGN)
+            const vat = 100;           // VAT on processing fee (₦100 flat, as required by Nigerian law)
+            const total = plan.price + processingFee + vat;
+            return (
+              <div
+                className="rounded-xl border px-4 py-3 mb-6 space-y-2"
+                style={{ background: "var(--sp-input-bg)", borderColor: "var(--sp-border)" }}
+              >
+                <div className="flex justify-between text-xs">
+                  <span style={{ color: "var(--sp-text-3)" }}>Plan fee</span>
+                  <span style={{ color: "var(--sp-text-2)" }}>₦{plan.price.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span style={{ color: "var(--sp-text-3)" }}>Processing fee</span>
+                  <span style={{ color: "var(--sp-text-2)" }}>₦{processingFee.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span style={{ color: "var(--sp-text-3)" }}>VAT (on fee)</span>
+                  <span style={{ color: "var(--sp-text-2)" }}>₦{vat.toLocaleString()}</span>
+                </div>
+                <div className="border-t pt-2 flex justify-between text-sm font-bold" style={{ borderColor: "var(--sp-border)" }}>
+                  <span style={{ color: "var(--sp-text)" }}>Total</span>
+                  <span style={{ color: "var(--sp-text)" }}>₦{total.toLocaleString()}</span>
+                </div>
+              </div>
+            );
+          })()}
 
-          <button
-            onClick={onConfirm}
-            disabled={loading}
-            className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${accent.btn}`}
-          >
-            {loading ? (
-              <><Loader2 className="h-4 w-4 animate-spin" />Opening payment…</>
-            ) : (
-              <><CreditCard className="h-4 w-4" />Pay ₦{plan.price.toLocaleString()} with PayVessel</>
-            )}
-          </button>
+          {(() => {
+            const total = plan.price + 200; // plan + processing (₦100) + VAT (₦100)
+            return (
+              <button
+                onClick={onConfirm}
+                disabled={loading}
+                className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${accent.btn}`}
+              >
+                {loading ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" />Opening payment…</>
+                ) : (
+                  <><CreditCard className="h-4 w-4" />Continue · Pay ₦{total.toLocaleString()}</>
+                )}
+              </button>
+            );
+          })()}
 
           <p className="mt-3 text-center text-xs" style={{ color: "var(--sp-text-3)" }}>
             🔒 Secured by PayVessel · Your card details are never stored
@@ -385,10 +407,10 @@ const FEATURES = [
   },
   {
     icon: <FileText className="h-4 w-4" />,
-    name: "Downloads",
-    desc: "Save questions as PDF for offline study",
+    name: "Bookmarks & Saved Questions",
+    desc: "Save any question to revisit later — build your own study list",
     free: false,
-    paid: "10–unlimited/day",
+    paid: true,
   },
   {
     icon: <MessageSquare className="h-4 w-4" />,
