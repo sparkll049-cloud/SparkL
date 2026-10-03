@@ -1,19 +1,19 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  Search, BookOpen, Upload, FileText, GraduationCap,
-  ChevronRight, ArrowRight, Plus, Flame,
+  BookOpen, Upload, FileText, GraduationCap,
+  ArrowRight, Plus, Flame,
   Users, AlertCircle, Crown, Sparkles,
   Target, Trophy, Zap, BarChart2,
-  CheckCircle2, Calendar, Award, ChevronUp, Timer,
+  CheckCircle2, Calendar, Award, ChevronUp, Timer, ChevronRight,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 interface Course { id: string; name: string; }
 interface Profile {
@@ -35,23 +35,13 @@ interface DashboardData {
   recent_questions: RecentQuestion[];
   stats: { questions_in_courses: number; my_uploads: number };
 }
-
 interface SubStatus {
-  is_paid: boolean;
-  is_trial: boolean;
-  effective_plan: string;
-  expires_at: string | null;
-  trial_days_left?: number;
+  is_paid: boolean; is_trial: boolean; effective_plan: string;
+  expires_at: string | null; trial_days_left?: number;
 }
-
 interface Tier {
-  key: string;
-  label: string;
-  detail: string;
-  color: string;
-  isPaid: boolean;
-  isTrial: boolean;
-  expiringSoon: boolean;
+  key: string; label: string; detail: string; color: string;
+  isPaid: boolean; isTrial: boolean; expiringSoon: boolean;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -97,14 +87,6 @@ async function fireStreakUpdate(supabase: ReturnType<typeof createClient>): Prom
   } catch { /* fire-and-forget */ }
 }
 
-// ── Local course search ───────────────────────────────────────────────────────
-
-function useLocalCourseSearch(query: string, courses: Course[]) {
-  const q = query.trim().toLowerCase();
-  if (!q) return { results: [] as Course[], searching: false };
-  return { results: courses.filter(c => c.name.toLowerCase().includes(q)), searching: false };
-}
-
 // ── Count-up hook ──────────────────────────────────────────────────────────────
 
 function useCountUp(target: number, duration = 1200) {
@@ -144,7 +126,7 @@ function getTier(sub: SubStatus | null): Tier {
     return { key: "trial", label: "Free Trial", detail: `${d} day${d === 1 ? "" : "s"} left`, color: TIER_COLORS.trial, isPaid: false, isTrial: true, expiringSoon: d <= 2 };
   }
   if (sub.is_paid) {
-    const plan = (sub.effective_plan || "pro").toLowerCase();
+    const plan  = (sub.effective_plan || "pro").toLowerCase();
     const label = plan.charAt(0).toUpperCase() + plan.slice(1);
     const days  = daysUntil(sub.expires_at);
     const soon  = days !== null && days <= 7;
@@ -169,7 +151,9 @@ function splitCourseName(name: string): { code: string | null; title: string } {
   return { code: `${m[1].toUpperCase()} ${m[2]}`, title: m[3].trim() || name };
 }
 
-const clamp2: React.CSSProperties = { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" };
+const clamp2: React.CSSProperties = {
+  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+};
 
 // ── Skeleton ───────────────────────────────────────────────────────────────────
 
@@ -180,21 +164,20 @@ function Bone({ className = "" }: { className?: string }) {
 function PageSkeleton() {
   return (
     <div className="min-h-screen" style={{ background: "var(--sp-bg)" }}>
-      <div className="h-16 border-b" style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
-        <div className="mx-auto flex h-full max-w-7xl items-center justify-between px-6">
-          <Bone className="h-7 w-24"/><Bone className="h-9 w-56 rounded-full"/><Bone className="h-9 w-9 rounded-full"/>
-        </div>
-      </div>
       <div className="mx-auto max-w-7xl px-4 py-8 lg:px-6">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-          <div className="space-y-4"><Bone className="h-48 rounded-2xl"/><Bone className="h-32 rounded-2xl"/><Bone className="h-40 rounded-2xl"/></div>
+          <div className="space-y-4">
+            <Bone className="h-48 rounded-2xl"/><Bone className="h-32 rounded-2xl"/><Bone className="h-40 rounded-2xl"/>
+          </div>
           <div className="space-y-6 lg:col-span-2">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{[...Array(4)].map((_, i) => <Bone key={i} className="h-24 rounded-2xl" />)}</div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{[...Array(4)].map((_, i) => <Bone key={i} className="h-24 rounded-2xl"/>)}</div>
             <Bone className="h-10 rounded-full"/>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{[...Array(6)].map((_, i) => <Bone key={i} className="h-40 rounded-2xl" />)}</div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{[...Array(6)].map((_, i) => <Bone key={i} className="h-40 rounded-2xl"/>)}</div>
             <Bone className="h-48 rounded-2xl"/>
           </div>
-          <div className="space-y-4"><Bone className="h-52 rounded-2xl"/><Bone className="h-36 rounded-2xl"/><Bone className="h-28 rounded-2xl"/></div>
+          <div className="space-y-4">
+            <Bone className="h-52 rounded-2xl"/><Bone className="h-36 rounded-2xl"/><Bone className="h-28 rounded-2xl"/>
+          </div>
         </div>
       </div>
     </div>
@@ -204,17 +187,11 @@ function PageSkeleton() {
 // ── Streak ring ────────────────────────────────────────────────────────────────
 
 function StreakRing({ streak = 0, size = 80 }: { streak: number; size?: number }) {
-  // Animate from 0 → actual fill on mount so the ring doesn't flash empty
   const [mounted, setMounted] = useState(false);
   useEffect(() => { const t = setTimeout(() => setMounted(true), 80); return () => clearTimeout(t); }, []);
-
-  const r     = (size / 2) - 6;
-  const circ  = 2 * Math.PI * r;
-  // streak >= 7 fills the ring completely; beyond 7 stays full (golden)
-  const ratio = streak === 0 ? 0 : Math.min(streak / 7, 1);
-  const fill  = mounted ? ratio * circ : 0;
+  const r     = (size / 2) - 6, circ = 2 * Math.PI * r;
+  const fill  = mounted ? Math.min(streak / 7, 1) * circ : 0;
   const color = streak >= 7 ? "#F59E0B" : streak >= 3 ? "#6366F1" : "#94A3B8";
-
   return (
     <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
@@ -235,7 +212,7 @@ function StreakRing({ streak = 0, size = 80 }: { streak: number; size?: number }
 
 function LevelBadge({ xp = 0 }: { xp: number }) {
   const level = Math.floor(xp / 100) + 1, progress = xp % 100;
-  const LEVEL_NAMES = ["Newcomer", "Explorer", "Scholar", "Achiever", "Expert", "Master", "Legend"];
+  const LEVEL_NAMES = ["Newcomer","Explorer","Scholar","Achiever","Expert","Master","Legend"];
   const name = LEVEL_NAMES[Math.min(level - 1, LEVEL_NAMES.length - 1)];
   return (
     <div className="flex flex-col gap-2">
@@ -252,7 +229,8 @@ function LevelBadge({ xp = 0 }: { xp: number }) {
         <span className="text-[10px] font-bold text-indigo-500">{100 - progress} to next</span>
       </div>
       <div className="h-2 w-full overflow-hidden rounded-full" style={{ background: "var(--sp-ring-track)" }}>
-        <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-1000" style={{ width: `${progress}%` }}/>
+        <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-1000"
+          style={{ width: `${progress}%` }}/>
       </div>
     </div>
   );
@@ -264,8 +242,7 @@ function TierPill({ tier }: { tier: Tier }) {
   return (
     <Link href="/dashboard/subscribe" title="View or manage your plan"
       className="flex shrink-0 items-center gap-2 rounded-xl border px-2 py-1.5 transition-all hover:-translate-y-0.5 hover:shadow-md sm:px-2.5"
-      style={{ background: `${tier.color}12`, borderColor: `${tier.color}38` }}
-    >
+      style={{ background: `${tier.color}12`, borderColor: `${tier.color}38` }}>
       <span className="flex h-6 w-6 items-center justify-center rounded-lg text-white" style={{ background: tier.color }}>
         {tier.isPaid ? <Crown className="h-3 w-3" fill="currentColor"/> : tier.isTrial ? <Timer className="h-3 w-3"/> : <Sparkles className="h-3 w-3"/>}
       </span>
@@ -280,16 +257,24 @@ function TierPill({ tier }: { tier: Tier }) {
 
 // ── Stat card ──────────────────────────────────────────────────────────────────
 
-function StatCard({ icon, label, value, accent, delta }: { icon: React.ReactNode; label: string; value: number; accent: string; delta?: string }) {
+function StatCard({ icon, label, value, accent, delta }: {
+  icon: React.ReactNode; label: string; value: number; accent: string; delta?: string;
+}) {
   const count = useCountUp(value);
   return (
-    <div className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-      <div className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-20 blur-xl transition-opacity group-hover:opacity-40" style={{ background: accent }}/>
+    <div className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+      <div className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-20 blur-xl transition-opacity group-hover:opacity-40"
+        style={{ background: accent }}/>
       <div className="mb-3 flex items-center justify-between">
         <div className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ background: `${accent}20` }}>
           <span style={{ color: accent }}>{icon}</span>
         </div>
-        {delta && <span className="flex items-center gap-0.5 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-500"><ChevronUp className="h-2.5 w-2.5"/>{delta}</span>}
+        {delta && (
+          <span className="flex items-center gap-0.5 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-500">
+            <ChevronUp className="h-2.5 w-2.5"/>{delta}
+          </span>
+        )}
       </div>
       <p className="text-2xl font-black tabular-nums" style={{ color: "var(--sp-text)" }}>{count}</p>
       <p className="mt-0.5 text-[11px] font-medium" style={{ color: "var(--sp-text-3)" }}>{label}</p>
@@ -299,8 +284,11 @@ function StatCard({ icon, label, value, accent, delta }: { icon: React.ReactNode
 
 function PlanTile({ tier }: { tier: Tier }) {
   return (
-    <Link href="/dashboard/subscribe" className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg" style={{ background: "var(--sp-bg-card)", borderColor: `${tier.color}45` }}>
-      <div className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-25 blur-xl transition-opacity group-hover:opacity-50" style={{ background: tier.color }}/>
+    <Link href="/dashboard/subscribe"
+      className="group relative overflow-hidden rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+      style={{ background: "var(--sp-bg-card)", borderColor: `${tier.color}45` }}>
+      <div className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-25 blur-xl transition-opacity group-hover:opacity-50"
+        style={{ background: tier.color }}/>
       <div className="mb-3 flex items-center justify-between">
         <div className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ background: `${tier.color}20` }}>
           <Crown className="h-4 w-4" style={{ color: tier.color }}/>
@@ -322,14 +310,18 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
   return (
     <Link href={`/dashboard/courses/${course.id}`}
       className="group flex w-[152px] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border transition-all duration-200 hover:-translate-y-1 hover:shadow-xl sm:w-auto"
-      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-    >
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
       <div className="relative h-24 overflow-hidden" style={{ background: `linear-gradient(135deg, ${p.accent}26, ${p.accent}0D)` }}>
-        <div className="absolute left-1/2 top-4 h-[84px] w-16 -translate-x-1/2 rounded-md bg-white transition-transform duration-200 group-hover:-translate-y-1" style={{ boxShadow: `0 6px 16px ${p.accent}35` }}>
+        <div className="absolute left-1/2 top-4 h-[84px] w-16 -translate-x-1/2 rounded-md bg-white transition-transform duration-200 group-hover:-translate-y-1"
+          style={{ boxShadow: `0 6px 16px ${p.accent}35` }}>
           <div className="mx-2 mt-2 h-1.5 rounded-full" style={{ background: p.accent }}/>
-          {[0,1,2,3,4,5].map(i => <div key={i} className="mx-2 mt-1.5 h-[3px] rounded-full bg-slate-200" style={{ width: `${62 + ((i * 17) % 32)}%` }}/>)}
+          {[0,1,2,3,4,5].map(i => (
+            <div key={i} className="mx-2 mt-1.5 h-[3px] rounded-full bg-slate-200"
+              style={{ width: `${62 + ((i * 17) % 32)}%` }}/>
+          ))}
         </div>
-        <span className="absolute left-2 top-2 rounded-md px-1.5 py-0.5 text-[9px] font-black text-white shadow" style={{ background: p.accent }}>{code ?? initials}</span>
+        <span className="absolute left-2 top-2 rounded-md px-1.5 py-0.5 text-[9px] font-black text-white shadow"
+          style={{ background: p.accent }}>{code ?? initials}</span>
       </div>
       <div className="flex flex-1 flex-col p-3">
         <p className="min-h-[2rem] text-xs font-bold leading-snug" style={{ ...clamp2, color: "var(--sp-text)" }}>{title}</p>
@@ -348,20 +340,30 @@ function ActivityItem({ q, index }: { q: RecentQuestion; index: number }) {
   const p = COURSE_PALETTE[index % COURSE_PALETTE.length];
   const courseCode = q.course?.name ? splitCourseName(q.course.name).code : null;
   return (
-    <Link href={`/questions/${q.id}`} className="group block rounded-xl border p-3 transition-all hover:border-indigo-500/30 hover:shadow-md" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+    <Link href={`/questions/${q.id}`}
+      className="group block rounded-xl border p-3 transition-all hover:border-indigo-500/30 hover:shadow-md"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
       <div className="flex items-start gap-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white" style={{ background: p.accent, boxShadow: `0 3px 10px ${p.accent}35` }}>
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white"
+          style={{ background: p.accent, boxShadow: `0 3px 10px ${p.accent}35` }}>
           <FileText className="h-4 w-4"/>
         </div>
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex items-center gap-1.5">
-            <span className="rounded px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide" style={{ background: `${p.accent}18`, color: p.accent }}>Past question</span>
-            <span className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>{new Date(q.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short" })}</span>
+            <span className="rounded px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide"
+              style={{ background: `${p.accent}18`, color: p.accent }}>Past question</span>
+            <span className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+              {new Date(q.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short" })}
+            </span>
           </div>
           <p className="truncate text-xs font-semibold" style={{ color: "var(--sp-text)" }}>{q.title}</p>
           <div className="mt-0.5 flex items-center gap-2 text-[10px]" style={{ color: "var(--sp-text-3)" }}>
             <span className="truncate">{courseCode ?? q.course?.name ?? "—"}{q.year ? ` · ${q.year}` : ""}</span>
-            {q.views != null && <span className="flex shrink-0 items-center gap-1"><Users className="h-2.5 w-2.5"/>{q.views} views</span>}
+            {q.views != null && (
+              <span className="flex shrink-0 items-center gap-1">
+                <Users className="h-2.5 w-2.5"/>{q.views} views
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -369,11 +371,12 @@ function ActivityItem({ q, index }: { q: RecentQuestion; index: number }) {
   );
 }
 
-// ── Upgrade / tier cards ──────────────────────────────────────────────────────
+// ── Upgrade / Tier cards ──────────────────────────────────────────────────────
 
 function UpgradeCard({ tier }: { tier: Tier }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl p-5 text-white" style={{ background: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 50%, #9333EA 100%)" }}>
+    <div className="relative overflow-hidden rounded-2xl p-5 text-white"
+      style={{ background: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 50%, #9333EA 100%)" }}>
       <div className="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-white/10 blur-2xl"/>
       <div className="pointer-events-none absolute -bottom-6 -left-6 h-20 w-20 rounded-full bg-white/10 blur-xl"/>
       <div className="relative">
@@ -386,14 +389,16 @@ function UpgradeCard({ tier }: { tier: Tier }) {
             <p className="text-[10px] text-white/60">{tier.isTrial ? tier.detail : "Semester plans for students"}</p>
           </div>
         </div>
-        <p className="text-[11px] text-white/80 leading-relaxed">Unlock every course and the AI study tools built for Nigerian tertiary students.</p>
+        <p className="text-[11px] text-white/80 leading-relaxed">
+          Unlock every course and the AI study tools built for Nigerian tertiary students.
+        </p>
         <div className="mt-3 space-y-2">
           {[
-            { icon: <BookOpen className="h-3 w-3"/>, text: "All courses unlocked" },
-            { icon: <BarChart2 className="h-3 w-3"/>, text: "Unlimited read & practice mode" },
-            { icon: <Sparkles className="h-3 w-3"/>, text: "AI Cram study assistant" },
-            { icon: <CheckCircle2 className="h-3 w-3"/>, text: "Unlimited note uploads (Pro)" },
-            { icon: <Award className="h-3 w-3"/>, text: "YouTube & link study (Premium)" },
+            { icon: <BookOpen className="h-3 w-3"/>,     text: "All courses unlocked"             },
+            { icon: <BarChart2 className="h-3 w-3"/>,    text: "Unlimited read & practice mode"   },
+            { icon: <Sparkles className="h-3 w-3"/>,     text: "AI Cram study assistant"          },
+            { icon: <CheckCircle2 className="h-3 w-3"/>, text: "Unlimited note uploads (Pro)"     },
+            { icon: <Award className="h-3 w-3"/>,        text: "YouTube & link study (Premium)"   },
           ].map(f => (
             <div key={f.text} className="flex items-center gap-2">
               <span className="text-yellow-300">{f.icon}</span>
@@ -401,7 +406,8 @@ function UpgradeCard({ tier }: { tier: Tier }) {
             </div>
           ))}
         </div>
-        <Link href="/dashboard/subscribe" className="mt-4 flex items-center justify-center gap-1.5 rounded-xl bg-white py-2.5 text-[11px] font-black text-indigo-700 transition hover:bg-yellow-50">
+        <Link href="/dashboard/subscribe"
+          className="mt-4 flex items-center justify-center gap-1.5 rounded-xl bg-white py-2.5 text-[11px] font-black text-indigo-700 transition hover:bg-yellow-50">
           <Crown className="h-3 w-3 text-yellow-500" fill="currentColor"/>See plans — from ₦2,000/semester
         </Link>
       </div>
@@ -411,11 +417,14 @@ function UpgradeCard({ tier }: { tier: Tier }) {
 
 function TierCard({ tier }: { tier: Tier }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border p-4" style={{ background: "var(--sp-bg-card)", borderColor: `${tier.color}45` }}>
-      <div className="pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full opacity-20 blur-xl" style={{ background: tier.color }}/>
+    <div className="relative overflow-hidden rounded-2xl border p-4"
+      style={{ background: "var(--sp-bg-card)", borderColor: `${tier.color}45` }}>
+      <div className="pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full opacity-20 blur-xl"
+        style={{ background: tier.color }}/>
       <div className="relative">
         <div className="mb-3 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl shadow-lg" style={{ background: tier.color, boxShadow: `0 6px 16px ${tier.color}45` }}>
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl shadow-lg"
+            style={{ background: tier.color, boxShadow: `0 6px 16px ${tier.color}45` }}>
             <Crown className="h-5 w-5 text-yellow-300" fill="currentColor"/>
           </div>
           <div className="min-w-0">
@@ -428,7 +437,9 @@ function TierCard({ tier }: { tier: Tier }) {
             <p className="text-[10px] font-semibold text-amber-500">Your plan ends soon — renew to keep your access.</p>
           </div>
         )}
-        <Link href="/dashboard/subscribe" className="flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:-translate-y-0.5" style={{ background: `${tier.color}0F`, borderColor: `${tier.color}45`, color: tier.color }}>
+        <Link href="/dashboard/subscribe"
+          className="flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:-translate-y-0.5"
+          style={{ background: `${tier.color}0F`, borderColor: `${tier.color}45`, color: tier.color }}>
           {tier.expiringSoon ? "Renew plan" : "Manage plan"} <ChevronRight className="h-3 w-3"/>
         </Link>
       </div>
@@ -436,7 +447,7 @@ function TierCard({ tier }: { tier: Tier }) {
   );
 }
 
-// ── Today focus ───────────────────────────────────────────────────────────────
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
 function TodayFocus({ courses }: { courses: Course[] }) {
   const [idx] = useState(() => Math.floor(Math.random() * courses.length));
@@ -444,8 +455,11 @@ function TodayFocus({ courses }: { courses: Course[] }) {
   if (!c) return null;
   const p = COURSE_PALETTE[idx % COURSE_PALETTE.length];
   return (
-    <Link href={`/dashboard/courses/${c.id}`} className="group flex items-center gap-4 rounded-full border px-4 py-3 transition-all hover:shadow-md" style={{ background: `${p.accent}10`, borderColor: `${p.accent}30` }}>
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white text-xs font-black" style={{ background: p.accent }}>
+    <Link href={`/dashboard/courses/${c.id}`}
+      className="group flex items-center gap-4 rounded-full border px-4 py-3 transition-all hover:shadow-md"
+      style={{ background: `${p.accent}10`, borderColor: `${p.accent}30` }}>
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white text-xs font-black"
+        style={{ background: p.accent }}>
         <Target className="h-3.5 w-3.5"/>
       </div>
       <div className="min-w-0 flex-1">
@@ -459,8 +473,11 @@ function TodayFocus({ courses }: { courses: Course[] }) {
 
 function QuickAction({ href, icon, label, sub, color }: { href: string; icon: React.ReactNode; label: string; sub: string; color: string }) {
   return (
-    <Link href={href} className="group flex items-center gap-3 rounded-xl border p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-lg" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white transition-transform group-hover:scale-110" style={{ background: color, boxShadow: `0 4px 12px ${color}40` }}>{icon}</div>
+    <Link href={href}
+      className="group flex items-center gap-3 rounded-xl border p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white transition-transform group-hover:scale-110"
+        style={{ background: color, boxShadow: `0 4px 12px ${color}40` }}>{icon}</div>
       <div className="min-w-0 flex-1">
         <p className="text-xs font-bold" style={{ color: "var(--sp-text)" }}>{label}</p>
         <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>{sub}</p>
@@ -470,13 +487,17 @@ function QuickAction({ href, icon, label, sub, color }: { href: string; icon: Re
   );
 }
 
-function EmptyState({ icon, title, body, cta }: { icon: React.ReactNode; title: string; body: string; cta: { href: string; label: string } }) {
+function EmptyState({ icon, title, body, cta }: {
+  icon: React.ReactNode; title: string; body: string; cta: { href: string; label: string };
+}) {
   return (
-    <div className="flex flex-col items-center rounded-2xl border-2 border-dashed px-8 py-12 text-center" style={{ borderColor: "var(--sp-border)" }}>
+    <div className="flex flex-col items-center rounded-2xl border-2 border-dashed px-8 py-12 text-center"
+      style={{ borderColor: "var(--sp-border)" }}>
       <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-500">{icon}</div>
       <p className="text-sm font-bold" style={{ color: "var(--sp-text-2)" }}>{title}</p>
       <p className="mt-1.5 max-w-[200px] text-xs leading-relaxed" style={{ color: "var(--sp-text-3)" }}>{body}</p>
-      <Link href={cta.href} className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5">
+      <Link href={cta.href}
+        className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5">
         {cta.label} <ArrowRight className="h-3.5 w-3.5"/>
       </Link>
     </div>
@@ -496,10 +517,17 @@ function StreakSection({ streak }: { streak: number }) {
         <div className="flex-1 space-y-2">
           <div className="flex gap-1">
             {["M","T","W","T","F","S","S"].map((d, i) => {
-              const done = i <= todayMF && (todayMF - i) < streak, isToday = i === todayMF;
+              const done    = i <= todayMF && (todayMF - i) < streak;
+              const isToday = i === todayMF;
               return (
                 <div key={i} className="flex flex-1 flex-col items-center gap-1">
-                  <div className="h-5 w-5 rounded-full flex items-center justify-center text-[8px] font-black transition-all" style={{ background: done ? "#6366F1" : isToday ? "rgba(99,102,241,0.18)" : "var(--sp-ring-track)", color: done ? "white" : isToday ? "#6366F1" : "var(--sp-text-3)", boxShadow: done ? "0 2px 8px rgba(99,102,241,0.35)" : "none", outline: isToday && !done ? "1.5px solid rgba(99,102,241,0.45)" : "none" }}>{d}</div>
+                  <div className="h-5 w-5 rounded-full flex items-center justify-center text-[8px] font-black transition-all"
+                    style={{
+                      background: done ? "#6366F1" : isToday ? "rgba(99,102,241,0.18)" : "var(--sp-ring-track)",
+                      color: done ? "white" : isToday ? "#6366F1" : "var(--sp-text-3)",
+                      boxShadow: done ? "0 2px 8px rgba(99,102,241,0.35)" : "none",
+                      outline: isToday && !done ? "1.5px solid rgba(99,102,241,0.45)" : "none",
+                    }}>{d}</div>
                 </div>
               );
             })}
@@ -513,21 +541,14 @@ function StreakSection({ streak }: { streak: number }) {
   );
 }
 
-// ── (drawer moved to layout.tsx) ──────────────────────────────────────────────
-
-
-
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function DashboardHomePage() {
   const supabase = createClient();
   const router   = useRouter();
 
-  const [query, setQuery]                 = useState("");
-  const [avatarUrl, setAvatarUrl]         = useState<string | null>(null);
-  const [sub, setSub]                     = useState<SubStatus | null>(null);
-  const [searchFocused, setSearchFocused] = useState(false);
-  const searchRef = useRef<HTMLDivElement>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [sub, setSub]             = useState<SubStatus | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["dashboard-summary"],
@@ -541,11 +562,13 @@ export default function DashboardHomePage() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       try {
-        const r1 = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+        const r1 = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/avatar/me`,
+          { headers: { Authorization: `Bearer ${session.access_token}` } });
         if (r1.ok) { const j = await r1.json(); if (j.avatar_url) setAvatarUrl(j.avatar_url); }
       } catch {}
       try {
-        const r2 = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+        const r2 = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/subscription/status`,
+          { headers: { Authorization: `Bearer ${session.access_token}` } });
         if (r2.ok) {
           const j = await r2.json();
           setSub({ is_paid: j.is_paid === true, is_trial: j.is_trial === true, effective_plan: j.effective_plan ?? j.plan ?? "free", expires_at: j.expires_at ?? null, trial_days_left: j.trial_days_left });
@@ -555,32 +578,29 @@ export default function DashboardHomePage() {
     load();
   }, [supabase]);
 
-  useEffect(() => {
-    const h = (e: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) { setQuery(""); setSearchFocused(false); }
-    };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, []);
-
   const tier            = getTier(sub);
   const courses         = data?.profile.courses ?? [];
   const recentQuestions = data?.recent_questions ?? [];
   const stats           = data?.stats ?? { questions_in_courses: 0, my_uploads: 0 };
   const streak          = data?.profile.streak ?? 0;
   const xp              = data?.profile.xp ?? 0;
-  const { results: searchResults, searching: searchLoading } = useLocalCourseSearch(query, courses);
 
   if (isLoading) return <PageSkeleton/>;
 
   if (error || !data) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-center" style={{ background: "var(--sp-bg)" }}>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-center"
+        style={{ background: "var(--sp-bg)" }}>
         <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/10">
           <AlertCircle className="h-6 w-6 text-red-500"/>
         </div>
-        <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>{error instanceof Error ? error.message : "Something went wrong."}</p>
-        <button onClick={() => window.location.reload()} className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-indigo-500 transition">Reload</button>
+        <p className="text-sm font-semibold" style={{ color: "var(--sp-text-2)" }}>
+          {error instanceof Error ? error.message : "Something went wrong."}
+        </p>
+        <button onClick={() => window.location.reload()}
+          className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-indigo-500 transition">
+          Reload
+        </button>
       </div>
     );
   }
@@ -593,9 +613,7 @@ export default function DashboardHomePage() {
   return (
     <div className="min-h-screen" style={{ background: "var(--sp-bg)" }}>
       <style>{`
-        @keyframes slideDown { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes fadeUp    { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
-        .anim-slide { animation: slideDown 0.3s ease both }
+        @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
         .anim-1 { animation: fadeUp 0.4s ease both; animation-delay: 0.05s }
         .anim-2 { animation: fadeUp 0.4s ease both; animation-delay: 0.10s }
         .anim-3 { animation: fadeUp 0.4s ease both; animation-delay: 0.15s }
@@ -606,14 +624,16 @@ export default function DashboardHomePage() {
         .no-scrollbar::-webkit-scrollbar { display: none; }
       `}</style>
 
-      {/* ══ MAIN LAYOUT ══ */}
       <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-4">
 
           {/* ── LEFT RAIL ── */}
           <aside className="space-y-4 anim-1">
-            <div className="relative overflow-hidden rounded-2xl border p-5" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <div className="pointer-events-none absolute inset-0 opacity-30" style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, transparent 60%)" }}/>
+            {/* Profile card */}
+            <div className="relative overflow-hidden rounded-2xl border p-5"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <div className="pointer-events-none absolute inset-0 opacity-30"
+                style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, transparent 60%)" }}/>
               <div className="relative">
                 <div className="flex items-center gap-3 mb-4">
                   {avatarUrl ? (
@@ -625,11 +645,9 @@ export default function DashboardHomePage() {
                   )}
                   <div className="min-w-0">
                     <p className="font-black truncate" style={{ color: "var(--sp-text)" }}>{data.profile.full_name ?? firstName}</p>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-500">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"/>Active
-                      </span>
-                    </div>
+                    <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-500 w-fit mt-0.5">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"/>Active
+                    </span>
                   </div>
                 </div>
                 {data.profile.department?.name && (
@@ -643,24 +661,32 @@ export default function DashboardHomePage() {
                   </div>
                 )}
                 <LevelBadge xp={xp}/>
-                <Link href="/dashboard/profile" className="mt-4 flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:border-indigo-500/40 hover:bg-indigo-500/5 hover:text-indigo-500" style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
+                <Link href="/dashboard/profile"
+                  className="mt-4 flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[11px] font-bold transition-all hover:border-indigo-500/40 hover:bg-indigo-500/5 hover:text-indigo-500"
+                  style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
                   Edit profile <ChevronRight className="h-3 w-3"/>
                 </Link>
               </div>
             </div>
+
             <StreakSection streak={streak}/>
+
             <div className="space-y-2">
               <p className="px-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--sp-text-3)" }}>Quick actions</p>
               <QuickAction href="/dashboard/upload" icon={<Upload className="h-4 w-4"/>} label="Upload paper" sub="Earn 50 XP per upload" color="#6366F1"/>
               <QuickAction href="/dashboard/courses" icon={<BookOpen className="h-4 w-4"/>} label="Browse courses" sub="Find past questions" color="#0EA5E9"/>
-              <QuickAction href="/dashboard/profile" icon={<GraduationCap className="h-4 w-4"/>} label="My profile" sub="Account & settings" color="#8B5CF6"/>
+              <QuickAction href="/study" icon={<Sparkles className="h-4 w-4"/>} label="SparkL Cram" sub="AI study assistant" color="#8B5CF6"/>
+              <QuickAction href="/dashboard/profile" icon={<GraduationCap className="h-4 w-4"/>} label="My profile" sub="Account & settings" color="#10B981"/>
             </div>
           </aside>
 
           {/* ── MAIN ── */}
           <main className="space-y-5 lg:col-span-2 min-w-0">
-            <div className="anim-1 relative overflow-hidden rounded-2xl border p-5" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <div className="pointer-events-none absolute right-0 top-0 h-32 w-32 opacity-10" style={{ background: "radial-gradient(circle, #6366F1 0%, transparent 70%)" }}/>
+            {/* Greeting */}
+            <div className="anim-1 relative overflow-hidden rounded-2xl border p-5"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <div className="pointer-events-none absolute right-0 top-0 h-32 w-32 opacity-10"
+                style={{ background: "radial-gradient(circle, #6366F1 0%, transparent 70%)" }}/>
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
@@ -670,50 +696,66 @@ export default function DashboardHomePage() {
                   <p className="text-sm" style={{ color: "var(--sp-text-3)" }}>{greeting},</p>
                   <h1 className="text-2xl font-black tracking-tight mt-0.5" style={{ color: "var(--sp-text)" }}>{firstName} 👋</h1>
                   {data.profile.department?.name && (
-                    <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>{data.profile.department.name} · {data.profile.institution?.name}</p>
+                    <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+                      {data.profile.department.name} · {data.profile.institution?.name}
+                    </p>
                   )}
                 </div>
                 {!tier.isPaid && (
-                  <Link className="shrink-0 flex items-center gap-1.5 rounded-full bg-indigo-600 px-3.5 py-2 text-[11px] font-black text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5" href="/dashboard/subscribe">
+                  <Link href="/dashboard/subscribe"
+                    className="shrink-0 flex items-center gap-1.5 rounded-full bg-indigo-600 px-3.5 py-2 text-[11px] font-black text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition-all hover:-translate-y-0.5">
                     <Crown className="h-3 w-3 text-yellow-300" fill="currentColor"/>Upgrade
                   </Link>
                 )}
               </div>
             </div>
 
+            {/* Stats row */}
             <div className="anim-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <StatCard icon={<BookOpen className="h-4 w-4"/>} label="My courses" value={courses.length} accent="#6366F1"/>
               <StatCard icon={<FileText className="h-4 w-4"/>} label="Past papers" value={stats.questions_in_courses} accent="#8B5CF6"/>
-              <StatCard icon={<Trophy className="h-4 w-4"/>} label="Uploads" value={stats.my_uploads} accent="#10B981" delta={stats.my_uploads > 0 ? `${stats.my_uploads}` : undefined}/>
+              <StatCard icon={<Trophy className="h-4 w-4"/>} label="Uploads" value={stats.my_uploads} accent="#10B981"
+                delta={stats.my_uploads > 0 ? `${stats.my_uploads}` : undefined}/>
               <PlanTile tier={tier}/>
             </div>
 
+            {/* Today's focus */}
             {courses.length > 0 && <div className="anim-3"><TodayFocus courses={courses}/></div>}
 
+            {/* Courses */}
             <section className="anim-4">
               <div className="mb-3 flex items-center justify-between">
                 <div>
                   <h2 className="text-sm font-black" style={{ color: "var(--sp-text)" }}>Your courses</h2>
                   <p className="text-[10px] mt-0.5" style={{ color: "var(--sp-text-3)" }}>{courses.length} enrolled this semester</p>
                 </div>
-                <Link href="/onboarding" className="flex items-center gap-1 rounded-full border px-3 py-1.5 text-[10px] font-bold transition-all hover:border-indigo-500/40 hover:text-indigo-500" style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
+                <Link href="/onboarding"
+                  className="flex items-center gap-1 rounded-full border px-3 py-1.5 text-[10px] font-bold transition-all hover:border-indigo-500/40 hover:text-indigo-500"
+                  style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
                   <Plus className="h-3 w-3"/> Manage
                 </Link>
               </div>
               {courses.length === 0 ? (
-                <EmptyState icon={<BookOpen className="h-6 w-6"/>} title="No courses enrolled yet" body="Enrol in your courses to unlock all past questions for your semester." cta={{ href: "/onboarding", label: "Choose courses" }}/>
+                <EmptyState icon={<BookOpen className="h-6 w-6"/>} title="No courses enrolled yet"
+                  body="Enrol in your courses to unlock all past questions for your semester."
+                  cta={{ href: "/onboarding", label: "Choose courses" }}/>
               ) : (
                 <div className="no-scrollbar -mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0">
                   {courses.map((c, i) => <CourseCard key={c.id} course={c} index={i}/>)}
-                  <Link href="/onboarding" className="flex min-h-[170px] w-[152px] shrink-0 snap-start flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-4 transition-all hover:border-indigo-500/40 hover:bg-indigo-500/[0.03] sm:w-auto" style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
+                  <Link href="/onboarding"
+                    className="flex min-h-[170px] w-[152px] shrink-0 snap-start flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-4 transition-all hover:border-indigo-500/40 hover:bg-indigo-500/[0.03] sm:w-auto"
+                    style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-3)" }}>
                     <Plus className="h-5 w-5"/><span className="text-[10px] font-bold">Add course</span>
                   </Link>
                 </div>
               )}
             </section>
 
+            {/* Practice CTA */}
             {courses.length > 0 && (
-              <Link href="/dashboard/courses" className="anim-4 group flex items-center gap-4 rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <Link href="/dashboard/courses"
+                className="anim-4 group flex items-center gap-4 rounded-2xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/30">
                   <Timer className="h-5 w-5"/>
                 </div>
@@ -725,15 +767,22 @@ export default function DashboardHomePage() {
               </Link>
             )}
 
+            {/* Recent uploads */}
             <section className="anim-5">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-sm font-black" style={{ color: "var(--sp-text)" }}>Recent uploads</h2>
-                {recentQuestions.length > 0 && <Link className="text-[11px] font-bold text-indigo-500 hover:underline" href="/dashboard/courses">See all</Link>}
+                {recentQuestions.length > 0 && (
+                  <Link className="text-[11px] font-bold text-indigo-500 hover:underline" href="/dashboard/courses">See all</Link>
+                )}
               </div>
               {recentQuestions.length === 0 ? (
-                <EmptyState icon={<FileText className="h-6 w-6"/>} title="No papers yet" body={`Be the first to upload for ${data.profile.department?.name ?? "your department"}.`} cta={{ href: "/dashboard/upload", label: "Upload a paper" }}/>
+                <EmptyState icon={<FileText className="h-6 w-6"/>} title="No papers yet"
+                  body={`Be the first to upload for ${data.profile.department?.name ?? "your department"}.`}
+                  cta={{ href: "/dashboard/upload", label: "Upload a paper" }}/>
               ) : (
-                <div className="space-y-2">{recentQuestions.map((q, i) => <ActivityItem key={q.id} q={q} index={i}/>)}</div>
+                <div className="space-y-2">
+                  {recentQuestions.map((q, i) => <ActivityItem key={q.id} q={q} index={i}/>)}
+                </div>
               )}
             </section>
           </main>
@@ -741,18 +790,48 @@ export default function DashboardHomePage() {
           {/* ── RIGHT RAIL ── */}
           <aside className="space-y-4 anim-6">
             {tier.isPaid ? <TierCard tier={tier}/> : <UpgradeCard tier={tier}/>}
+
+            {/* Upload nudge */}
             {stats.my_uploads === 0 && (
-              <div className="rounded-2xl border p-4" style={{ background: "rgba(245,158,11,0.07)", borderColor: "rgba(245,158,11,0.22)" }}>
+              <div className="rounded-2xl border p-4"
+                style={{ background: "rgba(245,158,11,0.07)", borderColor: "rgba(245,158,11,0.22)" }}>
                 <div className="mb-2 flex items-center gap-2">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/20"><Flame className="h-3.5 w-3.5 text-amber-500"/></div>
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/20">
+                    <Flame className="h-3.5 w-3.5 text-amber-500"/>
+                  </div>
                   <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>Start contributing</p>
                 </div>
-                <p className="text-[11px] leading-relaxed" style={{ color: "var(--sp-text-2)" }}>Upload your first past question and earn 50 XP instantly. Help your department grow.</p>
-                <Link className="mt-3 flex items-center justify-center gap-1.5 rounded-xl bg-amber-500 py-2.5 text-[11px] font-black text-white hover:bg-amber-400 transition-all" href="/dashboard/upload">
+                <p className="text-[11px] leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
+                  Upload your first past question and earn 50 XP instantly. Help your department grow.
+                </p>
+                <Link href="/dashboard/upload"
+                  className="mt-3 flex items-center justify-center gap-1.5 rounded-xl bg-amber-500 py-2.5 text-[11px] font-black text-white hover:bg-amber-400 transition-all">
                   <Upload className="h-3 w-3"/> Upload now
                 </Link>
               </div>
             )}
+
+            {/* Cram promo */}
+            <Link href="/study"
+              className="group relative overflow-hidden rounded-2xl border p-4 flex flex-col gap-2 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+              style={{ background: "var(--sp-bg-card)", borderColor: "rgba(139,92,246,0.3)" }}>
+              <div className="pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full opacity-20 blur-xl bg-violet-500"/>
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-500/15">
+                  <Sparkles className="h-3.5 w-3.5 text-violet-500"/>
+                </div>
+                <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>SparkL Cram</p>
+                <span className="ml-auto rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[8px] font-black text-violet-500">AI</span>
+              </div>
+              <p className="text-[11px] leading-relaxed" style={{ color: "var(--sp-text-2)" }}>
+                Upload notes or paste a topic — Cram turns it into flashcards, summaries and quiz questions instantly.
+              </p>
+              <div className="flex items-center gap-1 text-[11px] font-bold text-violet-500 mt-1">
+                Try Cram <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5"/>
+              </div>
+            </Link>
+
+            {/* Study tip */}
             <div className="rounded-2xl border p-4" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               <div className="mb-2 flex items-center gap-2">
                 <Sparkles className="h-3.5 w-3.5 text-violet-500"/>
