@@ -2,6 +2,30 @@
 SparkL Cram: AI study assistant.
 Storage-optimised: messages deleted with sessions, per-session cap, shorter TTL.
 YouTube extracted via Gemini URL context (no youtube_transcript_api needed).
+
+v2 storage fixes:
+  1. Quiz messages store a compact reference instead of full JSON blobs.
+  2. Sessions inactive for 30+ days are auto-deleted (with messages).
+  3. Gemini client is module-level singleton with request timeout.
+  4. DB index hints documented; index SQL in migrations note below.
+
+--- DB MIGRATIONS (run once in Supabase SQL editor) ---
+CREATE INDEX IF NOT EXISTS idx_cram_messages_session_created
+  ON cram_messages (session_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_cram_messages_user_role_created
+  ON cram_messages (user_id, role, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_cram_sessions_user_created
+  ON cram_sessions (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_cram_sessions_last_active
+  ON cram_sessions (last_active_at);
+
+-- Also add the last_active_at column if it doesn't exist:
+ALTER TABLE cram_sessions
+  ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ DEFAULT NOW();
+------------------------------------------------------
 """
 
 from __future__ import annotations
@@ -14,6 +38,7 @@ import os
 import random
 import re
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import AsyncGenerator
@@ -52,22 +77,32 @@ router = APIRouter(prefix="/api/study", tags=["study"])
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-MAX_CONTEXT_CHARS       = ANSWERING["max_context_chars"]
-MAX_ANSWER_TOKENS       = ANSWERING["max_answer_tokens"]
-MAX_HISTORY_MSGS        = ANSWERING["max_history_messages_for_context"]
-MAX_FILE_BYTES          = LIMITS["max_document_bytes"]
-MAX_FILE_MB             = MAX_FILE_BYTES // 1_000_000
-MAX_TEXT_CHARS          = LIMITS["max_text_chars"]
+MAX_CONTEXT_CHARS        = ANSWERING["max_context_chars"]
+MAX_ANSWER_TOKENS        = ANSWERING["max_answer_tokens"]
+MAX_HISTORY_MSGS         = ANSWERING["max_history_messages_for_context"]
+MAX_FILE_BYTES           = LIMITS["max_document_bytes"]
+MAX_FILE_MB              = MAX_FILE_BYTES // 1_000_000
+MAX_TEXT_CHARS           = LIMITS["max_text_chars"]
 
 # ── Storage knobs ──────────────────────────────────────────────────────────────
-MESSAGE_TTL_DAYS        = 3      # was 7 — messages older than this are deleted
-MAX_MESSAGES_PER_SESSION = 40   # keep only the last N messages per session
-CLEANUP_PROBABILITY     = 0.15  # was 0.02 — run background cleanup 15 % of requests
+MESSAGE_TTL_DAYS          = 3
+MAX_MESSAGES_PER_SESSION  = 40
+CLEANUP_PROBABILITY       = 0.15
+SESSION_INACTIVE_DAYS     = 30   # sessions with no activity beyond this are deleted
 
-GROQ_MODEL   = "openai/gpt-oss-120b"
-GEMINI_MODEL = "gemini-3.5-flash"   # upgraded from gemini-2.0-flash
+# ── AI knobs ───────────────────────────────────────────────────────────────────
+GROQ_MODEL              = "openai/gpt-oss-120b"
+GEMINI_MODEL            = "gemini-3.5-flash"
+GEMINI_REQUEST_TIMEOUT  = 30    # seconds; kills hanging Render workers
 
 VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text", "url", "youtube"}
+
+# ── Quiz compact reference ─────────────────────────────────────────────────────
+# Instead of storing the full quiz JSON (can be 2-4 KB per row), we store a
+# one-line reference and keep the actual quiz in the HTTP response only.
+# The chat history filter already strips __QUIZ__: lines from prompt context,
+# so this is a pure storage saving with no behaviour change.
+QUIZ_MESSAGE_STUB = "__QUIZ_GENERATED__"   # replaces __QUIZ__:{json}
 
 QUIZ_SYSTEM_PROMPT = """You are SparkL Cram, a quiz generator for Nigerian university and polytechnic students.
 
@@ -95,6 +130,36 @@ Format:
   ]
 }"""
 
+# ── Gemini singleton ───────────────────────────────────────────────────────────
+# One client per process; Gemini's async client is thread-safe.
+# Created lazily on first use so startup doesn't fail if the key is absent.
+
+_gemini_client = None
+
+def _get_gemini_client():
+    global _gemini_client
+    if _gemini_client is not None:
+        return _gemini_client
+    if genai_sdk is None:
+        raise RuntimeError("google-genai not installed.")
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set.")
+    _gemini_client = genai_sdk.Client(api_key=api_key)
+    return _gemini_client
+
+
+async def _gemini_with_timeout(coro, timeout: int = GEMINI_REQUEST_TIMEOUT):
+    """Wrap any Gemini awaitable with a hard timeout so Render workers don't hang."""
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="The AI took too long to respond. Please try again.",
+        )
+
+
 # ── YouTube / URL helpers ──────────────────────────────────────────────────────
 
 def _extract_youtube_id(url: str) -> str | None:
@@ -112,10 +177,6 @@ def _extract_youtube_id(url: str) -> str | None:
 
 
 async def _extract_url_with_gemini(url: str, is_youtube: bool) -> str:
-    """
-    Use Gemini's URL-context tool to read any web page or YouTube video.
-    This avoids youtube_transcript_api which is blocked on cloud servers.
-    """
     client = _get_gemini_client()
     if is_youtube:
         prompt = (
@@ -131,14 +192,16 @@ async def _extract_url_with_gemini(url: str, is_youtube: bool) -> str:
             "Do not add your own opinions — only what is on the page."
         )
     try:
-        resp = await client.aio.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                tools=[genai_types.Tool(url_context=genai_types.UrlContext())],
-                max_output_tokens=8192,
-                temperature=0.0,
-            ),
+        resp = await _gemini_with_timeout(
+            client.aio.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    tools=[genai_types.Tool(url_context=genai_types.UrlContext())],
+                    max_output_tokens=8192,
+                    temperature=0.0,
+                ),
+            )
         )
         text = (resp.text or "").strip()
         if len(text) < 50:
@@ -232,7 +295,7 @@ def _sync_load_messages(session_id: str, limit: int) -> list[dict]:
 
 
 def _sync_cleanup_old_messages() -> None:
-    """Delete messages older than MESSAGE_TTL_DAYS across all sessions."""
+    """Delete messages older than MESSAGE_TTL_DAYS."""
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=MESSAGE_TTL_DAYS)).isoformat()
         supabase.table("cram_messages").delete().lt("created_at", cutoff).execute()
@@ -240,8 +303,48 @@ def _sync_cleanup_old_messages() -> None:
         pass
 
 
+def _sync_cleanup_inactive_sessions() -> None:
+    """
+    Delete sessions (and cascade their messages) that have had no activity
+    for SESSION_INACTIVE_DAYS days. Runs inside the same background cleanup
+    task as message TTL cleanup so there's no extra overhead.
+
+    Requires last_active_at column and idx_cram_sessions_last_active index
+    (see migration SQL at top of file).
+    """
+    try:
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=SESSION_INACTIVE_DAYS)
+        ).isoformat()
+        # Fetch IDs first so we can delete messages explicitly if CASCADE isn't set.
+        res = (
+            supabase.table("cram_sessions")
+            .select("id")
+            .lt("last_active_at", cutoff)
+            .execute()
+        )
+        stale_ids = [r["id"] for r in (res.data or [])]
+        if not stale_ids:
+            return
+        # Delete messages first (safe even with CASCADE).
+        supabase.table("cram_messages").delete().in_("session_id", stale_ids).execute()
+        # Then delete the sessions themselves.
+        supabase.table("cram_sessions").delete().in_("id", stale_ids).execute()
+    except Exception:
+        pass
+
+
+def _sync_touch_session(session_id: str) -> None:
+    """Bump last_active_at so the inactivity clock resets on every chat turn."""
+    try:
+        supabase.table("cram_sessions").update(
+            {"last_active_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("id", session_id).execute()
+    except Exception:
+        pass
+
+
 def _sync_delete_session_messages(session_id: str) -> None:
-    """Hard-delete ALL messages for a session immediately."""
     try:
         supabase.table("cram_messages").delete().eq("session_id", session_id).execute()
     except Exception:
@@ -250,8 +353,8 @@ def _sync_delete_session_messages(session_id: str) -> None:
 
 def _sync_prune_session_messages(session_id: str) -> None:
     """
-    Keep only the most recent MAX_MESSAGES_PER_SESSION messages for a session.
-    Called after every assistant reply so no single session grows unbounded.
+    Keep only the most recent MAX_MESSAGES_PER_SESSION rows for a session.
+    Uses the (session_id, created_at DESC) index added in migrations.
     """
     try:
         res = (
@@ -264,7 +367,6 @@ def _sync_prune_session_messages(session_id: str) -> None:
         rows = res.data or []
         if len(rows) <= MAX_MESSAGES_PER_SESSION:
             return
-        # Delete everything beyond the cap (oldest first)
         ids_to_delete = [r["id"] for r in rows[MAX_MESSAGES_PER_SESSION:]]
         supabase.table("cram_messages").delete().in_("id", ids_to_delete).execute()
     except Exception:
@@ -352,7 +454,7 @@ def _prompt_history(raw: list[dict]) -> list[dict]:
         m for m in raw
         if m.get("role") in ("user", "assistant")
         and m.get("content")
-        and not m["content"].startswith("__QUIZ__:")
+        and not m["content"].startswith("__QUIZ__")   # catches both old and new stub
         and m["content"] != "[Quiz requested]"
     ]
 
@@ -360,9 +462,15 @@ def _prompt_history(raw: list[dict]) -> list[dict]:
 # ── Background cleanup ─────────────────────────────────────────────────────────
 
 def _maybe_schedule_cleanup() -> None:
-    """Fire-and-forget background cleanup at CLEANUP_PROBABILITY rate."""
+    """
+    Fire-and-forget: at CLEANUP_PROBABILITY rate, delete expired messages
+    AND inactive sessions in a single background task.
+    """
     if random.random() < CLEANUP_PROBABILITY:
-        asyncio.create_task(_run(_sync_cleanup_old_messages))
+        async def _do_cleanup():
+            await _run(_sync_cleanup_old_messages)
+            await _run(_sync_cleanup_inactive_sessions)
+        asyncio.create_task(_do_cleanup())
 
 
 # ── Plan / limit enforcement ───────────────────────────────────────────────────
@@ -392,15 +500,6 @@ async def _enforce_daily_message_limit(user_id: str, limits: dict) -> int:
 
 # ── AI providers ───────────────────────────────────────────────────────────────
 
-def _get_gemini_client():
-    if genai_sdk is None:
-        raise RuntimeError("google-genai not installed.")
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set.")
-    return genai_sdk.Client(api_key=api_key)
-
-
 async def _stream_groq(messages: list[dict]) -> AsyncGenerator[str, None]:
     if AsyncGroq is None:
         raise RuntimeError("groq not installed")
@@ -421,15 +520,18 @@ async def _stream_groq(messages: list[dict]) -> AsyncGenerator[str, None]:
 async def _stream_gemini_text(prompt: str, history_text: str = "") -> AsyncGenerator[str, None]:
     client = _get_gemini_client()
     full = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
-    async for chunk in await client.aio.models.generate_content_stream(
-        model=GEMINI_MODEL,
-        contents=full,
-        config=genai_types.GenerateContentConfig(
-            system_instruction=TUTOR_SYSTEM_PROMPT,
-            max_output_tokens=MAX_ANSWER_TOKENS,
-            temperature=0.3,
-        ),
-    ):
+    stream = await _gemini_with_timeout(
+        client.aio.models.generate_content_stream(
+            model=GEMINI_MODEL,
+            contents=full,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=TUTOR_SYSTEM_PROMPT,
+                max_output_tokens=MAX_ANSWER_TOKENS,
+                temperature=0.3,
+            ),
+        )
+    )
+    async for chunk in stream:
         if chunk.text:
             yield chunk.text
 
@@ -439,18 +541,21 @@ async def _stream_gemini_image(
 ) -> AsyncGenerator[str, None]:
     client = _get_gemini_client()
     text = "\n\n".join(p for p in (context_block, history_text, f"Student: {prompt}") if p)
-    async for chunk in await client.aio.models.generate_content_stream(
-        model=GEMINI_MODEL,
-        contents=[
-            genai_types.Part(inline_data=genai_types.Blob(mime_type=mime_type, data=base64.b64decode(image_b64))),
-            genai_types.Part(text=text),
-        ],
-        config=genai_types.GenerateContentConfig(
-            system_instruction=TUTOR_SYSTEM_PROMPT,
-            max_output_tokens=MAX_ANSWER_TOKENS,
-            temperature=0.3,
-        ),
-    ):
+    stream = await _gemini_with_timeout(
+        client.aio.models.generate_content_stream(
+            model=GEMINI_MODEL,
+            contents=[
+                genai_types.Part(inline_data=genai_types.Blob(mime_type=mime_type, data=base64.b64decode(image_b64))),
+                genai_types.Part(text=text),
+            ],
+            config=genai_types.GenerateContentConfig(
+                system_instruction=TUTOR_SYSTEM_PROMPT,
+                max_output_tokens=MAX_ANSWER_TOKENS,
+                temperature=0.3,
+            ),
+        )
+    )
+    async for chunk in stream:
         if chunk.text:
             yield chunk.text
 
@@ -494,16 +599,18 @@ async def _guard_stream(gen: AsyncGenerator[str, None]) -> AsyncGenerator[str, N
 
 async def _extract_image_text(data: bytes, mime: str) -> str:
     client = _get_gemini_client()
-    resp = await client.aio.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[
-            genai_types.Part(inline_data=genai_types.Blob(mime_type=mime, data=data)),
-            genai_types.Part(text=(
-                "Transcribe all text, formulas and diagram labels in this image faithfully. "
-                "Output only the transcription."
-            )),
-        ],
-        config=genai_types.GenerateContentConfig(max_output_tokens=2048, temperature=0.0),
+    resp = await _gemini_with_timeout(
+        client.aio.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                genai_types.Part(inline_data=genai_types.Blob(mime_type=mime, data=data)),
+                genai_types.Part(text=(
+                    "Transcribe all text, formulas and diagram labels in this image faithfully. "
+                    "Output only the transcription."
+                )),
+            ],
+            config=genai_types.GenerateContentConfig(max_output_tokens=2048, temperature=0.0),
+        )
     )
     return (resp.text or "").strip()
 
@@ -543,12 +650,14 @@ async def _generate_quiz_groq(messages: list[dict]) -> dict:
 
 async def _generate_quiz_gemini(context_block: str) -> dict:
     client = _get_gemini_client()
-    resp = await client.aio.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=f"Generate a quiz from these study notes:\n\n{context_block}",
-        config=genai_types.GenerateContentConfig(
-            system_instruction=QUIZ_SYSTEM_PROMPT, max_output_tokens=2048, temperature=0.5,
-        ),
+    resp = await _gemini_with_timeout(
+        client.aio.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=f"Generate a quiz from these study notes:\n\n{context_block}",
+            config=genai_types.GenerateContentConfig(
+                system_instruction=QUIZ_SYSTEM_PROMPT, max_output_tokens=2048, temperature=0.5,
+            ),
+        )
     )
     return _parse_quiz(resp.text)
 
@@ -614,7 +723,6 @@ async def create_session(
                 detail=f"Your {plan} plan allows {daily_uploads} new sessions per day. Try again tomorrow.",
             )
 
-    # Opportunistic cleanup on session creation too
     _maybe_schedule_cleanup()
 
     extracted_text: str | None = None
@@ -633,8 +741,6 @@ async def create_session(
         video_id   = _extract_youtube_id(stored_url)
         is_youtube = bool(video_id)
 
-        # Use Gemini URL-context for both YouTube and regular URLs —
-        # avoids youtube_transcript_api being blocked on cloud servers.
         extracted_text = await _extract_url_with_gemini(stored_url, is_youtube=is_youtube)
         if is_youtube:
             source_type = "youtube"
@@ -691,14 +797,16 @@ async def create_session(
     extracted_text = extracted_text[:MAX_TEXT_CHARS]
 
     session_id = str(uuid.uuid4())
+    now_iso    = datetime.now(timezone.utc).isoformat()
     try:
         await _run(_sync_insert_session, {
-            "id":             session_id,
-            "user_id":        user_id,
-            "title":          title.strip()[:120],
-            "source_type":    source_type,
-            "extracted_text": extracted_text,
-            "source_url":     stored_url,
+            "id":               session_id,
+            "user_id":          user_id,
+            "title":            title.strip()[:120],
+            "source_type":      source_type,
+            "extracted_text":   extracted_text,
+            "source_url":       stored_url,
+            "last_active_at":   now_iso,
         })
     except Exception:
         raise HTTPException(
@@ -747,8 +855,10 @@ async def study_chat(
     session        = await _get_session(session_id, user_id)
     extracted_text = session.get("extracted_text") or ""
 
-    # Fire background cleanup occasionally
     _maybe_schedule_cleanup()
+
+    # Touch last_active_at so the session's inactivity clock resets.
+    asyncio.create_task(_run(_sync_touch_session, session_id))
 
     if mode != "quiz":
         refusal = safety_refusal(message)
@@ -788,11 +898,11 @@ async def study_chat(
             print(f"[quiz failed] {e}")
             raise HTTPException(status_code=502, detail="Quiz generation failed. Please try again.")
 
+        # Store a compact stub — not the full JSON blob.
         await _save_messages(session_id, user_id, [
             {"role": "user",      "content": "[Quiz requested]"},
-            {"role": "assistant", "content": f"__QUIZ__:{json.dumps(quiz_data)}"},
+            {"role": "assistant", "content": QUIZ_MESSAGE_STUB},
         ])
-        # Prune after saving
         asyncio.create_task(_run(_sync_prune_session_messages, session_id))
         return JSONResponse({"type": "quiz", "data": quiz_data})
 
@@ -837,7 +947,6 @@ async def study_chat(
                 yield msg
         if ai_text:
             await _save_messages(session_id, user_id, [{"role": "assistant", "content": ai_text}])
-            # Prune the session's messages to stay within the cap
             asyncio.create_task(_run(_sync_prune_session_messages, session_id))
 
     return StreamingResponse(stream(), media_type="text/plain")
@@ -845,9 +954,9 @@ async def study_chat(
 
 @router.get("/limits")
 async def get_cram_limits(user_id: str = Depends(get_current_user)):
-    limits        = get_user_limits(user_id)
-    has_access    = bool(limits.get("cram_access"))
-    sessions_used = await _run(_sync_count_sessions, user_id) if has_access else 0
+    limits         = get_user_limits(user_id)
+    has_access     = bool(limits.get("cram_access"))
+    sessions_used  = await _run(_sync_count_sessions, user_id) if has_access else 0
     messages_today = await _run(_sync_count_user_messages_today, user_id) if has_access else 0
     return {
         "plan":                limits.get("plan", "free"),
@@ -874,7 +983,6 @@ async def list_sessions(user_id: str = Depends(get_current_user)):
 async def delete_session(session_id: str, user_id: str = Depends(get_current_user)):
     _get_cram_limits(user_id)
     try:
-        # Delete messages first, then the session row
         await _run(_sync_delete_session_messages, session_id)
         await _run(_sync_delete_session, session_id, user_id)
         return {"deleted": True}
