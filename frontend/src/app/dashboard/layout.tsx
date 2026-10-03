@@ -1,9 +1,53 @@
+// app/dashboard/layout.tsx
+// ─────────────────────────────────────────────────────────────────────────────
+// Two responsibilities:
+//   1. Wrap all dashboard pages in QueryClientProvider (fixes the build error).
+//   2. Run inactivity logout + single-device session guard for every page.
+//
+// File structure expected:
+//   app/
+//     dashboard/
+//       layout.tsx   ← this file
+//       page.tsx
+//       courses/
+//         page.tsx
+//         ...
+
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createClient } from "@/utils/supabase/client";
+
+// ── QueryClient (one per browser session) ─────────────────────────────────────
+
+function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        // Don't refetch on window focus in a student app — less jarring
+        refetchOnWindowFocus: false,
+        // Keep data fresh for 5 minutes
+        staleTime: 5 * 60 * 1000,
+        retry: 1,
+      },
+    },
+  });
+}
+
+// Singleton so navigating between pages doesn't throw away cached data.
+let browserQueryClient: QueryClient | undefined;
+
+function getQueryClient() {
+  if (typeof window === "undefined") {
+    // Server: always create a new client (never reuse across requests)
+    return makeQueryClient();
+  }
+  if (!browserQueryClient) browserQueryClient = makeQueryClient();
+  return browserQueryClient;
+}
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -69,7 +113,6 @@ function useInactivityLogout(onLogout: () => Promise<void>) {
   }, [clearAllTimers, startCountdown, doLogout]);
 
   useEffect(() => {
-    // If the user was away too long (tab close + reopen, phone sleep, etc.)
     const lastActive = sessionStorage.getItem("sp_last_active");
     if (lastActive && Date.now() - Number(lastActive) >= INACTIVITY_TIMEOUT_MS) {
       doLogout();
@@ -107,15 +150,12 @@ function useInactivityLogout(onLogout: () => Promise<void>) {
 }
 
 // ── Session guard hook ─────────────────────────────────────────────────────────
-// Listens for Supabase SIGNED_OUT (fired when backend revokes the session
-// because another device logged in) and kicks the user to the conflict page.
 
 function useSessionGuard(
   supabase: ReturnType<typeof createClient>,
   onKick: () => void,
 ) {
   useEffect(() => {
-    // Assign a stable device ID for this browser
     if (!localStorage.getItem("sp_device_id")) {
       localStorage.setItem("sp_device_id", crypto.randomUUID());
     }
@@ -129,8 +169,6 @@ function useSessionGuard(
 }
 
 // ── Patched fetch ──────────────────────────────────────────────────────────────
-// Sends X-Device-Id on every request to your API so the backend can compare
-// it against profiles.active_device_id and return 401 if it differs.
 
 function usePatchedFetch() {
   useEffect(() => {
@@ -169,7 +207,7 @@ function InactivityWarning({
   onStay: () => void;
   onLogout: () => void;
 }) {
-  const pct = (countdown / 60) * 100;
+  const pct      = (countdown / 60) * 100;
   const isUrgent = countdown <= 10;
 
   return (
@@ -178,19 +216,12 @@ function InactivityWarning({
         className="w-full max-w-sm rounded-3xl border p-7 shadow-2xl text-center"
         style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
       >
-        {/* Countdown ring */}
         <div className="mb-4 flex justify-center">
           <div className="relative flex h-16 w-16 items-center justify-center">
             <svg className="-rotate-90 absolute inset-0" viewBox="0 0 64 64">
+              <circle cx="32" cy="32" r="28" fill="none" stroke="var(--sp-ring-track)" strokeWidth="4"/>
               <circle
-                cx="32" cy="32" r="28"
-                fill="none"
-                stroke="var(--sp-ring-track)"
-                strokeWidth="4"
-              />
-              <circle
-                cx="32" cy="32" r="28"
-                fill="none"
+                cx="32" cy="32" r="28" fill="none"
                 stroke={isUrgent ? "#EF4444" : "#F59E0B"}
                 strokeWidth="4"
                 strokeDasharray={`${(pct / 100) * 175.9} 175.9`}
@@ -198,28 +229,18 @@ function InactivityWarning({
                 style={{ transition: "stroke-dasharray 1s linear" }}
               />
             </svg>
-            <LogOut
-              className="h-5 w-5"
-              style={{ color: isUrgent ? "#EF4444" : "#F59E0B" }}
-            />
+            <LogOut className="h-5 w-5" style={{ color: isUrgent ? "#EF4444" : "#F59E0B" }}/>
           </div>
         </div>
 
-        <h2
-          className="text-base font-extrabold mb-1"
-          style={{ color: "var(--sp-text)" }}
-        >
+        <h2 className="text-base font-extrabold mb-1" style={{ color: "var(--sp-text)" }}>
           Still there?
         </h2>
         <p className="text-xs mb-1" style={{ color: "var(--sp-text-3)" }}>
           You&apos;ve been inactive for a while.
         </p>
-        <p
-          className="text-sm font-bold mb-5"
-          style={{ color: isUrgent ? "#EF4444" : "var(--sp-text-2)" }}
-        >
-          Logging you out in{" "}
-          <span className="tabular-nums">{countdown}s</span>
+        <p className="text-sm font-bold mb-5" style={{ color: isUrgent ? "#EF4444" : "var(--sp-text-2)" }}>
+          Logging you out in <span className="tabular-nums">{countdown}s</span>
         </p>
 
         <button
@@ -241,7 +262,6 @@ function InactivityWarning({
 }
 
 // ── Session-conflict banner ────────────────────────────────────────────────────
-// Shown briefly before the redirect fires.
 
 function ConflictBanner() {
   return (
@@ -252,7 +272,7 @@ function ConflictBanner() {
       >
         <div className="mb-4 flex justify-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-red-500/10">
-            <LogOut className="h-6 w-6 text-red-500" />
+            <LogOut className="h-6 w-6 text-red-500"/>
           </div>
         </div>
         <h2 className="text-base font-extrabold mb-1" style={{ color: "var(--sp-text)" }}>
@@ -267,40 +287,30 @@ function ConflictBanner() {
   );
 }
 
-// ── Layout ─────────────────────────────────────────────────────────────────────
+// ── Inner layout (needs QueryClient already in context) ───────────────────────
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+function DashboardGuard({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
   const router   = useRouter();
   const [kicked, setKicked] = useState(false);
 
-  // Attach X-Device-Id to all API requests
   usePatchedFetch();
 
-  // Sign-out callback used by both hooks
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
     router.push("/auth/login?reason=timeout");
   }, [supabase, router]);
 
-  // Inactivity logout
   const { showWarning, countdown, stayLoggedIn } = useInactivityLogout(signOut);
 
-  // Single-device session guard
   useSessionGuard(supabase, () => {
     setKicked(true);
-    // Small delay so the banner renders before the push
     setTimeout(() => router.push("/auth/login?reason=conflict"), 2000);
   });
 
   return (
     <>
       {kicked && <ConflictBanner />}
-
       {showWarning && !kicked && (
         <InactivityWarning
           countdown={countdown}
@@ -308,8 +318,23 @@ export default function DashboardLayout({
           onLogout={signOut}
         />
       )}
-
       {children}
     </>
+  );
+}
+
+// ── Root layout export ─────────────────────────────────────────────────────────
+
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const queryClient = getQueryClient();
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <DashboardGuard>{children}</DashboardGuard>
+    </QueryClientProvider>
   );
 }
