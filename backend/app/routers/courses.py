@@ -19,6 +19,11 @@ async def search_courses(
     limit: int = Query(10, ge=1, le=30),
     user_id: str = Depends(get_current_user),
 ):
+    """
+    Search courses across ALL departments and institutions.
+    Matches on: course name, course code pattern, department name,
+    institution name.
+    """
     raw = q.strip()
     if not raw:
         return {"courses": []}
@@ -28,7 +33,7 @@ async def search_courses(
 
     def normalize(rows: list[dict]):
         for r in rows:
-            if r["id"] in seen_ids:
+            if not r or r.get("id") in seen_ids:
                 continue
             seen_ids.add(r["id"])
             dept = r.get("department") or {}
@@ -36,21 +41,52 @@ async def search_courses(
             courses.append({
                 "id":          r["id"],
                 "name":        r["name"],
-                "code":        None,
                 "department":  dept.get("name"),
                 "institution": inst.get("name"),
             })
 
-    # Primary search
-    res = (
-        supabase.table("courses")
-        .select("id, name, department:departments(name, institution:institutions(name))")
-        .ilike("name", f"%{raw}%")
-        .order("name")
-        .limit(limit)
-        .execute()
-    )
-    normalize(res.data or [])
+    def fetch_by_name():
+        return (
+            supabase.table("courses")
+            .select(
+                "id, name, "
+                "department:departments(name, institution:institutions(name))"
+            )
+            .ilike("name", f"%{raw}%")
+            .order("name")
+            .limit(limit)
+            .execute()
+        )
+
+    def fetch_departments():
+        return (
+            supabase.table("departments")
+            .select("id, name, institution:institutions(name)")
+            .ilike("name", f"%{raw}%")
+            .limit(15)
+            .execute()
+        )
+
+    def fetch_institutions():
+        return (
+            supabase.table("institutions")
+            .select("id, name")
+            .ilike("name", f"%{raw}%")
+            .limit(10)
+            .execute()
+        )
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        name_future = pool.submit(fetch_by_name)
+        dept_future = pool.submit(fetch_departments)
+        inst_future = pool.submit(fetch_institutions)
+
+        name_res = name_future.result()
+        dept_res = dept_future.result()
+        inst_res = inst_future.result()
+
+    # Courses matching by name
+    normalize(name_res.data or [])
 
     # If looks like a course code (e.g. MTH201), also try spaced variant
     code_like = re.match(r'^([a-zA-Z]+)(\d+.*)$', raw)
@@ -58,7 +94,10 @@ async def search_courses(
         spaced = f"{code_like.group(1)} {code_like.group(2)}"
         res2 = (
             supabase.table("courses")
-            .select("id, name, department:departments(name, institution:institutions(name))")
+            .select(
+                "id, name, "
+                "department:departments(name, institution:institutions(name))"
+            )
             .ilike("name", f"%{spaced}%")
             .order("name")
             .limit(limit)
@@ -66,7 +105,37 @@ async def search_courses(
         )
         normalize(res2.data or [])
 
+    # Collect department IDs from dept name matches
+    dept_ids: list[str] = [d["id"] for d in (dept_res.data or [])]
+
+    # From institution matches, get their department IDs
+    inst_ids = [i["id"] for i in (inst_res.data or [])]
+    if inst_ids:
+        depts_from_inst = (
+            supabase.table("departments")
+            .select("id")
+            .in_("institution_id", inst_ids)
+            .execute()
+        )
+        dept_ids += [d["id"] for d in (depts_from_inst.data or [])]
+
+    # Fetch courses from all matched departments
+    if dept_ids and len(courses) < limit:
+        dept_courses_res = (
+            supabase.table("courses")
+            .select(
+                "id, name, "
+                "department:departments(name, institution:institutions(name))"
+            )
+            .in_("department_id", list(set(dept_ids)))
+            .order("name")
+            .limit(limit)
+            .execute()
+        )
+        normalize(dept_courses_res.data or [])
+
     return {"courses": courses[:limit]}
+
 
 # ── List courses (enrolled) ────────────────────────────────────────────────────
 
@@ -87,16 +156,16 @@ async def list_courses(user_id: str = Depends(get_current_user)):
 
     if not department_id:
         return {
-            "courses": [],
+            "courses":        [],
             "locked_courses": [],
-            "department_id": None,
-            "is_paid": True,
-            "plan": "free",
+            "department_id":  None,
+            "is_paid":        True,
+            "plan":           "free",
         }
 
     courses_res = (
         supabase.table("courses")
-        .select("id, name")          # no `code` column
+        .select("id, name")
         .eq("department_id", department_id)
         .order("name")
         .execute()
@@ -146,7 +215,7 @@ async def list_courses(user_id: str = Depends(get_current_user)):
         {
             "id":             c["id"],
             "name":           c["name"],
-            "code":           None,   # no column yet
+            "code":           None,
             "question_count": counts.get(c["id"], 0),
             "selected":       c["id"] in selected_ids,
         }
@@ -206,7 +275,7 @@ async def get_course_detail(
     try:
         course_res = (
             supabase.table("courses")
-            .select("id, name, department:departments(id, name)")   # no `code`
+            .select("id, name, department:departments(id, name)")
             .eq("id", course_id)
             .maybe_single()
             .execute()
