@@ -20,6 +20,9 @@ def _update_streak(user_id: str) -> dict:
     Read streak_current / streak_last_active from profiles,
     compare with today, update if needed, write back, return
     the updated streak dict.
+
+    Streak caps at 7 (one full week). Completing day 7 resets
+    to 1 on the next active day so the ring can cycle again.
     """
     today = date.today()
 
@@ -41,13 +44,16 @@ def _update_streak(user_id: str) -> dict:
         return {"streak_current": current, "streak_longest": longest}
 
     if last_date == today - timedelta(days=1):
-        # Consecutive day — extend streak
+        # Consecutive day — extend streak, rollover after 7
         current += 1
+        if current > 7:
+            current = 1
     else:
         # Missed a day (or first ever) — reset
         current = 1
 
-    longest = max(longest, current)
+    # longest maxes at 7 since that's a full week
+    longest = max(longest, min(current, 7))
 
     # Write back
     supabase.table("profiles").update({
