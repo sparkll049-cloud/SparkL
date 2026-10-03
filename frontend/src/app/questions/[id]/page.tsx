@@ -505,8 +505,10 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.detail || "Failed to submit. Please try again.");
       }
+      // ── FIX: parse JSON before entering setState callback ──
+      const newId = (await res.json()).id;
       setSubmissions(prev => [{
-        id: (await res.json()).id,
+        id: newId,
         status: "pending",
         feedback: null,
         extracted_text: text.trim() || null,
