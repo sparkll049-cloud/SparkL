@@ -53,7 +53,6 @@ export default function HeroSection() {
     <section className="relative overflow-hidden bg-white">
       {/* ── BACKGROUND ── */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        {/* Animated gradient orbs */}
         <motion.div
           animate={shouldReduceMotion ? {} : {
             opacity: [0.4, 0.65, 0.4],
@@ -80,8 +79,6 @@ export default function HeroSection() {
           transition={{ duration: 13, repeat: Infinity, ease: "easeInOut", delay: 3 }}
           className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-violet-100/40 blur-3xl"
         />
-
-        {/* Grid pattern overlay */}
         <div
           className="absolute inset-0 opacity-[0.018]"
           style={{
@@ -93,7 +90,7 @@ export default function HeroSection() {
       </div>
 
       {/* ── MAIN CONTENT ── */}
-      <div className="relative mx-auto flex min-h-[calc(100vh-80px)] max-w-7xl flex-col justify-center px-5 py-16 sm:px-8 sm:py-20 lg:grid lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:gap-16 lg:px-10 lg:py-0">
+      <div className="relative mx-auto max-w-7xl px-5 py-16 sm:px-8 sm:py-20 lg:grid lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:gap-16 lg:px-10 lg:py-24">
 
         {/* ── LEFT — COPY ── */}
         <motion.div
@@ -120,27 +117,28 @@ export default function HeroSection() {
           </motion.div>
 
           {/* Heading */}
-          <motion.h1
-            variants={fadeUp}
-            className="text-[3.5rem] font-black leading-[0.95] tracking-[-0.045em] text-slate-950 sm:text-6xl lg:text-[4.5rem] xl:text-[5rem]"
-          >
-            <motion.span
-              className="block"
-              initial={{ opacity: 0, x: -30 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.7, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
+          <div className="overflow-hidden">
+            <motion.h1
+              className="text-[3.5rem] font-black leading-[0.95] tracking-[-0.045em] text-slate-950 sm:text-6xl lg:text-[4.5rem] xl:text-[5rem]"
             >
-              Learn smarter.
-            </motion.span>
-            <motion.span
-              className="block text-blue-600"
-              initial={{ opacity: 0, x: -30 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.7, delay: 0.22, ease: [0.22, 1, 0.36, 1] }}
-            >
-              Grow together.
-            </motion.span>
-          </motion.h1>
+              <motion.span
+                className="block"
+                initial={{ opacity: 0, y: 40 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.7, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
+              >
+                Learn smarter.
+              </motion.span>
+              <motion.span
+                className="block text-blue-600"
+                initial={{ opacity: 0, y: 40 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.7, delay: 0.22, ease: [0.22, 1, 0.36, 1] }}
+              >
+                Grow together.
+              </motion.span>
+            </motion.h1>
+          </div>
 
           {/* Description */}
           <motion.p
@@ -235,9 +233,7 @@ export default function HeroSection() {
           <div className="relative">
             {/* Outer frame */}
             <motion.div
-              animate={shouldReduceMotion ? {} : {
-                y: [0, -6, 0],
-              }}
+              animate={shouldReduceMotion ? {} : { y: [0, -6, 0] }}
               transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
               className="rounded-[1.75rem] border border-slate-200 bg-slate-50 p-2.5 shadow-[0_32px_90px_-30px_rgba(15,23,42,0.4)]"
             >
@@ -297,7 +293,7 @@ export default function HeroSection() {
                   animate="visible"
                   className="grid gap-3 p-5 sm:grid-cols-2 sm:p-6"
                 >
-                  {/* Past Questions card */}
+                  {/* Past Questions */}
                   <motion.div
                     variants={previewItem}
                     whileHover={shouldReduceMotion ? {} : { y: -4, scale: 1.02, transition: { duration: 0.2 } }}
@@ -319,7 +315,7 @@ export default function HeroSection() {
                     </div>
                   </motion.div>
 
-                  {/* Community card */}
+                  {/* Community */}
                   <motion.div
                     variants={previewItem}
                     whileHover={shouldReduceMotion ? {} : { y: -4, scale: 1.02, transition: { duration: 0.2 } }}
@@ -378,8 +374,8 @@ export default function HeroSection() {
 
             {/* Floating notification */}
             <motion.div
-              initial={{ opacity: 0, y: 20, scale: 0.85, x: 10 }}
-              animate={{ opacity: 1, y: 0, scale: 1, x: 0 }}
+              initial={{ opacity: 0, y: 20, scale: 0.85 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={{ delay: 1.2, duration: 0.6, type: "spring", stiffness: 200, damping: 20 }}
               whileHover={shouldReduceMotion ? {} : { y: -3, scale: 1.03, transition: { duration: 0.2 } }}
               className="absolute -right-3 top-14 hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_16px_40px_-18px_rgba(15,23,42,0.35)] sm:block"
