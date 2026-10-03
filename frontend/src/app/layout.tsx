@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "katex/dist/katex.min.css";
 import "./globals.css";
+import CookieConsent from "@/components/CookieConsent";
 
 export const metadata: Metadata = {
   title: "SparkL - Learn Together, Grow Together",
@@ -41,7 +42,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="scroll-smooth">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        {children}
+        <CookieConsent />
+      </body>
     </html>
   );
 }
