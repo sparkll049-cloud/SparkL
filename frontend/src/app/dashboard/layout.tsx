@@ -670,7 +670,7 @@ function Sidebar({
           {user?.isAdmin && (
             <>
               <p className="px-3 pt-3 pb-1 text-[9px] font-black uppercase tracking-widest text-red-500">Admin</p>
-              <Link href="/dashboard/admin" onClick={onClose}
+              <Link href="/admin" onClick={onClose}
                 className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all"
                 style={{
                   background: pathname.startsWith("/dashboard/admin") ? "rgba(239,68,68,0.10)" : "transparent",
