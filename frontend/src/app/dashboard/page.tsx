@@ -10,7 +10,7 @@ import {
   Users, AlertCircle, Crown, Sparkles,
   Target, Trophy, Zap, Bell, BarChart2,
   CheckCircle2, Calendar, Award, ChevronUp, Timer,
-  LogOut, ShieldAlert,
+  Menu, X,
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import Image from "next/image";
@@ -58,236 +58,19 @@ interface Tier {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-// Inactivity timeout: 15 minutes in ms
-const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
-// Warning shown 60 seconds before forced logout
-const WARNING_BEFORE_MS = 60 * 1000;
+const COURSE_PALETTE = [
+  { accent: "#6366F1", light: "rgba(99,102,241,0.10)",  border: "rgba(99,102,241,0.20)"  },
+  { accent: "#0EA5E9", light: "rgba(14,165,233,0.10)",  border: "rgba(14,165,233,0.20)"  },
+  { accent: "#8B5CF6", light: "rgba(139,92,246,0.10)",  border: "rgba(139,92,246,0.20)"  },
+  { accent: "#10B981", light: "rgba(16,185,129,0.10)",  border: "rgba(16,185,129,0.20)"  },
+  { accent: "#F59E0B", light: "rgba(245,158,11,0.10)",  border: "rgba(245,158,11,0.20)"  },
+  { accent: "#EF4444", light: "rgba(239,68,68,0.10)",   border: "rgba(239,68,68,0.20)"   },
+];
 
-const ACTIVITY_EVENTS = [
-  "mousemove", "mousedown", "keydown", "touchstart", "scroll", "click",
-] as const;
-
-// ── Inactivity logout hook ────────────────────────────────────────────────────
-//
-// How it works:
-//   1. We listen for any user activity on the document.
-//   2. Each activity resets a 14-minute timer.
-//   3. After 14 minutes of silence, a 60-second countdown warning modal appears.
-//   4. If the user clicks "Stay logged in" the timer resets.
-//   5. If they do nothing (or close the tab and come back after the timeout has
-//      elapsed), Supabase signOut is called and they are pushed to /auth/login.
-//
-// Session storage key "sp_last_active" lets us detect "came back after a long
-// gap" even if the JS timer was killed (tab sleep, browser close, etc.).
-
-function useInactivityLogout(onLogout: () => Promise<void>) {
-  const [showWarning, setShowWarning] = useState(false);
-  const [countdown, setCountdown]    = useState(60);
-  const logoutTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const warningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const isMounted    = useRef(true);
-
-  const clearAllTimers = useCallback(() => {
-    if (logoutTimer.current)  clearTimeout(logoutTimer.current);
-    if (warningTimer.current) clearTimeout(warningTimer.current);
-    if (countdownRef.current) clearInterval(countdownRef.current);
-  }, []);
-
-  const doLogout = useCallback(async () => {
-    clearAllTimers();
-    sessionStorage.removeItem("sp_last_active");
-    await onLogout();
-  }, [clearAllTimers, onLogout]);
-
-  const startCountdown = useCallback(() => {
-    if (!isMounted.current) return;
-    setShowWarning(true);
-    setCountdown(60);
-    if (countdownRef.current) clearInterval(countdownRef.current);
-    countdownRef.current = setInterval(() => {
-      setCountdown(prev => {
-        if (prev <= 1) {
-          if (countdownRef.current) clearInterval(countdownRef.current);
-          doLogout();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  }, [doLogout]);
-
-  const resetTimer = useCallback(() => {
-    if (!isMounted.current) return;
-    clearAllTimers();
-    setShowWarning(false);
-    sessionStorage.setItem("sp_last_active", String(Date.now()));
-
-    warningTimer.current = setTimeout(() => {
-      startCountdown();
-    }, INACTIVITY_TIMEOUT_MS - WARNING_BEFORE_MS);
-
-    logoutTimer.current = setTimeout(() => {
-      doLogout();
-    }, INACTIVITY_TIMEOUT_MS);
-  }, [clearAllTimers, startCountdown, doLogout]);
-
-  // Check if user was away too long when tab regains focus / page loads
-  useEffect(() => {
-    const lastActive = sessionStorage.getItem("sp_last_active");
-    if (lastActive) {
-      const elapsed = Date.now() - Number(lastActive);
-      if (elapsed >= INACTIVITY_TIMEOUT_MS) {
-        doLogout();
-        return;
-      }
-    }
-    resetTimer();
-
-    const handler = () => resetTimer();
-    ACTIVITY_EVENTS.forEach(ev => document.addEventListener(ev, handler, { passive: true }));
-
-    // Also reset when user comes back to the tab
-    const visibilityHandler = () => {
-      if (document.visibilityState === "visible") {
-        const last = sessionStorage.getItem("sp_last_active");
-        if (last && Date.now() - Number(last) >= INACTIVITY_TIMEOUT_MS) {
-          doLogout();
-        } else {
-          resetTimer();
-        }
-      }
-    };
-    document.addEventListener("visibilitychange", visibilityHandler);
-
-    return () => {
-      isMounted.current = false;
-      clearAllTimers();
-      ACTIVITY_EVENTS.forEach(ev => document.removeEventListener(ev, handler));
-      document.removeEventListener("visibilitychange", visibilityHandler);
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  return { showWarning, countdown, stayLoggedIn: resetTimer };
-}
-
-// ── Inactivity warning modal ───────────────────────────────────────────────────
-
-function InactivityWarning({
-  countdown, onStay, onLogout,
-}: { countdown: number; onStay: () => void; onLogout: () => void }) {
-  const pct = (countdown / 60) * 100;
-  return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
-      <div
-        className="w-full max-w-sm rounded-3xl border p-7 shadow-2xl text-center"
-        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-      >
-        <div className="mb-4 flex justify-center">
-          <div className="relative flex h-16 w-16 items-center justify-center">
-            <svg className="-rotate-90 absolute inset-0" viewBox="0 0 64 64">
-              <circle cx="32" cy="32" r="28" fill="none" stroke="var(--sp-ring-track)" strokeWidth="4"/>
-              <circle
-                cx="32" cy="32" r="28" fill="none"
-                stroke={countdown <= 10 ? "#EF4444" : "#F59E0B"}
-                strokeWidth="4"
-                strokeDasharray={`${(pct / 100) * 175.9} 175.9`}
-                strokeLinecap="round"
-                style={{ transition: "stroke-dasharray 1s linear" }}
-              />
-            </svg>
-            <LogOut className="h-5 w-5" style={{ color: countdown <= 10 ? "#EF4444" : "#F59E0B" }} />
-          </div>
-        </div>
-        <h2 className="text-base font-extrabold mb-1" style={{ color: "var(--sp-text)" }}>
-          Still there?
-        </h2>
-        <p className="text-xs mb-1" style={{ color: "var(--sp-text-3)" }}>
-          You&apos;ve been inactive for a while.
-        </p>
-        <p className="text-sm font-bold mb-5" style={{ color: countdown <= 10 ? "#EF4444" : "var(--sp-text-2)" }}>
-          Logging you out in <span className="tabular-nums">{countdown}s</span>
-        </p>
-        <button
-          onClick={onStay}
-          className="w-full rounded-2xl bg-indigo-600 py-3 text-sm font-bold text-white hover:bg-indigo-500 transition mb-2"
-        >
-          Stay logged in
-        </button>
-        <button
-          onClick={onLogout}
-          className="w-full rounded-2xl py-3 text-xs font-semibold transition hover:bg-red-500/10"
-          style={{ color: "var(--sp-text-3)" }}
-        >
-          Log out now
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Duplicate-session banner ───────────────────────────────────────────────────
-//
-// NOTE: True single-device enforcement requires a backend column like
-// `profiles.active_session_token` that is set on login and checked on every
-// API request.  The frontend's job is only to:
-//   a) Store a device token in localStorage on first load.
-//   b) Listen to Supabase's SIGNED_OUT / TOKEN_REFRESHED events — if the
-//      server revokes the session (because another device signed in), Supabase
-//      will emit SIGNED_OUT and we redirect to login.
-//   c) Show a banner when we detect we have been kicked.
-//
-// Backend steps required (outside this file):
-//   1. Add column: profiles.active_device_id TEXT
-//   2. On login (POST /auth/login or Supabase callback): save a random UUID
-//      as active_device_id for that user.
-//   3. On every FastAPI request via get_current_user_id: compare the
-//      X-Device-Id header (sent below) to profiles.active_device_id.
-//      If they differ, return HTTP 401 { "detail": "session_conflict" }.
-//   4. The fetch wrapper below detects 401 session_conflict and calls signOut.
-
-function useSessionGuard(supabase: ReturnType<typeof createClient>, onKick: () => void) {
-  useEffect(() => {
-    // Assign a stable device ID for this browser
-    let deviceId = localStorage.getItem("sp_device_id");
-    if (!deviceId) {
-      deviceId = crypto.randomUUID();
-      localStorage.setItem("sp_device_id", deviceId);
-    }
-
-    // Listen for Supabase auth events — a remote sign-out or token revocation
-    // will arrive here first
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_OUT") {
-        onKick();
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [supabase, onKick]);
-}
-
-// ── Patched fetch ──────────────────────────────────────────────────────────────
-// Attaches X-Device-Id to every request to your API so the backend can enforce
-// single-device sessions.  Call this once at the top of the component.
-
-function usePatchedFetch() {
-  useEffect(() => {
-    const deviceId = localStorage.getItem("sp_device_id") ?? "";
-    const orig = window.fetch.bind(window);
-    window.fetch = function(input: RequestInfo | URL, init: RequestInit = {}) {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
-      if (url.includes(process.env.NEXT_PUBLIC_API_URL ?? "__API__")) {
-        init = {
-          ...init,
-          headers: { ...(init.headers ?? {}), "X-Device-Id": deviceId },
-        };
-      }
-      return orig(input, init);
-    };
-    return () => { window.fetch = orig; };
-  }, []);
-}
+const TIER_COLORS: Record<string, string> = {
+  unknown: "#64748B", free: "#64748B", trial: "#F59E0B",
+  basic: "#0EA5E9", pro: "#6366F1", premium: "#8B5CF6",
+};
 
 // ── API helpers ────────────────────────────────────────────────────────────────
 
@@ -345,11 +128,6 @@ function useCountUp(target: number, duration = 1200) {
 
 // ── Tier helpers ───────────────────────────────────────────────────────────────
 
-const TIER_COLORS: Record<string, string> = {
-  unknown: "#64748B", free: "#64748B", trial: "#F59E0B",
-  basic: "#0EA5E9", pro: "#6366F1", premium: "#8B5CF6",
-};
-
 function daysUntil(iso?: string | null): number | null {
   if (!iso) return null;
   const t = new Date(iso).getTime();
@@ -382,15 +160,6 @@ function getTier(sub: SubStatus | null): Tier {
 }
 
 // ── Course helpers ─────────────────────────────────────────────────────────────
-
-const COURSE_PALETTE = [
-  { accent: "#6366F1", light: "rgba(99,102,241,0.10)",  border: "rgba(99,102,241,0.20)"  },
-  { accent: "#0EA5E9", light: "rgba(14,165,233,0.10)",  border: "rgba(14,165,233,0.20)"  },
-  { accent: "#8B5CF6", light: "rgba(139,92,246,0.10)",  border: "rgba(139,92,246,0.20)"  },
-  { accent: "#10B981", light: "rgba(16,185,129,0.10)",  border: "rgba(16,185,129,0.20)"  },
-  { accent: "#F59E0B", light: "rgba(245,158,11,0.10)",  border: "rgba(245,158,11,0.20)"  },
-  { accent: "#EF4444", light: "rgba(239,68,68,0.10)",   border: "rgba(239,68,68,0.20)"   },
-];
 
 function courseInitials(name: string): string {
   return name.split(" ").filter(w => /^[a-zA-Z]/.test(w)).map(w => w[0].toUpperCase()).slice(0, 2).join("") || name.slice(0, 2).toUpperCase();
@@ -660,7 +429,7 @@ function TierCard({ tier }: { tier: Tier }) {
   );
 }
 
-// ── Today focus / Quick action / Empty state / Streak section (unchanged) ─────
+// ── Today focus ───────────────────────────────────────────────────────────────
 
 function TodayFocus({ courses }: { courses: Course[] }) {
   const [idx] = useState(() => Math.floor(Math.random() * courses.length));
@@ -737,6 +506,140 @@ function StreakSection({ streak }: { streak: number }) {
   );
 }
 
+// ── Mobile nav drawer ─────────────────────────────────────────────────────────
+
+function MobileDrawer({
+  open,
+  onClose,
+  profile,
+  avatarUrl,
+  tier,
+  streak,
+  xp,
+}: {
+  open: boolean;
+  onClose: () => void;
+  profile: Profile;
+  avatarUrl: string | null;
+  tier: Tier;
+  streak: number;
+  xp: number;
+}) {
+  const firstName = (profile.full_name ?? "there").split(" ")[0];
+  const level = Math.floor(xp / 100) + 1;
+  const LEVEL_NAMES = ["Newcomer", "Explorer", "Scholar", "Achiever", "Expert", "Master", "Legend"];
+  const levelName = LEVEL_NAMES[Math.min(level - 1, LEVEL_NAMES.length - 1)];
+
+  // Lock body scroll when open
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
+  const navLinks = [
+    { href: "/dashboard",         icon: <BookOpen className="h-4 w-4"/>,     label: "Home"          },
+    { href: "/dashboard/courses", icon: <BookOpen className="h-4 w-4"/>,     label: "Browse courses"  },
+    { href: "/dashboard/upload",  icon: <Upload className="h-4 w-4"/>,       label: "Upload paper"    },
+    { href: "/dashboard/subscribe", icon: <Crown className="h-4 w-4"/>,      label: "Plans & billing" },
+    { href: "/dashboard/profile", icon: <GraduationCap className="h-4 w-4"/>,label: "My profile"      },
+  ];
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm transition-opacity duration-300 lg:hidden"
+        style={{ opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none" }}
+        onClick={onClose}
+      />
+
+      {/* Drawer panel */}
+      <div
+        className="fixed inset-y-0 right-0 z-[81] flex w-72 flex-col shadow-2xl transition-transform duration-300 ease-out lg:hidden"
+        style={{
+          background: "var(--sp-bg-card)",
+          transform: open ? "translateX(0)" : "translateX(100%)",
+        }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b px-5 py-4" style={{ borderColor: "var(--sp-border)" }}>
+          <div className="flex items-center gap-2.5">
+            <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={28} src="/images/logo.jpg" width={28}/>
+            <span className="text-sm font-black" style={{ color: "var(--sp-text)" }}>SparkL</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-xl transition hover:bg-red-500/10"
+          >
+            <X className="h-4 w-4" style={{ color: "var(--sp-text-3)" }}/>
+          </button>
+        </div>
+
+        {/* Profile mini */}
+        <div className="border-b px-5 py-4" style={{ borderColor: "var(--sp-border)" }}>
+          <div className="flex items-center gap-3">
+            {avatarUrl ? (
+              <img src={avatarUrl} alt="Avatar" className="h-11 w-11 rounded-2xl object-cover ring-2 ring-indigo-500/20"/>
+            ) : (
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-black text-white">
+                {firstName.slice(0, 2).toUpperCase()}
+              </div>
+            )}
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black" style={{ color: "var(--sp-text)" }}>{profile.full_name ?? firstName}</p>
+              <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>Level {level} · {levelName}</p>
+            </div>
+          </div>
+          {/* Tier pill */}
+          <Link
+            href="/dashboard/subscribe"
+            onClick={onClose}
+            className="mt-3 flex items-center gap-2 rounded-xl border px-3 py-2 transition hover:opacity-80"
+            style={{ background: `${tier.color}12`, borderColor: `${tier.color}38` }}
+          >
+            <span className="flex h-5 w-5 items-center justify-center rounded-lg text-white text-[10px]" style={{ background: tier.color }}>
+              {tier.isPaid ? <Crown className="h-3 w-3" fill="currentColor"/> : <Sparkles className="h-3 w-3"/>}
+            </span>
+            <span className="text-[11px] font-black" style={{ color: tier.color }}>{tier.label}</span>
+            <span className="ml-auto text-[10px]" style={{ color: "var(--sp-text-3)" }}>{tier.detail}</span>
+          </Link>
+        </div>
+
+        {/* Nav links */}
+        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
+          {navLinks.map(({ href, icon, label }) => (
+            <Link
+              key={href}
+              href={href}
+              onClick={onClose}
+              className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-all hover:bg-indigo-500/8"
+              style={{ color: "var(--sp-text-2)" }}
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-500">
+                {icon}
+              </span>
+              {label}
+            </Link>
+          ))}
+        </nav>
+
+        {/* Streak footer */}
+        <div className="border-t px-5 py-4" style={{ borderColor: "var(--sp-border)" }}>
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: streak >= 7 ? "rgba(245,158,11,0.15)" : "rgba(99,102,241,0.10)" }}>
+              <Flame className="h-4 w-4" style={{ color: streak >= 7 ? "#F59E0B" : "#6366F1" }}/>
+            </div>
+            <div>
+              <p className="text-xs font-black" style={{ color: "var(--sp-text)" }}>{streak} day streak</p>
+              <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>{streak >= 7 ? "🔥 Full week! Amazing!" : `${7 - streak} more to hit 7 days`}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function DashboardHomePage() {
@@ -747,22 +650,8 @@ export default function DashboardHomePage() {
   const [avatarUrl, setAvatarUrl]         = useState<string | null>(null);
   const [sub, setSub]                     = useState<SubStatus | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
+  const [drawerOpen, setDrawerOpen]       = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
-
-  // ── Attach device-id header to all API fetches ─────────────────────────────
-  usePatchedFetch();
-
-  // ── Sign-out helper ────────────────────────────────────────────────────────
-  const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
-    router.push("/auth/login?reason=timeout");
-  }, [supabase, router]);
-
-  // ── Inactivity logout (15 min) ─────────────────────────────────────────────
-  const { showWarning, countdown, stayLoggedIn } = useInactivityLogout(signOut);
-
-  // ── Single-device session guard ────────────────────────────────────────────
-  useSessionGuard(supabase, () => router.push("/auth/login?reason=conflict"));
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["dashboard-summary"],
@@ -841,14 +730,16 @@ export default function DashboardHomePage() {
         .no-scrollbar::-webkit-scrollbar { display: none; }
       `}</style>
 
-      {/* ── Inactivity warning modal ── */}
-      {showWarning && (
-        <InactivityWarning
-          countdown={countdown}
-          onStay={stayLoggedIn}
-          onLogout={signOut}
-        />
-      )}
+      {/* Mobile drawer */}
+      <MobileDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        profile={data.profile}
+        avatarUrl={avatarUrl}
+        tier={tier}
+        streak={streak}
+        xp={xp}
+      />
 
       {/* ══ TOPBAR ══ */}
       <header className="sticky top-0 z-40 border-b backdrop-blur-xl transition-colors" style={{ background: "var(--sp-header-bg)", borderColor: "var(--sp-border)" }}>
@@ -901,11 +792,13 @@ export default function DashboardHomePage() {
 
           <div className="flex items-center gap-2">
             <TierPill tier={tier}/>
+            {/* Bell — desktop only */}
             <button className="relative hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 sm:flex" style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
               <Bell className="h-4 w-4" style={{ color: "var(--sp-text-2)" }}/>
               <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-indigo-500"/>
             </button>
-            <Link href="/dashboard/profile">
+            {/* Avatar — desktop only */}
+            <Link href="/dashboard/profile" className="hidden sm:block">
               {avatarUrl ? (
                 <img src={avatarUrl} alt="Profile" className="h-9 w-9 rounded-xl object-cover ring-2 ring-indigo-500/30 transition hover:ring-indigo-500/60"/>
               ) : (
@@ -914,6 +807,15 @@ export default function DashboardHomePage() {
                 </div>
               )}
             </Link>
+            {/* Hamburger — mobile only */}
+            <button
+              onClick={() => setDrawerOpen(true)}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 sm:hidden"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
+              aria-label="Open menu"
+            >
+              <Menu className="h-4 w-4" style={{ color: "var(--sp-text-2)" }}/>
+            </button>
           </div>
         </div>
       </header>
