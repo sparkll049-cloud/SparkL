@@ -365,7 +365,7 @@ function SubscribePageInner() {
           }
           return originalFetch(input, init);
         };
-
+console.log("PV KEY:", process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY);
         const init = Checkout({
           api_key: process.env.NEXT_PUBLIC_PAYVESSEL_PUBLIC_KEY!,
         });
