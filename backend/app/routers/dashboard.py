@@ -95,7 +95,7 @@ def _fetch_summary(user_id: str) -> dict:
         return (
             supabase.table("profiles")
             .select(
-                "full_name, phone, "
+                "full_name, phone, is_admin, admin_role, "
                 "institution:institutions(name), "
                 "department:departments(name), "
                 "level:levels(name), "
