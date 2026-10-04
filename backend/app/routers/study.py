@@ -96,7 +96,7 @@ SESSION_INACTIVE_DAYS     = 30
 
 # ── AI knobs ───────────────────────────────────────────────────────────────────
 GROQ_MODEL              = "openai/gpt-oss-120b"
-GEMINI_MODEL            = "gemini-2.0-flash"
+GEMINI_MODEL            = "gemini-3.5-flash"
 GEMINI_REQUEST_TIMEOUT  = 30
 
 VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text", "url", "youtube"}
