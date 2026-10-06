@@ -1,7 +1,6 @@
-
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -31,7 +30,6 @@ interface CoursesResponse {
 interface SubscriptionStatus {
   is_paid: boolean; is_trial: boolean; trial_days_left?: number; plan: string;
 }
-// Shape returned by /api/courses/search
 interface ApiCourse {
   id: string; name: string; department?: string; institution?: string;
 }
@@ -199,19 +197,18 @@ function Banner({ tone, icon, title, sub, href, cta }: {
   );
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// ── Inner component (uses useSearchParams — must be inside Suspense) ───────────
 
-export default function CoursesPage() {
+function CoursesContent() {
   const supabase     = createClient();
   const router       = useRouter();
   const searchParams = useSearchParams();
 
-  const [subStatus, setSubStatus]       = useState<SubscriptionStatus | null>(null);
-  // Pre-fill search from ?q= URL param (this is what "See all results" sets)
-  const [search, setSearch]             = useState(() => searchParams.get("q") ?? "");
-  const [focused, setFocused]           = useState(false);
-  const [globalResults, setGlobalResults] = useState<ApiCourse[] | null>(null);
-  const [globalLoading, setGlobalLoading] = useState(false);
+  const [subStatus, setSubStatus]           = useState<SubscriptionStatus | null>(null);
+  const [search, setSearch]                 = useState(() => searchParams.get("q") ?? "");
+  const [focused, setFocused]               = useState(false);
+  const [globalResults, setGlobalResults]   = useState<ApiCourse[] | null>(null);
+  const [globalLoading, setGlobalLoading]   = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -232,7 +229,6 @@ export default function CoursesPage() {
     queryFn: () => fetchCourses(supabase, router),
   });
 
-  // ── Global search via /api/courses/search whenever query is set ────────────
   useEffect(() => {
     const q = search.trim();
     if (!q) { setGlobalResults(null); return; }
@@ -272,8 +268,6 @@ export default function CoursesPage() {
 
   const q = search.trim().toLowerCase();
 
-  // When a query is active, show global search results (all courses in DB).
-  // Fall back to local filter only while global results are still loading.
   const qNoSpace = q.replace(/\s/g, "");
   const localFiltered = q
     ? allCourses.filter(c =>
@@ -282,7 +276,6 @@ export default function CoursesPage() {
         c.name.toLowerCase().replace(/\s/g, "").includes(qNoSpace))
     : allCourses;
 
-  // What to actually render in the grid
   const isSearching       = q.length > 0;
   const searchResults     = globalResults ?? (globalLoading ? null : localFiltered);
   const showSearchResults = isSearching && searchResults !== null;
@@ -462,5 +455,15 @@ export default function CoursesPage() {
         )}
       </div>
     </div>
+  );
+}
+
+// ── Page export ───────────────────────────────────────────────────────────────
+
+export default function CoursesPage() {
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <CoursesContent />
+    </Suspense>
   );
 }
