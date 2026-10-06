@@ -3,7 +3,6 @@ Student-facing past-question API.
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 from uuid import UUID
 
@@ -116,79 +115,54 @@ async def search_questions(
     if not term:
         return {"results": [], "courses": [], "query": term}
 
-    def fetch_questions():
-        return (
-            supabase.table("past_questions")
-            .select(
-                "id, title, year, created_at, "
-                "course:courses(id, name, "
-                "  department:departments(name, "
-                "    institution:institutions(name)"
-                "  )"
-                ")"
-            )
-            .ilike("title", f"%{term}%")
-            .eq("status", "approved")
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
+    # ── Run queries sequentially to avoid hammering Supabase ──────────────────
+
+    questions_res = (
+        supabase.table("past_questions")
+        .select(
+            "id, title, year, created_at, "
+            "course:courses(id, name, "
+            "  department:departments(name, "
+            "    institution:institutions(name)"
+            "  )"
+            ")"
         )
+        .ilike("title", f"%{term}%")
+        .eq("status", "approved")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
 
-    def fetch_courses_by_name():
-        return (
-            supabase.table("courses")
-            .select(
-                "id, name, "
-                "department:departments(name, institution:institutions(name))"
-            )
-            .ilike("name", f"%{term}%")
-            .order("name")
-            .limit(limit)
-            .execute()
+    courses_res = (
+        supabase.table("courses")
+        .select(
+            "id, name, "
+            "department:departments(name, institution:institutions(name))"
         )
+        .ilike("name", f"%{term}%")
+        .order("name")
+        .limit(limit)
+        .execute()
+    )
 
-    def fetch_departments_by_name():
-        return (
-            supabase.table("departments")
-            .select("id, name, institution:institutions(name)")
-            .ilike("name", f"%{term}%")
-            .limit(15)
-            .execute()
-        )
+    depts_res = (
+        supabase.table("departments")
+        .select("id, name, institution:institutions(name)")
+        .ilike("name", f"%{term}%")
+        .limit(15)
+        .execute()
+    )
 
-    def fetch_institutions_by_name():
-        return (
-            supabase.table("institutions")
-            .select("id, name")
-            .ilike("name", f"%{term}%")
-            .limit(10)
-            .execute()
-        )
+    inst_res = (
+        supabase.table("institutions")
+        .select("id, name")
+        .ilike("name", f"%{term}%")
+        .limit(10)
+        .execute()
+    )
 
-    def fetch_junction_courses():
-        return (
-            supabase.table("course_departments")
-            .select(
-                "courses(id, name, "
-                "  department:departments(name, institution:institutions(name))"
-                ")"
-            )
-            .limit(limit * 3)
-            .execute()
-        )
-
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        q_future = pool.submit(fetch_questions)
-        c_future = pool.submit(fetch_courses_by_name)
-        d_future = pool.submit(fetch_departments_by_name)
-        i_future = pool.submit(fetch_institutions_by_name)
-        j_future = pool.submit(fetch_junction_courses)
-
-        questions_res = q_future.result()
-        courses_res   = c_future.result()
-        depts_res     = d_future.result()
-        inst_res      = i_future.result()
-        junction_res  = j_future.result()
+    # ── Collect department IDs from dept + institution matches ─────────────────
 
     dept_ids: list[str] = [d["id"] for d in (depts_res.data or [])]
 
@@ -217,105 +191,12 @@ async def search_questions(
         )
         dept_courses = dept_courses_res.data or []
 
-    # Filter junction courses by search term
-    junction_courses: list[dict] = []
-    for row in (junction_res.data or []):
-        c = row.get("courses")
-        if c and term.lower() in c.get("name", "").lower():
-            junction_courses.append(c)
-
-    seen_course_ids: set[str] = set()
-    merged_courses: list[dict] = []
-
-    for row in (courses_res.data or []) + dept_courses + junction_courses:
-        if not row or row.get("id") in seen_course_ids:
-            continue
-        seen_course_ids.add(row["id"])
-        dept = row.get("department") or {}
-        inst = dept.get("institution") or {}
-        merged_courses.append({
-            "id":          row["id"],
-            "name":        row["name"],
-            "department":  dept.get("name"),
-            "institution": inst.get("name"),
-        })
-
-    shaped_questions: list[dict] = []
-    for row in (questions_res.data or []):
-        course = row.get("course") or {}
-        dept   = course.get("department") or {}
-        inst   = dept.get("institution") or {}
-        shaped_questions.append({
-            "id":    row["id"],
-            "title": row["title"],
-            "year":  row.get("year"),
-            "course": {
-                "id":          course.get("id"),
-                "name":        course.get("name"),
-                "department":  dept.get("name"),
-                "institution": inst.get("name"),
-            },
-        })
-
-    return {
-        "results": shaped_questions[:limit],
-        "courses": merged_courses[:limit],
-        "query":   term,
-    }
-    # Run all four lookups in parallel
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        q_future    = pool.submit(fetch_questions)
-        c_future    = pool.submit(fetch_courses_by_name)
-        d_future    = pool.submit(fetch_departments_by_name)
-        i_future    = pool.submit(fetch_institutions_by_name)
-
-        questions_res = q_future.result()
-        courses_res   = c_future.result()
-        depts_res     = d_future.result()
-        inst_res      = i_future.result()
-
-    # ── Collect department IDs from dept + institution matches ─────────────────
-
-    dept_ids: list[str] = [
-        d["id"] for d in (depts_res.data or [])
-    ]
-
-    # For each matched institution, fetch its department IDs
-    inst_ids = [i["id"] for i in (inst_res.data or [])]
-    if inst_ids:
-        depts_from_inst = (
-            supabase.table("departments")
-            .select("id")
-            .in_("institution_id", inst_ids)
-            .execute()
-        )
-        dept_ids += [d["id"] for d in (depts_from_inst.data or [])]
-
-    # Fetch courses belonging to matched departments
-    dept_courses: list[dict] = []
-    if dept_ids:
-        dept_courses_res = (
-            supabase.table("courses")
-            .select(
-                "id, name, "
-                "department:departments(name, institution:institutions(name))"
-            )
-            .in_("department_id", list(set(dept_ids)))
-            .order("name")
-            .limit(limit)
-            .execute()
-        )
-        dept_courses = dept_courses_res.data or []
-
     # ── Deduplicate and shape course results ───────────────────────────────────
 
     seen_course_ids: set[str] = set()
     merged_courses: list[dict] = []
 
-    for row in (
-        (courses_res.data or []) +
-        dept_courses
-    ):
+    for row in (courses_res.data or []) + dept_courses:
         if not row or row.get("id") in seen_course_ids:
             continue
         seen_course_ids.add(row["id"])
