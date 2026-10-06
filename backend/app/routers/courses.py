@@ -19,11 +19,6 @@ async def search_courses(
     limit: int = Query(10, ge=1, le=30),
     user_id: str = Depends(get_current_user),
 ):
-    """
-    Search courses across ALL departments and institutions.
-    Matches on: course name, course code pattern, department name,
-    institution name.
-    """
     raw = q.strip()
     if not raw:
         return {"courses": []}
@@ -76,19 +71,32 @@ async def search_courses(
             .execute()
         )
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        name_future = pool.submit(fetch_by_name)
-        dept_future = pool.submit(fetch_departments)
-        inst_future = pool.submit(fetch_institutions)
+    def fetch_via_junction():
+        return (
+            supabase.table("course_departments")
+            .select(
+                "courses(id, name, "
+                "  department:departments(name, institution:institutions(name))"
+                ")"
+            )
+            .limit(limit * 3)
+            .execute()
+        )
 
-        name_res = name_future.result()
-        dept_res = dept_future.result()
-        inst_res = inst_future.result()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        name_future     = pool.submit(fetch_by_name)
+        dept_future     = pool.submit(fetch_departments)
+        inst_future     = pool.submit(fetch_institutions)
+        junction_future = pool.submit(fetch_via_junction)
 
-    # Courses matching by name
+        name_res     = name_future.result()
+        dept_res     = dept_future.result()
+        inst_res     = inst_future.result()
+        junction_res = junction_future.result()
+
     normalize(name_res.data or [])
 
-    # If looks like a course code (e.g. MTH201), also try spaced variant
+    # Course code variant (e.g. MTH201 → MTH 201)
     code_like = re.match(r'^([a-zA-Z]+)(\d+.*)$', raw)
     if code_like and len(courses) < limit:
         spaced = f"{code_like.group(1)} {code_like.group(2)}"
@@ -105,10 +113,14 @@ async def search_courses(
         )
         normalize(res2.data or [])
 
-    # Collect department IDs from dept name matches
+    # Junction courses filtered by search term
+    for row in (junction_res.data or []):
+        c = row.get("courses")
+        if c and raw.lower() in c.get("name", "").lower():
+            normalize([c])
+
     dept_ids: list[str] = [d["id"] for d in (dept_res.data or [])]
 
-    # From institution matches, get their department IDs
     inst_ids = [i["id"] for i in (inst_res.data or [])]
     if inst_ids:
         depts_from_inst = (
@@ -119,7 +131,6 @@ async def search_courses(
         )
         dept_ids += [d["id"] for d in (depts_from_inst.data or [])]
 
-    # Fetch courses from all matched departments
     if dept_ids and len(courses) < limit:
         dept_courses_res = (
             supabase.table("courses")
@@ -141,6 +152,107 @@ async def search_courses(
 
 @router.get("")
 async def list_courses(user_id: str = Depends(get_current_user)):
+    """
+    Returns ALL courses the user enrolled in via user_courses,
+    regardless of department. Falls back to department courses if
+    user_courses is empty.
+    """
+
+    # ── Step 1: check user_courses ────────────────────────────────────────────
+    uc_res = (
+        supabase.table("user_courses")
+        .select("course_id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    selected_ids = [row["course_id"] for row in (uc_res.data or [])]
+
+    if selected_ids:
+        def get_courses():
+            return (
+                supabase.table("courses")
+                .select("id, name")
+                .in_("id", selected_ids)
+                .order("name")
+                .execute()
+            )
+
+        def get_question_counts():
+            return (
+                supabase.table("past_questions")
+                .select("course_id")
+                .in_("course_id", selected_ids)
+                .eq("status", "approved")
+                .execute()
+            )
+
+        def get_limits():
+            return get_user_limits(user_id)
+
+        def get_profile():
+            return (
+                supabase.table("profiles")
+                .select("department_id")
+                .eq("id", user_id)
+                .maybe_single()
+                .execute()
+            )
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            courses_future = pool.submit(get_courses)
+            pq_future      = pool.submit(get_question_counts)
+            limits_future  = pool.submit(get_limits)
+            profile_future = pool.submit(get_profile)
+
+            courses_res = courses_future.result()
+            pq_res      = pq_future.result()
+            limits      = limits_future.result()
+            profile_res = profile_future.result()
+
+        courses       = courses_res.data or []
+        department_id = (profile_res.data or {}).get("department_id")
+
+        counts: dict[str, int] = {}
+        for row in (pq_res.data or []):
+            counts[row["course_id"]] = counts.get(row["course_id"], 0) + 1
+
+        result = [
+            {
+                "id":             c["id"],
+                "name":           c["name"],
+                "code":           None,
+                "question_count": counts.get(c["id"], 0),
+                "selected":       True,
+            }
+            for c in courses
+        ]
+
+        if not limits["is_paid"]:
+            unlocked = result[:3]
+            locked = [
+                {
+                    "id":             c["id"],
+                    "name":           c["name"],
+                    "code":           None,
+                    "locked":         True,
+                    "question_count": None,
+                    "selected":       True,
+                }
+                for c in result[3:]
+            ]
+        else:
+            unlocked = result
+            locked   = []
+
+        return {
+            "courses":        unlocked,
+            "locked_courses": locked,
+            "department_id":  department_id,
+            "is_paid":        limits["is_paid"],
+            "plan":           "free" if not limits["is_paid"] else "paid",
+        }
+
+    # ── Step 2: fallback — load from department + junction ────────────────────
     try:
         profile_res = (
             supabase.table("profiles")
@@ -153,7 +265,6 @@ async def list_courses(user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Profile not found")
 
     department_id = (profile_res.data or {}).get("department_id")
-
     if not department_id:
         return {
             "courses":        [],
@@ -163,32 +274,20 @@ async def list_courses(user_id: str = Depends(get_current_user)):
             "plan":           "free",
         }
 
-    courses_res = (
-        supabase.table("courses")
-        .select("id, name")
-        .eq("department_id", department_id)
-        .order("name")
-        .execute()
-    )
-    courses    = courses_res.data or []
-    course_ids = [c["id"] for c in courses]
-
-    def get_question_counts():
-        if not course_ids:
-            return None
+    def get_direct_courses():
         return (
-            supabase.table("past_questions")
-            .select("course_id")
-            .in_("course_id", course_ids)
-            .eq("status", "approved")
+            supabase.table("courses")
+            .select("id, name")
+            .eq("department_id", department_id)
+            .order("name")
             .execute()
         )
 
-    def get_selected():
+    def get_junction_courses():
         return (
-            supabase.table("user_courses")
-            .select("course_id")
-            .eq("user_id", user_id)
+            supabase.table("course_departments")
+            .select("courses(id, name)")
+            .eq("department_id", department_id)
             .execute()
         )
 
@@ -196,20 +295,44 @@ async def list_courses(user_id: str = Depends(get_current_user)):
         return get_user_limits(user_id)
 
     with ThreadPoolExecutor(max_workers=3) as pool:
-        pq_future     = pool.submit(get_question_counts)
-        uc_future     = pool.submit(get_selected)
-        limits_future = pool.submit(get_limits)
+        direct_future  = pool.submit(get_direct_courses)
+        junction_future = pool.submit(get_junction_courses)
+        limits_future  = pool.submit(get_limits)
 
-        pq_res  = pq_future.result()
-        uc_res  = uc_future.result()
-        limits  = limits_future.result()
+        direct_res  = direct_future.result()
+        junction_res = junction_future.result()
+        limits      = limits_future.result()
 
+    seen: set[str] = set()
+    all_courses: list[dict] = []
+    for c in (direct_res.data or []):
+        if c["id"] not in seen:
+            seen.add(c["id"])
+            all_courses.append(c)
+    for row in (junction_res.data or []):
+        c = row.get("courses")
+        if c and c["id"] not in seen:
+            seen.add(c["id"])
+            all_courses.append({"id": c["id"], "name": c["name"]})
+
+    all_courses.sort(key=lambda x: x["name"])
+
+    def get_question_counts():
+        ids = [c["id"] for c in all_courses]
+        if not ids:
+            return None
+        return (
+            supabase.table("past_questions")
+            .select("course_id")
+            .in_("course_id", ids)
+            .eq("status", "approved")
+            .execute()
+        )
+
+    pq_res = get_question_counts()
     counts: dict[str, int] = {}
-    if pq_res:
-        for row in pq_res.data or []:
-            counts[row["course_id"]] = counts.get(row["course_id"], 0) + 1
-
-    selected_ids = {row["course_id"] for row in (uc_res.data or [])}
+    for row in ((pq_res.data if pq_res else None) or []):
+        counts[row["course_id"]] = counts.get(row["course_id"], 0) + 1
 
     result = [
         {
@@ -217,21 +340,21 @@ async def list_courses(user_id: str = Depends(get_current_user)):
             "name":           c["name"],
             "code":           None,
             "question_count": counts.get(c["id"], 0),
-            "selected":       c["id"] in selected_ids,
+            "selected":       False,
         }
-        for c in courses
+        for c in all_courses
     ]
 
     if not limits["is_paid"]:
         unlocked = result[:3]
-        locked   = [
+        locked = [
             {
                 "id":             c["id"],
                 "name":           c["name"],
                 "code":           None,
                 "locked":         True,
                 "question_count": None,
-                "selected":       c["id"] in selected_ids,
+                "selected":       False,
             }
             for c in result[3:]
         ]
@@ -265,7 +388,7 @@ async def get_course_detail(
             .execute()
         )
         all_user_courses = [r["course_id"] for r in (uc_check.data or [])]
-        allowed          = all_user_courses[:3]
+        allowed = all_user_courses[:3]
         if course_id not in allowed:
             raise HTTPException(
                 status_code=403,
@@ -351,7 +474,7 @@ async def get_course_questions(
     limits = get_user_limits(user_id)
 
     if not limits["is_paid"]:
-        uc_res  = (
+        uc_res = (
             supabase.table("user_courses")
             .select("course_id")
             .eq("user_id", user_id)
