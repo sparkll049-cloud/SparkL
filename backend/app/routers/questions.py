@@ -101,13 +101,33 @@ def _user_enrolled_in_course(user_id: UUID, course_id: str) -> bool:
         return False
 
 
+# ── Safe Supabase query helper ─────────────────────────────────────────────────
+# Wraps any Supabase execute() call and returns an empty-data result on any
+# error (including the Cloudflare 1101 "Worker threw exception" HTML responses
+# that the postgrest client re-raises as APIError).
+
+class _EmptyResult:
+    data = []
+    count = 0
+
+def _safe(fn):
+    """Call fn() which should return a Supabase result; return _EmptyResult on any error."""
+    try:
+        return fn()
+    except Exception as exc:
+        # Log but don't crash the endpoint
+        print(f"[supabase] query failed (returning empty): {exc}")
+        return _EmptyResult()
+
+
 # ── Global search ──────────────────────────────────────────────────────────────
 # NOTE: This MUST stay before /{question_id} so FastAPI doesn't treat
 #       "search" as a UUID param.
 
 @router.get("/search")
 async def search_questions(
-    q: str = Query(..., min_length=1),
+    q: str = Query(..., min_length=2),   # min 2 chars — prevents single-char
+                                          # bursts that overload Supabase Workers
     limit: int = Query(default=10, ge=1, le=30),
     user: dict = Depends(get_current_user),
 ):
@@ -115,9 +135,8 @@ async def search_questions(
     if not term:
         return {"results": [], "courses": [], "query": term}
 
-    # ── Run queries sequentially to avoid hammering Supabase ──────────────────
-
-    questions_res = (
+    # ── Questions matching by title ────────────────────────────────────────────
+    questions_res = _safe(lambda: (
         supabase.table("past_questions")
         .select(
             "id, title, year, created_at, "
@@ -132,9 +151,10 @@ async def search_questions(
         .order("created_at", desc=True)
         .limit(limit)
         .execute()
-    )
+    ))
 
-    courses_res = (
+    # ── Courses matching by name ───────────────────────────────────────────────
+    courses_res = _safe(lambda: (
         supabase.table("courses")
         .select(
             "id, name, "
@@ -144,41 +164,42 @@ async def search_questions(
         .order("name")
         .limit(limit)
         .execute()
-    )
+    ))
 
-    depts_res = (
+    # ── Departments matching by name ───────────────────────────────────────────
+    depts_res = _safe(lambda: (
         supabase.table("departments")
         .select("id, name, institution:institutions(name)")
         .ilike("name", f"%{term}%")
         .limit(15)
         .execute()
-    )
+    ))
 
-    inst_res = (
+    # ── Institutions matching by name ──────────────────────────────────────────
+    inst_res = _safe(lambda: (
         supabase.table("institutions")
         .select("id, name")
         .ilike("name", f"%{term}%")
         .limit(10)
         .execute()
-    )
+    ))
 
     # ── Collect department IDs from dept + institution matches ─────────────────
-
     dept_ids: list[str] = [d["id"] for d in (depts_res.data or [])]
 
     inst_ids = [i["id"] for i in (inst_res.data or [])]
     if inst_ids:
-        depts_from_inst = (
+        depts_from_inst = _safe(lambda: (
             supabase.table("departments")
             .select("id")
             .in_("institution_id", inst_ids)
             .execute()
-        )
+        ))
         dept_ids += [d["id"] for d in (depts_from_inst.data or [])]
 
     dept_courses: list[dict] = []
     if dept_ids:
-        dept_courses_res = (
+        dept_courses_res = _safe(lambda: (
             supabase.table("courses")
             .select(
                 "id, name, "
@@ -188,11 +209,10 @@ async def search_questions(
             .order("name")
             .limit(limit)
             .execute()
-        )
+        ))
         dept_courses = dept_courses_res.data or []
 
     # ── Deduplicate and shape course results ───────────────────────────────────
-
     seen_course_ids: set[str] = set()
     merged_courses: list[dict] = []
 
@@ -210,7 +230,6 @@ async def search_questions(
         })
 
     # ── Shape question results ─────────────────────────────────────────────────
-
     shaped_questions: list[dict] = []
     for row in (questions_res.data or []):
         course = row.get("course") or {}
