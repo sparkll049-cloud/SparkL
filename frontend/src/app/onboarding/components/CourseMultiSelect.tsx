@@ -6,6 +6,9 @@ import { Search, X, Plus, Check, Loader2 } from "lucide-react";
 interface Option {
   id: string;
   name: string;
+}
+
+interface SearchOption extends Option {
   department?: string;
   institution?: string;
 }
@@ -13,8 +16,8 @@ interface Option {
 interface Props {
   value: string[];
   onChange: (value: string[]) => void;
-  options: Option[];           // courses from selected department
-  searchResults: Option[];     // courses from cross-dept search
+  options: Option[];
+  searchResults: SearchOption[];
   searchLoading: boolean;
   onSearch: (q: string) => void;
   disabled?: boolean;
@@ -29,20 +32,20 @@ export default function CourseMultiSelect({
   onSearch,
   disabled,
 }: Props) {
-  const [query,       setQuery]       = useState("");
-  const [showSearch,  setShowSearch]  = useState(false);
+  const [query,      setQuery]      = useState("");
+  const [showSearch, setShowSearch] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function toggle(id: string) {
-    onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
+    onChange(value.includes(id) ? value.filter(v => v !== id) : [...value, id]);
   }
 
-  function addFromSearch(course: Option) {
+  function addFromSearch(course: SearchOption) {
     if (!value.includes(course.id)) onChange([...value, course.id]);
   }
 
   function remove(id: string) {
-    onChange(value.filter((v) => v !== id));
+    onChange(value.filter(v => v !== id));
   }
 
   function handleSearchInput(q: string) {
@@ -51,23 +54,23 @@ export default function CourseMultiSelect({
     debounceRef.current = setTimeout(() => onSearch(q), 350);
   }
 
-  // All known courses — dept list + search results merged
-  const allKnown: Option[] = [
+  // all known courses — dept list + search results merged for chip labels
+  const allKnown: SearchOption[] = [
     ...options,
-    ...searchResults.filter((s) => !options.some((o) => o.id === s.id)),
+    ...searchResults.filter(s => !options.some(o => o.id === s.id)),
   ];
 
   const selectedCourses = value
-    .map((id) => allKnown.find((c) => c.id === id))
-    .filter(Boolean) as Option[];
+    .map(id => allKnown.find(c => c.id === id))
+    .filter(Boolean) as SearchOption[];
 
-  // Dept courses filtered by inline query if not in search mode
-  const deptFiltered = options.filter((o) =>
+  const deptFiltered = options.filter(o =>
     !query || o.name.toLowerCase().includes(query.toLowerCase())
   );
 
   return (
     <div>
+      {/* Header row */}
       <div className="mb-2 flex items-center justify-between">
         <label className="text-sm font-semibold text-slate-800">
           Courses
@@ -79,7 +82,7 @@ export default function CourseMultiSelect({
         </label>
         <button
           type="button"
-          onClick={() => { setShowSearch((p) => !p); setQuery(""); onSearch(""); }}
+          onClick={() => { setShowSearch(p => !p); setQuery(""); onSearch(""); }}
           className="flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
         >
           <Search className="h-3 w-3" />
@@ -90,7 +93,7 @@ export default function CourseMultiSelect({
       {/* Selected chips */}
       {selectedCourses.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
-          {selectedCourses.map((c) => (
+          {selectedCourses.map(c => (
             <span
               key={c.id}
               className="flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-800"
@@ -99,7 +102,7 @@ export default function CourseMultiSelect({
               <button
                 type="button"
                 onClick={() => remove(c.id)}
-                className="rounded-full hover:bg-blue-200 transition p-0.5"
+                className="rounded-full p-0.5 transition hover:bg-blue-200"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -116,7 +119,7 @@ export default function CourseMultiSelect({
             <input
               autoFocus
               value={query}
-              onChange={(e) => handleSearchInput(e.target.value)}
+              onChange={e => handleSearchInput(e.target.value)}
               placeholder="Search any course across all departments…"
               className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-4 text-sm text-slate-700 outline-none focus:border-blue-400"
             />
@@ -138,12 +141,14 @@ export default function CourseMultiSelect({
           )}
 
           {!searchLoading && query && searchResults.length === 0 && (
-            <p className="py-3 text-xs text-slate-400">No courses found for &ldquo;{query}&rdquo;</p>
+            <p className="py-3 text-xs text-slate-400">
+              No courses found for &ldquo;{query}&rdquo;
+            </p>
           )}
 
           {!searchLoading && searchResults.length > 0 && (
             <div className="max-h-48 space-y-1 overflow-y-auto">
-              {searchResults.map((c) => {
+              {searchResults.map(c => {
                 const selected = value.includes(c.id);
                 return (
                   <button
@@ -160,7 +165,9 @@ export default function CourseMultiSelect({
                       {selected && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-slate-800">{c.name}</span>
+                      <span className="block truncate text-sm font-medium text-slate-800">
+                        {c.name}
+                      </span>
                       {(c.department || c.institution) && (
                         <span className="block truncate text-[10px] text-slate-400">
                           {[c.department, c.institution].filter(Boolean).join(" · ")}
@@ -184,13 +191,12 @@ export default function CourseMultiSelect({
           <p className="px-1 py-2 text-sm text-slate-400">No courses available for this department</p>
         ) : (
           <>
-            {/* Inline filter when search panel is closed */}
             {!showSearch && (
               <div className="relative mb-2">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-3 w-3 -translate-y-1/2 text-slate-300" />
                 <input
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  onChange={e => setQuery(e.target.value)}
                   placeholder="Filter department courses…"
                   className="w-full rounded-lg border border-slate-100 bg-slate-50 py-1.5 pl-8 pr-3 text-xs text-slate-600 outline-none focus:border-blue-300"
                 />
@@ -200,7 +206,7 @@ export default function CourseMultiSelect({
               {deptFiltered.length === 0 ? (
                 <p className="px-1 py-2 text-xs text-slate-400">No matches</p>
               ) : (
-                deptFiltered.map((opt) => (
+                deptFiltered.map(opt => (
                   <label
                     key={opt.id}
                     className="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2 hover:bg-slate-50"
@@ -222,7 +228,7 @@ export default function CourseMultiSelect({
       </div>
 
       <p className="mt-1.5 text-[11px] text-slate-400">
-        You can add courses from any department using &ldquo;Search all departments&rdquo; above.
+        Use &ldquo;Search all departments&rdquo; to add courses outside your department.
       </p>
     </div>
   );
