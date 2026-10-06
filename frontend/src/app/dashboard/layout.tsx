@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -351,11 +352,8 @@ function Topbar({
   const [questionResults, setQResults] = useState<QuestionResult[]>([]);
   const [apiCourses, setApiCourses]    = useState<ApiCourse[]>([]);
   const [searching, setSearching]      = useState(false);
-
   const searchRef   = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // ── NEW: tracks the active AbortController so we can cancel stale requests ──
-  const abortRef    = useRef<AbortController | null>(null);
 
   const searchPlaceholder = department
     ? `Search ${department}…`
@@ -363,41 +361,18 @@ function Topbar({
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-
     const q = query.trim();
-
-    // Require at least 2 characters before firing — prevents single-char
-    // queries from hammering Supabase and triggering the Cloudflare 1101.
-    if (!q || q.length < 2) {
-      // Cancel any in-flight request immediately
-      if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
-      setQResults([]);
-      setApiCourses([]);
-      setSearching(false);
-      return;
-    }
-
+    if (!q) { setQResults([]); setApiCourses([]); setSearching(false); return; }
     setSearching(true);
 
     debounceRef.current = setTimeout(async () => {
-      // ── Cancel the previous in-flight request before starting a new one ────
-      if (abortRef.current) abortRef.current.abort();
-      const controller  = new AbortController();
-      abortRef.current  = controller;
-      const { signal }  = controller;
-
       try {
-        // ── Supabase course search (client-side, no AbortController support
-        //    in the JS SDK, but we guard with signal.aborted before setState) ──
         const { data: courseData, error } = await supabase
           .from("courses")
           .select("id, name, department:departments(name, institution:institutions(name))")
           .ilike("name", `%${q}%`)
           .order("name")
           .limit(20);
-
-        // If a newer request already started, discard this result entirely
-        if (signal.aborted) return;
 
         if (error) {
           console.error("[search] Supabase error:", error.message, error.code);
@@ -416,60 +391,29 @@ function Topbar({
           setApiCourses(mapped);
         }
 
-        // ── Backend question search — pass signal so fetch is truly cancelled ──
         const token = await getToken();
-
-        if (signal.aborted) return;
-
         if (token) {
-          try {
-            const res = await fetch(
-              `${process.env.NEXT_PUBLIC_API_URL}/api/questions/search?q=${encodeURIComponent(q)}&limit=6`,
-              { headers: { Authorization: `Bearer ${token}` }, signal },
-            );
-
-            if (signal.aborted) return;
-
-            if (res.ok) {
-              const j = await res.json();
-              if (!signal.aborted) setQResults(j.results ?? []);
-            } else {
-              // Backend returned an error (e.g. 500 from Cloudflare/Supabase)
-              // — silently keep whatever course results we already have; don't
-              // flip to "no results".
-              console.warn("[search] questions endpoint returned", res.status);
-            }
-          } catch (fetchErr: any) {
-            if (fetchErr?.name === "AbortError") return; // expected — ignore
-            console.error("[search] questions fetch error:", fetchErr);
-            // Don't clear apiCourses — leave courses visible even if questions fail
+          const res = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL}/api/questions/search?q=${encodeURIComponent(q)}&limit=6`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+          if (res.ok) {
+            const j = await res.json();
+            setQResults(j.results ?? []);
           }
         }
-      } catch (err: any) {
-        if (err?.name === "AbortError") return; // expected — ignore
+      } catch (err) {
         console.error("[search] unexpected error:", err);
-        // Only clear results on a genuine unexpected error, not on cancellation
         setQResults([]);
         setApiCourses([]);
       } finally {
-        // Only stop the spinner if this request wasn't superseded
-        if (!signal.aborted) setSearching(false);
+        setSearching(false);
       }
-    }, 400);
+    }, 350);
 
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query, getToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Cleanup abort on unmount
-  useEffect(() => {
-    return () => {
-      if (abortRef.current) abortRef.current.abort();
-    };
-  }, []);
-
-  // Close dropdown on outside click (pointerdown so mobile taps work before blur)
   useEffect(() => {
     const h = (e: PointerEvent) => {
       const target = e.target as Node;
@@ -480,41 +424,23 @@ function Topbar({
       setQuery("");
       setQResults([]);
       setApiCourses([]);
-      // Cancel any pending request when the user dismisses the search
-      if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
     };
     document.addEventListener("pointerdown", h);
     return () => document.removeEventListener("pointerdown", h);
   }, []);
 
-  const showDropdown = focused && query.trim().length >= 2;
-
-  const handleSelect = () => {
-    setQuery("");
-    setFocused(false);
-    setQResults([]);
-    setApiCourses([]);
-    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
-  };
-
-  const handleClear = () => {
-    setQuery("");
-    setQResults([]);
-    setApiCourses([]);
-    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
-  };
+  const showDropdown = focused && query.trim().length > 0;
+  const handleSelect = () => { setQuery(""); setFocused(false); setQResults([]); setApiCourses([]); };
 
   return (
     <header className="sticky top-0 z-40 border-b backdrop-blur-xl"
       style={{ background: "var(--sp-header-bg)", borderColor: "var(--sp-border)" }}>
       <div className="flex h-16 items-center gap-3 px-4 lg:px-6">
 
-        {/* Logo — hidden on lg when sidebar is visible */}
         <Link className="flex shrink-0 items-center gap-2.5 lg:hidden" href="/dashboard">
           <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={32} src="/images/logo.jpg" width={32}/>
         </Link>
 
-        {/* Search */}
         <div className="relative min-w-0 flex-1 max-w-xl mx-auto" ref={searchRef}>
           <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 transition-colors"
             style={{ color: focused ? "#6366F1" : "var(--sp-text-3)" }}/>
@@ -532,7 +458,7 @@ function Topbar({
             }}
           />
           {query && (
-            <button onClick={handleClear}
+            <button onClick={() => { setQuery(""); setQResults([]); setApiCourses([]); }}
               className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold px-1.5 py-0.5 rounded-full hover:bg-indigo-500/10 transition-colors"
               style={{ color: "var(--sp-text-3)" }}>
               ✕
@@ -555,7 +481,6 @@ function Topbar({
           )}
         </div>
 
-        {/* Right actions */}
         <div className="flex items-center gap-2 shrink-0">
           <button className="relative hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 sm:flex"
             style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
@@ -571,7 +496,6 @@ function Topbar({
               </div>
             )}
           </Link>
-          {/* Hamburger — only on mobile */}
           <button onClick={onMenuOpen}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 lg:hidden"
             style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
@@ -617,7 +541,6 @@ function SidebarContent({
 
   return (
     <div className="flex h-full flex-col" style={{ background: "var(--sp-bg-card)" }}>
-      {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: "var(--sp-border)" }}>
         <div className="flex items-center gap-2.5">
           <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={30} src="/images/logo.jpg" width={30}/>
@@ -632,7 +555,6 @@ function SidebarContent({
         )}
       </div>
 
-      {/* Profile mini */}
       <div className="px-5 py-4 border-b" style={{ borderColor: "var(--sp-border)" }}>
         <div className="flex items-center gap-3 mb-3">
           {user?.avatarUrl ? (
@@ -653,7 +575,6 @@ function SidebarContent({
           )}
         </div>
 
-        {/* XP bar */}
         <div className="mb-3">
           <div className="flex justify-between mb-1">
             <span className="flex items-center gap-1 text-[10px] font-bold" style={{ color: "var(--sp-text-3)" }}>
@@ -667,7 +588,6 @@ function SidebarContent({
           </div>
         </div>
 
-        {/* Tier pill */}
         {tier && (
           <Link href="/dashboard/subscribe" onClick={handleNav}
             className="flex items-center gap-2 rounded-xl border px-3 py-2 transition hover:opacity-80"
@@ -682,7 +602,6 @@ function SidebarContent({
         )}
       </div>
 
-      {/* Streak mini */}
       <div className="px-5 py-3 border-b" style={{ borderColor: "var(--sp-border)" }}>
         <div className="flex items-center gap-3">
           <div className="relative flex items-center justify-center shrink-0" style={{ width: size, height: size }}>
@@ -721,7 +640,6 @@ function SidebarContent({
         </div>
       </div>
 
-      {/* Nav links */}
       <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
         <p className="px-3 pb-1 text-[9px] font-black uppercase tracking-widest" style={{ color: "var(--sp-text-3)" }}>Navigate</p>
         {NAV_LINKS.map(({ href, icon: Icon, label }) => {
@@ -767,7 +685,6 @@ function SidebarContent({
         )}
       </nav>
 
-      {/* Footer */}
       <div className="border-t px-4 py-4 space-y-2" style={{ borderColor: "var(--sp-border)" }}>
         <button onClick={onToggleDark}
           className="flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-sm font-semibold transition-all hover:border-indigo-500/30"
