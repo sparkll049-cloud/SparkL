@@ -336,16 +336,16 @@ function SearchDropdown({
 // ── Topbar ─────────────────────────────────────────────────────────────────────
 
 function Topbar({
-  onMenuOpen, avatarUrl, firstName, courses, getToken, department, sidebarOpen,
+  onMenuOpen, avatarUrl, firstName, getToken, department,
 }: {
   onMenuOpen: () => void;
   avatarUrl: string | null;
   firstName: string;
-  courses: Course[];
   getToken: () => Promise<string | null>;
   department: string | null;
-  sidebarOpen: boolean;
 }) {
+  const supabase = createClient();
+
   const [query, setQuery]              = useState("");
   const [focused, setFocused]          = useState(false);
   const [questionResults, setQResults] = useState<QuestionResult[]>([]);
@@ -363,27 +363,51 @@ function Topbar({
     const q = query.trim();
     if (!q) { setQResults([]); setApiCourses([]); setSearching(false); return; }
     setSearching(true);
+
     debounceRef.current = setTimeout(async () => {
       try {
+        // ── Courses: query Supabase directly for full results ──────────────
+        const { data: courseData } = await supabase
+          .from("courses")
+          .select("id, name, department:departments(name, institution:institutions(name))")
+          .ilike("name", `%${q}%`)
+          .order("name")
+          .limit(20);
+
+        const mapped: ApiCourse[] = (courseData ?? []).map((r: any) => {
+          const dept = r.department || {};
+          const inst = dept.institution || {};
+          return {
+            id:          r.id,
+            name:        r.name,
+            department:  dept.name ?? undefined,
+            institution: inst.name ?? undefined,
+          };
+        });
+        setApiCourses(mapped);
+
+        // ── Past questions: still needs the API + token ────────────────────
         const token = await getToken();
-        if (!token) return;
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/questions/search?q=${encodeURIComponent(q)}&limit=6`,
-          { headers: { Authorization: `Bearer ${token}` } },
-        );
-        if (res.ok) {
-          const j = await res.json();
-          setQResults(j.results ?? []);
-          setApiCourses(j.courses ?? []);
+        if (token) {
+          const res = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL}/api/questions/search?q=${encodeURIComponent(q)}&limit=6`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+          if (res.ok) {
+            const j = await res.json();
+            setQResults(j.results ?? []);
+          }
         }
       } catch {
-        setQResults([]); setApiCourses([]);
+        setQResults([]);
+        setApiCourses([]);
       } finally {
         setSearching(false);
       }
     }, 350);
+
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [query, getToken]);
+  }, [query, getToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const h = (e: MouseEvent) => {
@@ -397,11 +421,6 @@ function Topbar({
 
   const showDropdown = focused && query.trim().length > 0;
   const handleSelect = () => { setQuery(""); setFocused(false); setQResults([]); setApiCourses([]); };
-
-  const mergedCourses: ApiCourse[] = [
-    ...courses.filter(c => c.name.toLowerCase().includes(query.toLowerCase())).slice(0, 5),
-    ...apiCourses.filter(ac => !courses.some(c => c.id === ac.id)),
-  ];
 
   return (
     <header className="sticky top-0 z-40 border-b backdrop-blur-xl"
@@ -442,7 +461,7 @@ function Topbar({
               style={{ background: "var(--sp-search-popup, var(--sp-bg-card))", borderColor: "var(--sp-border)" }}>
               <SearchDropdown
                 query={query.trim()}
-                courses={mergedCourses}
+                courses={apiCourses}
                 questionResults={questionResults}
                 searching={searching}
                 onSelect={handleSelect}
@@ -467,7 +486,7 @@ function Topbar({
               </div>
             )}
           </Link>
-          {/* Hamburger — only on mobile (lg has permanent sidebar) */}
+          {/* Hamburger — only on mobile */}
           <button onClick={onMenuOpen}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:border-indigo-500/30 lg:hidden"
             style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
@@ -480,7 +499,7 @@ function Topbar({
   );
 }
 
-// ── Sidebar inner content (shared between mobile drawer + desktop rail) ─────────
+// ── Sidebar inner content ──────────────────────────────────────────────────────
 
 function SidebarContent({
   user, onLogout, darkMode, onToggleDark, onClose,
@@ -489,7 +508,7 @@ function SidebarContent({
   onLogout: () => void;
   darkMode: boolean;
   onToggleDark: () => void;
-  onClose?: () => void; // only passed in mobile drawer
+  onClose?: () => void;
 }) {
   const pathname  = usePathname();
   const firstName = (user?.fullName ?? "You").split(" ")[0];
@@ -519,7 +538,6 @@ function SidebarContent({
           <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={30} src="/images/logo.jpg" width={30}/>
           <span className="text-sm font-black tracking-tight" style={{ color: "var(--sp-text)" }}>SparkL</span>
         </div>
-        {/* Close button only in mobile drawer */}
         {onClose && (
           <button onClick={onClose}
             className="flex h-8 w-8 items-center justify-center rounded-xl border transition hover:bg-red-500/10 lg:hidden"
@@ -692,7 +710,7 @@ function SidebarContent({
   );
 }
 
-// ── Mobile drawer sidebar ──────────────────────────────────────────────────────
+// ── Mobile drawer ──────────────────────────────────────────────────────────────
 
 function MobileDrawer({
   open, onClose, user, onLogout, darkMode, onToggleDark,
@@ -707,13 +725,11 @@ function MobileDrawer({
 
   return (
     <>
-      {/* Backdrop */}
       <div
         className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm transition-opacity duration-300 lg:hidden"
         style={{ opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none" }}
         onClick={onClose}
       />
-      {/* Panel */}
       <div
         className="fixed inset-y-0 left-0 z-[81] w-72 shadow-2xl transition-transform duration-300 ease-out lg:hidden"
         style={{
@@ -742,7 +758,6 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const [drawerOpen, setDrawerOpen]   = useState(false);
   const [darkMode, setDarkMode]       = useState(false);
   const [sidebarUser, setSidebarUser] = useState<SidebarUser | null>(null);
-  const [courses, setCourses]         = useState<Course[]>([]);
 
   usePatchedFetch();
 
@@ -797,10 +812,10 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           fetch(`${base}/api/payments/subscription/status`,   { headers: h }),
         ]);
 
-        let fullName: string | null  = null;
-        let isAdmin                  = false;
-        let streak                   = 0;
-        let xp                       = 0;
+        let fullName: string | null   = null;
+        let isAdmin                   = false;
+        let streak                    = 0;
+        let xp                        = 0;
         let department: string | null = null;
 
         if (profileRes.status === "fulfilled" && profileRes.value.ok) {
@@ -810,7 +825,6 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           streak     = j.profile?.streak ?? 0;
           xp         = j.profile?.xp ?? 0;
           department = j.profile?.department?.name ?? null;
-          setCourses(j.profile?.courses ?? []);
         }
 
         let avatarUrl: string | null = null;
@@ -849,7 +863,6 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <InactivityWarning countdown={countdown} onStay={stayLoggedIn} onLogout={signOut}/>
       )}
 
-      {/* Mobile drawer (hidden on lg) */}
       <MobileDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
@@ -859,7 +872,6 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         onToggleDark={toggleDark}
       />
 
-      {/* Desktop permanent sidebar (visible only on lg+) */}
       <div
         className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:w-64 lg:flex-col"
         style={{ borderRight: "1px solid var(--sp-border)" }}
@@ -872,16 +884,13 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         />
       </div>
 
-      {/* Main area — offset by sidebar width on lg */}
       <div className="flex flex-col lg:pl-64">
         <Topbar
           onMenuOpen={() => setDrawerOpen(true)}
           avatarUrl={sidebarUser?.avatarUrl ?? null}
           firstName={firstName}
-          courses={courses}
           getToken={getToken}
           department={sidebarUser?.department ?? null}
-          sidebarOpen={true}
         />
         <main className="flex-1">
           {children}
