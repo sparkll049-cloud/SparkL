@@ -351,8 +351,11 @@ function Topbar({
   const [questionResults, setQResults] = useState<QuestionResult[]>([]);
   const [apiCourses, setApiCourses]    = useState<ApiCourse[]>([]);
   const [searching, setSearching]      = useState(false);
+
   const searchRef   = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ── NEW: tracks the active AbortController so we can cancel stale requests ──
+  const abortRef    = useRef<AbortController | null>(null);
 
   const searchPlaceholder = department
     ? `Search ${department}…`
@@ -360,18 +363,41 @@ function Topbar({
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
+
     const q = query.trim();
-    if (!q) { setQResults([]); setApiCourses([]); setSearching(false); return; }
+
+    // Require at least 2 characters before firing — prevents single-char
+    // queries from hammering Supabase and triggering the Cloudflare 1101.
+    if (!q || q.length < 2) {
+      // Cancel any in-flight request immediately
+      if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
+      setQResults([]);
+      setApiCourses([]);
+      setSearching(false);
+      return;
+    }
+
     setSearching(true);
 
     debounceRef.current = setTimeout(async () => {
+      // ── Cancel the previous in-flight request before starting a new one ────
+      if (abortRef.current) abortRef.current.abort();
+      const controller  = new AbortController();
+      abortRef.current  = controller;
+      const { signal }  = controller;
+
       try {
+        // ── Supabase course search (client-side, no AbortController support
+        //    in the JS SDK, but we guard with signal.aborted before setState) ──
         const { data: courseData, error } = await supabase
           .from("courses")
           .select("id, name, department:departments(name, institution:institutions(name))")
           .ilike("name", `%${q}%`)
           .order("name")
           .limit(20);
+
+        // If a newer request already started, discard this result entirely
+        if (signal.aborted) return;
 
         if (error) {
           console.error("[search] Supabase error:", error.message, error.code);
@@ -390,32 +416,60 @@ function Topbar({
           setApiCourses(mapped);
         }
 
+        // ── Backend question search — pass signal so fetch is truly cancelled ──
         const token = await getToken();
+
+        if (signal.aborted) return;
+
         if (token) {
-          const res = await fetch(
-            `${process.env.NEXT_PUBLIC_API_URL}/api/questions/search?q=${encodeURIComponent(q)}&limit=6`,
-            { headers: { Authorization: `Bearer ${token}` } },
-          );
-          if (res.ok) {
-            const j = await res.json();
-            setQResults(j.results ?? []);
+          try {
+            const res = await fetch(
+              `${process.env.NEXT_PUBLIC_API_URL}/api/questions/search?q=${encodeURIComponent(q)}&limit=6`,
+              { headers: { Authorization: `Bearer ${token}` }, signal },
+            );
+
+            if (signal.aborted) return;
+
+            if (res.ok) {
+              const j = await res.json();
+              if (!signal.aborted) setQResults(j.results ?? []);
+            } else {
+              // Backend returned an error (e.g. 500 from Cloudflare/Supabase)
+              // — silently keep whatever course results we already have; don't
+              // flip to "no results".
+              console.warn("[search] questions endpoint returned", res.status);
+            }
+          } catch (fetchErr: any) {
+            if (fetchErr?.name === "AbortError") return; // expected — ignore
+            console.error("[search] questions fetch error:", fetchErr);
+            // Don't clear apiCourses — leave courses visible even if questions fail
           }
         }
-      } catch (err) {
+      } catch (err: any) {
+        if (err?.name === "AbortError") return; // expected — ignore
         console.error("[search] unexpected error:", err);
+        // Only clear results on a genuine unexpected error, not on cancellation
         setQResults([]);
         setApiCourses([]);
       } finally {
-        setSearching(false);
+        // Only stop the spinner if this request wasn't superseded
+        if (!signal.aborted) setSearching(false);
       }
-    }, 350);
+    }, 400);
 
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
   }, [query, getToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── FIX: use pointerdown instead of mousedown so mobile taps don't
-  //         dismiss the dropdown before the tap registers as a link click.
-  //         Also guard against sidebar interactions (unchanged).
+  // Cleanup abort on unmount
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) abortRef.current.abort();
+    };
+  }, []);
+
+  // Close dropdown on outside click (pointerdown so mobile taps work before blur)
   useEffect(() => {
     const h = (e: PointerEvent) => {
       const target = e.target as Node;
@@ -426,13 +480,29 @@ function Topbar({
       setQuery("");
       setQResults([]);
       setApiCourses([]);
+      // Cancel any pending request when the user dismisses the search
+      if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
     };
     document.addEventListener("pointerdown", h);
     return () => document.removeEventListener("pointerdown", h);
   }, []);
 
-  const showDropdown = focused && query.trim().length > 0;
-  const handleSelect = () => { setQuery(""); setFocused(false); setQResults([]); setApiCourses([]); };
+  const showDropdown = focused && query.trim().length >= 2;
+
+  const handleSelect = () => {
+    setQuery("");
+    setFocused(false);
+    setQResults([]);
+    setApiCourses([]);
+    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
+  };
+
+  const handleClear = () => {
+    setQuery("");
+    setQResults([]);
+    setApiCourses([]);
+    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
+  };
 
   return (
     <header className="sticky top-0 z-40 border-b backdrop-blur-xl"
@@ -462,7 +532,7 @@ function Topbar({
             }}
           />
           {query && (
-            <button onClick={() => { setQuery(""); setQResults([]); setApiCourses([]); }}
+            <button onClick={handleClear}
               className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold px-1.5 py-0.5 rounded-full hover:bg-indigo-500/10 transition-colors"
               style={{ color: "var(--sp-text-3)" }}>
               ✕
@@ -745,7 +815,6 @@ function MobileDrawer({
         style={{ opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none" }}
         onClick={onClose}
       />
-      {/* ↓ data-sidebar keeps the search dropdown open when interacting with the drawer */}
       <div
         data-sidebar
         className="fixed inset-y-0 left-0 z-[81] w-72 shadow-2xl transition-transform duration-300 ease-out lg:hidden"
@@ -889,7 +958,6 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         onToggleDark={toggleDark}
       />
 
-      {/* ↓ data-sidebar keeps the search dropdown open when interacting with the desktop sidebar */}
       <div
         data-sidebar
         className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:w-64 lg:flex-col"
