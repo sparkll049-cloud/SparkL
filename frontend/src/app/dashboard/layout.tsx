@@ -366,27 +366,30 @@ function Topbar({
 
     debounceRef.current = setTimeout(async () => {
       try {
-        // ── Courses: query Supabase directly for full results ──────────────
-        const { data: courseData } = await supabase
+        const { data: courseData, error } = await supabase
           .from("courses")
           .select("id, name, department:departments(name, institution:institutions(name))")
           .ilike("name", `%${q}%`)
           .order("name")
           .limit(20);
 
-        const mapped: ApiCourse[] = (courseData ?? []).map((r: any) => {
-          const dept = r.department || {};
-          const inst = dept.institution || {};
-          return {
-            id:          r.id,
-            name:        r.name,
-            department:  dept.name ?? undefined,
-            institution: inst.name ?? undefined,
-          };
-        });
-        setApiCourses(mapped);
+        if (error) {
+          console.error("[search] Supabase error:", error.message, error.code);
+          setApiCourses([]);
+        } else {
+          const mapped: ApiCourse[] = (courseData ?? []).map((r: any) => {
+            const dept = r.department || {};
+            const inst = dept.institution || {};
+            return {
+              id:          r.id,
+              name:        r.name,
+              department:  dept.name ?? undefined,
+              institution: inst.name ?? undefined,
+            };
+          });
+          setApiCourses(mapped);
+        }
 
-        // ── Past questions: still needs the API + token ────────────────────
         const token = await getToken();
         if (token) {
           const res = await fetch(
@@ -398,7 +401,8 @@ function Topbar({
             setQResults(j.results ?? []);
           }
         }
-      } catch {
+      } catch (err) {
+        console.error("[search] unexpected error:", err);
         setQResults([]);
         setApiCourses([]);
       } finally {
@@ -409,11 +413,17 @@ function Topbar({
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query, getToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Close dropdown on outside click, but ignore sidebar/drawer clicks ──────
   useEffect(() => {
     const h = (e: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setFocused(false); setQuery(""); setQResults([]); setApiCourses([]);
-      }
+      const target = e.target as Node;
+      if (searchRef.current && searchRef.current.contains(target)) return;
+      const sidebar = document.querySelector("[data-sidebar]");
+      if (sidebar && sidebar.contains(target)) return;
+      setFocused(false);
+      setQuery("");
+      setQResults([]);
+      setApiCourses([]);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
@@ -730,7 +740,9 @@ function MobileDrawer({
         style={{ opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none" }}
         onClick={onClose}
       />
+      {/* ↓ data-sidebar keeps the search dropdown open when interacting with the drawer */}
       <div
+        data-sidebar
         className="fixed inset-y-0 left-0 z-[81] w-72 shadow-2xl transition-transform duration-300 ease-out lg:hidden"
         style={{
           borderRight: "1px solid var(--sp-border)",
@@ -872,7 +884,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         onToggleDark={toggleDark}
       />
 
+      {/* ↓ data-sidebar keeps the search dropdown open when interacting with the desktop sidebar */}
       <div
+        data-sidebar
         className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:w-64 lg:flex-col"
         style={{ borderRight: "1px solid var(--sp-border)" }}
       >
