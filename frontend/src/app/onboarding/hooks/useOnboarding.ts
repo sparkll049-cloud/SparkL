@@ -28,7 +28,6 @@ export function useOnboarding() {
   const [levelId,       setLevelId]       = useState("");
   const [studyModeId,   setStudyModeId]   = useState("");
 
-  // cross-dept search
   const [searchResults, setSearchResults] = useState<SearchOption[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
 
@@ -36,7 +35,7 @@ export function useOnboarding() {
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
 
-  // ── initial load ────────────────────────────────────────────────────────────
+  // ── initial load ─────────────────────────────────────────────────────────────
   useEffect(() => {
     async function load() {
       setFetching(true);
@@ -58,43 +57,71 @@ export function useOnboarding() {
     load();
   }, []);
 
-  // ── departments when institution changes ────────────────────────────────────
+  // ── departments when institution changes ──────────────────────────────────────
   useEffect(() => {
-    if (!institutionId) { setDepartments([]); setDepartmentId(""); return; }
+    if (!institutionId) {
+      setDepartments([]);
+      setDepartmentId("");
+      return;
+    }
     supabase
       .from("departments")
       .select("id, name")
       .eq("institution_id", institutionId)
       .order("name")
-      .then(({ data }) => { setDepartments(data ?? []); setDepartmentId(""); });
+      .then(({ data }) => {
+        setDepartments(data ?? []);
+        setDepartmentId("");
+      });
   }, [institutionId]);
 
-  // ── dept courses when department changes ────────────────────────────────────
+  // ── dept courses when department changes ──────────────────────────────────────
   useEffect(() => {
-    if (!departmentId) { setCourses([]); setCourseIds([]); return; }
+    if (!departmentId) {
+      setCourses([]);
+      setCourseIds([]);
+      return;
+    }
     supabase
       .from("courses")
       .select("id, name")
       .eq("department_id", departmentId)
       .order("name")
-      .then(({ data }) => { setCourses(data ?? []); setCourseIds([]); });
+      .then(({ data }) => {
+        setCourses(data ?? []);
+        setCourseIds([]);
+      });
   }, [departmentId]);
 
-  // ── cross-dept course search via API ────────────────────────────────────────
+  // ── cross-dept search directly via Supabase ───────────────────────────────────
   const searchCourses = useCallback(async (q: string) => {
-    if (!q.trim()) { setSearchResults([]); return; }
+    if (!q.trim()) {
+      setSearchResults([]);
+      return;
+    }
     setSearchLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/courses/search?q=${encodeURIComponent(q)}&limit=20`,
-        { headers: { Authorization: `Bearer ${session.access_token}` } },
-      );
-      if (res.ok) {
-        const json = await res.json();
-        setSearchResults(json.courses ?? []);
-      }
+      const { data } = await supabase
+        .from("courses")
+        .select(
+          "id, name, department:departments(name, institution:institutions(name))"
+        )
+        .ilike("name", `%${q.trim()}%`)
+        .order("name")
+        .limit(20);
+
+      const mapped = (data ?? []).map((r: any) => {
+        const dept = r.department || {};
+        const inst = dept.institution || {};
+        return {
+          id:          r.id,
+          name:        r.name,
+          department:  dept.name ?? undefined,
+          institution: inst.name ?? undefined,
+        };
+      });
+
+      setSearchResults(mapped);
     } catch {
       setSearchResults([]);
     } finally {
@@ -102,7 +129,7 @@ export function useOnboarding() {
     }
   }, [supabase]);
 
-  // ── progress ────────────────────────────────────────────────────────────────
+  // ── progress ──────────────────────────────────────────────────────────────────
   const completed = useMemo(() =>
     Number(!!departmentId) +
     Number(courseIds.length > 0) +
@@ -110,13 +137,16 @@ export function useOnboarding() {
     Number(!!studyModeId),
   [departmentId, courseIds, levelId, studyModeId]);
 
-  // ── submit ──────────────────────────────────────────────────────────────────
+  // ── submit ────────────────────────────────────────────────────────────────────
   async function submitOnboarding() {
     setError("");
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { setError("You must be logged in."); return false; }
+      if (!user) {
+        setError("You must be logged in.");
+        return false;
+      }
 
       const { error: upsertErr } = await supabase.from("profiles").upsert({
         id:                   user.id,
@@ -132,7 +162,9 @@ export function useOnboarding() {
       if (upsertErr) { setError(upsertErr.message); return false; }
 
       const { error: delErr } = await supabase
-        .from("user_courses").delete().eq("user_id", user.id);
+        .from("user_courses")
+        .delete()
+        .eq("user_id", user.id);
       if (delErr) { setError(delErr.message); return false; }
 
       if (courseIds.length > 0) {
@@ -149,11 +181,28 @@ export function useOnboarding() {
   }
 
   return {
-    institutions, departments, courses, levels, studyModes,
-    institutionId, departmentId, courseIds, levelId, studyModeId,
-    setInstitutionId, setDepartmentId, setCourseIds, setLevelId, setStudyModeId,
-    searchResults, searchLoading, searchCourses,
-    fetching, loading, error, completed,
+    institutions,
+    departments,
+    courses,
+    levels,
+    studyModes,
+    institutionId,
+    departmentId,
+    courseIds,
+    levelId,
+    studyModeId,
+    setInstitutionId,
+    setDepartmentId,
+    setCourseIds,
+    setLevelId,
+    setStudyModeId,
+    searchResults,
+    searchLoading,
+    searchCourses,
+    fetching,
+    loading,
+    error,
+    completed,
     submitOnboarding,
   };
 }
