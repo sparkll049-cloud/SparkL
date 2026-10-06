@@ -413,9 +413,11 @@ function Topbar({
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query, getToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Close dropdown on outside click, but ignore sidebar/drawer clicks ──────
+  // ── FIX: use pointerdown instead of mousedown so mobile taps don't
+  //         dismiss the dropdown before the tap registers as a link click.
+  //         Also guard against sidebar interactions (unchanged).
   useEffect(() => {
-    const h = (e: MouseEvent) => {
+    const h = (e: PointerEvent) => {
       const target = e.target as Node;
       if (searchRef.current && searchRef.current.contains(target)) return;
       const sidebar = document.querySelector("[data-sidebar]");
@@ -425,8 +427,8 @@ function Topbar({
       setQResults([]);
       setApiCourses([]);
     };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
+    document.addEventListener("pointerdown", h);
+    return () => document.removeEventListener("pointerdown", h);
   }, []);
 
   const showDropdown = focused && query.trim().length > 0;
@@ -467,8 +469,11 @@ function Topbar({
             </button>
           )}
           {showDropdown && (
-            <div className="absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border shadow-2xl"
-              style={{ background: "var(--sp-search-popup, var(--sp-bg-card))", borderColor: "var(--sp-border)" }}>
+            <div
+              className="absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border shadow-2xl"
+              style={{ background: "var(--sp-search-popup, var(--sp-bg-card))", borderColor: "var(--sp-border)" }}
+              onPointerDown={e => e.stopPropagation()}
+            >
               <SearchDropdown
                 query={query.trim()}
                 courses={apiCourses}
