@@ -6,7 +6,7 @@ pypdf>=4.0.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.1
 python-jose[cryptography]
-google-genai>=0.8.0
+google-genai>=2.0.0
 google-generativeai
 Pillow
 pypdfium2
