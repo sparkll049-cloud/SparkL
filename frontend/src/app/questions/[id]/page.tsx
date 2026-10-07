@@ -8,8 +8,7 @@ import {
   BookOpen, Play, Lock, Sparkles,
   Send, CheckCircle2,
   Paperclip, X, Clock, Eye, EyeOff, Crown,
-  ChevronDown, Zap,
-  Check, HelpCircle, RotateCcw, Trophy, ClipboardList,
+  Zap, Check, RotateCcw, Trophy, ClipboardList,
 } from "lucide-react";
 
 import InlinePaperViewer from "@/components/InlinePaperViewer";
@@ -267,158 +266,74 @@ function SecureWrap({ userEmail, children, enabled = true }: SecureWrapProps) {
   );
 }
 
-// ── Practice quiz ─────────────────────────────────────────────────────────────
-
-type Result = "correct" | "wrong" | "skipped" | "got" | "review";
+// ── AI Quiz Modal ────────────────────────────────────────────────────────────
 
 const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
 
-function PracticeMCQ({
-  q, pick, result, onPick, onSkip,
-}: {
-  q: ProcessedQuestion;
-  pick?: string;
-  result?: Result;
-  onPick: (opt: string) => void;
-  onSkip: () => void;
-}) {
-  const done = result !== undefined;
-  const correct = norm(q.correct_answer);
+// ── Types for AI quiz ────────────────────────────────────────────────────────
 
-  function look(opt: string): React.CSSProperties {
-    const base: React.CSSProperties = {
-      borderColor: "var(--sp-border)", background: "var(--sp-bg-card)", color: "var(--sp-text-2)",
-    };
-    if (!done) return base;
-    if (opt === correct)
-      return { borderColor: "rgba(16,185,129,0.55)", background: "rgba(16,185,129,0.10)", color: "var(--sp-text)" };
-    if (opt === pick)
-      return { borderColor: "rgba(239,68,68,0.55)", background: "rgba(239,68,68,0.08)", color: "var(--sp-text)" };
-    return { ...base, opacity: 0.55 };
-  }
+interface QuizQuestion {
+  question_number: number;
+  question_text: string;
+  options: { a: string; b: string; c: string; d: string };
+  correct_answer: "a" | "b" | "c" | "d";
+  explanation: string;
+}
 
-  function badge(opt: string): React.CSSProperties {
-    if (done && opt === correct) return { background: "#10b981", borderColor: "#10b981", color: "#fff" };
-    if (done && opt === pick)    return { background: "#ef4444", borderColor: "#ef4444", color: "#fff" };
-    return { borderColor: "var(--sp-border)", color: "var(--sp-text-3)" };
-  }
+interface QuizData {
+  questions: QuizQuestion[];
+}
 
+// ── Loading stage sequence ────────────────────────────────────────────────────
+
+const LOAD_STAGES = [
+  { emoji: "📚", text: "Getting the room ready…" },
+  { emoji: "✏️",  text: "Sharpening your pencils…" },
+  { emoji: "🧠", text: "Brewing the questions…" },
+  { emoji: "📋", text: "Get your pen and paper ready…" },
+  { emoji: "🎯", text: "Almost there — focus up!" },
+];
+
+function QuizLoadingScreen({ stage }: { stage: number }) {
+  const s = LOAD_STAGES[Math.min(stage, LOAD_STAGES.length - 1)];
   return (
-    <div className="space-y-2.5">
-      {(["a", "b", "c", "d"] as const).map(opt => {
-        const text = q[`option_${opt}` as keyof ProcessedQuestion] as string | null;
-        if (!text) return null;
-        return (
-          <button
-            key={opt}
-            onClick={() => onPick(opt)}
-            disabled={done}
-            className="w-full flex items-center gap-3 rounded-2xl border px-3.5 py-3 text-left text-[15px] leading-6 transition-all active:scale-[0.99] disabled:cursor-default"
-            style={look(opt)}
-          >
-            <span
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold uppercase"
-              style={badge(opt)}
-            >
-              {done && opt === correct ? <Check size={14} strokeWidth={3} />
-                : done && opt === pick ? <X size={14} strokeWidth={3} />
-                : opt}
-            </span>
-            <MathRenderer content={text} className="flex-1 min-w-0 break-words" />
-          </button>
-        );
-      })}
-
-      {!done ? (
-        <button
-          onClick={onSkip}
-          className="mt-2 inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-medium transition"
-          style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }}
-        >
-          <HelpCircle size={15} /> Don&apos;t know the answer
-        </button>
-      ) : (
-        <div
-          className="mt-3 rounded-2xl border p-4 space-y-1.5"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}
-        >
-          <p className={`text-sm font-bold ${
-            result === "correct" ? "text-emerald-500" : result === "wrong" ? "text-red-500" : "text-amber-500"
-          }`}>
-            {result === "correct" && "Correct!"}
-            {result === "wrong" && `Not quite — the answer is ${correct.toUpperCase()}`}
-            {result === "skipped" && `The answer is ${correct.toUpperCase()}`}
-          </p>
-          {q.explanation && (
-            <div className="text-sm leading-6" style={{ color: "var(--sp-text-2)" }}>
-              <MathRenderer content={q.explanation} />
-            </div>
-          )}
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 px-8 text-center"
+      style={{ background: "var(--sp-bg)" }}>
+      {/* Animated ring */}
+      <div className="relative h-28 w-28">
+        <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90 animate-spin"
+          style={{ animationDuration: "2s" }}>
+          <circle cx="50" cy="50" r="44" fill="none" strokeWidth="6"
+            style={{ stroke: "var(--sp-bg-muted)" }} />
+          <circle cx="50" cy="50" r="44" fill="none" strokeWidth="6"
+            stroke="#6366f1" strokeLinecap="round"
+            strokeDasharray="276" strokeDashoffset="210" />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center text-4xl">
+          {s.emoji}
         </div>
-      )}
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-lg font-bold" style={{ color: "var(--sp-text)" }}>{s.text}</p>
+        <p className="text-xs" style={{ color: "var(--sp-text-3)" }}>
+          Preparing your personalised quiz session
+        </p>
+      </div>
+
+      {/* Stage dots */}
+      <div className="flex gap-2 mt-2">
+        {LOAD_STAGES.map((_, i) => (
+          <div key={i} className="h-1.5 w-1.5 rounded-full transition-all"
+            style={{ background: i <= stage ? "#6366f1" : "var(--sp-bg-muted)",
+                     width: i === stage ? "20px" : "6px" }} />
+        ))}
+      </div>
     </div>
   );
 }
 
-function PracticeTheory({
-  q, result, onGrade,
-}: {
-  q: ProcessedQuestion;
-  result?: Result;
-  onGrade: (r: "got" | "review") => void;
-}) {
-  const [show, setShow] = useState(result !== undefined);
-
-  return (
-    <div className="space-y-3">
-      <button
-        onClick={() => setShow(s => !s)}
-        className="flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-medium transition"
-        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)", color: "var(--sp-text-2)" }}
-      >
-        <ChevronDown size={14} className={`transition-transform ${show ? "rotate-180" : ""}`} />
-        {show ? "Hide model answer" : "Show model answer"}
-      </button>
-
-      {show && (
-        <>
-          <div
-            className="rounded-2xl border p-4"
-            style={{ borderColor: "rgba(16,185,129,0.25)", background: "rgba(16,185,129,0.05)" }}
-          >
-            <p className="text-xs font-semibold text-emerald-500 mb-2">Model answer</p>
-            <div className="text-[15px] leading-7 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
-              {q.model_answer
-                ? <MathRenderer content={q.model_answer} />
-                : "No model answer available for this question yet."}
-            </div>
-          </div>
-
-          <p className="text-xs pt-1" style={{ color: "var(--sp-text-3)" }}>How did you do?</p>
-          <div className="flex gap-2">
-            {([
-              { r: "got" as const,    label: "I got it",    on: "#10b981" },
-              { r: "review" as const, label: "Need review", on: "#f59e0b" },
-            ]).map(b => (
-              <button
-                key={b.r}
-                onClick={() => onGrade(b.r)}
-                className="flex-1 rounded-2xl border px-4 py-3 text-sm font-semibold transition"
-                style={
-                  result === b.r
-                    ? { borderColor: b.on, background: b.on, color: "#fff" }
-                    : { borderColor: "var(--sp-border)", background: "var(--sp-bg-card)", color: "var(--sp-text-2)" }
-                }
-              >
-                {b.label}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
+// ── Score ring ────────────────────────────────────────────────────────────────
 
 function ScoreRing({ pct }: { pct: number }) {
   const r = 54, c = 2 * Math.PI * r;
@@ -427,11 +342,9 @@ function ScoreRing({ pct }: { pct: number }) {
     <div className="relative mx-auto h-36 w-36">
       <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90">
         <circle cx="64" cy="64" r={r} fill="none" strokeWidth="10" style={{ stroke: "var(--sp-bg-muted)" }} />
-        <circle
-          cx="64" cy="64" r={r} fill="none" strokeWidth="10" strokeLinecap="round"
+        <circle cx="64" cy="64" r={r} fill="none" strokeWidth="10" strokeLinecap="round"
           stroke={color} strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)}
-          style={{ transition: "stroke-dashoffset 0.8s ease" }}
-        />
+          style={{ transition: "stroke-dashoffset 0.8s ease" }} />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className="text-3xl font-extrabold" style={{ color: "var(--sp-text)" }}>{pct}%</span>
@@ -441,304 +354,376 @@ function ScoreRing({ pct }: { pct: number }) {
   );
 }
 
-function PracticeModal({
-  questions, isPaid, userEmail, onClose,
+// ── Main quiz modal ───────────────────────────────────────────────────────────
+
+function QuizModal({
+  questionId,
+  paperTitle,
+  isPaid,
+  onClose,
 }: {
-  questions: ProcessedQuestion[];
+  questionId: string;
+  paperTitle: string;
   isPaid: boolean;
-  userEmail: string | null;
   onClose: () => void;
 }) {
-  const freeLimit = Math.max(2, Math.min(questions.length, Math.ceil(questions.length * 0.1)));
-  const baseDeck  = useMemo(
-    () => (!isPaid ? questions.slice(0, freeLimit) : questions),
-    [questions, isPaid, freeLimit],
-  );
-  const hidden  = questions.length - baseDeck.length;
-  const isGated = !isPaid && hidden > 0;
+  const supabase = createClient();
 
-  const [deck, setDeck]         = useState<ProcessedQuestion[]>(baseDeck);
+  // Loading state
+  const [loadStage, setLoadStage] = useState(0);
+  const [loadError, setLoadError] = useState("");
+  const [quiz, setQuiz]           = useState<QuizData | null>(null);
+
+  // Quiz state
   const [index, setIndex]       = useState(0);
-  const [picks, setPicks]       = useState<Record<string, string>>({});
-  const [results, setResults]   = useState<Record<string, Result>>({});
+  const [picks, setPicks]       = useState<Record<number, string>>({});   // question_number → chosen option
+  const [revealed, setRevealed] = useState<Record<number, boolean>>({});  // revealed after picking
   const [finished, setFinished] = useState(false);
 
-  const q      = deck[index];
-  const isLast = index === deck.length - 1;
-
+  // Lock body scroll
   useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = ""; };
   }, []);
 
-  const pickMcq = useCallback((opt: string) => {
-    if (!q || results[q.id]) return;
-    setPicks(p => ({ ...p, [q.id]: opt }));
-    setResults(r => ({ ...r, [q.id]: opt === norm(q.correct_answer) ? "correct" : "wrong" }));
-  }, [q, results]);
-
-  const skipMcq = useCallback(() => {
-    if (!q || results[q.id]) return;
-    setResults(r => ({ ...r, [q.id]: "skipped" }));
-  }, [q, results]);
-
-  const next = useCallback(() => {
-    if (isLast) setFinished(true);
-    else setIndex(i => i + 1);
-  }, [isLast]);
-
-  const prev = useCallback(() => setIndex(i => Math.max(0, i - 1)), []);
-
+  // Fetch quiz from backend (which handles cache)
   useEffect(() => {
-    if (finished) return;
+    let stageTimer: ReturnType<typeof setInterval>;
+    let stage = 0;
+
+    // Advance loading stage every ~800ms for UX effect
+    stageTimer = setInterval(() => {
+      stage = Math.min(stage + 1, LOAD_STAGES.length - 1);
+      setLoadStage(stage);
+    }, 800);
+
+    async function fetchQuiz() {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) { setLoadError("Session expired. Please refresh."); return; }
+
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/quiz/${questionId}`,
+          { headers: { Authorization: `Bearer ${session.access_token}` } },
+        );
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.detail || "Failed to load quiz. Please try again.");
+        }
+        const data: QuizData = await res.json();
+        // Enforce free-plan limit: max 2 questions
+        if (!isPaid && data.questions.length > 2) {
+          data.questions = data.questions.slice(0, 2);
+        }
+        clearInterval(stageTimer);
+        setLoadStage(LOAD_STAGES.length - 1);
+        // Brief pause so last stage message shows
+        setTimeout(() => setQuiz(data), 400);
+      } catch (err) {
+        clearInterval(stageTimer);
+        setLoadError(err instanceof Error ? err.message : "Something went wrong.");
+      }
+    }
+
+    fetchQuiz();
+    return () => clearInterval(stageTimer);
+  }, [questionId, isPaid]);
+
+  // Keyboard: a–d to answer, arrows to navigate
+  useEffect(() => {
+    if (!quiz || finished) return;
+    const q = quiz.questions[index];
     const onKey = (e: KeyboardEvent) => {
-      const k = e.key.toLowerCase();
-      if (q?.question_type === "mcq" && ["a", "b", "c", "d"].includes(k)) pickMcq(k);
-      if (e.key === "ArrowRight") next();
-      if (e.key === "ArrowLeft") prev();
+      const k = e.key.toLowerCase() as "a" | "b" | "c" | "d";
+      if (["a", "b", "c", "d"].includes(k) && !picks[q.question_number]) {
+        handlePick(k);
+      }
+      if (e.key === "ArrowRight" && picks[q.question_number]) handleNext();
+      if (e.key === "ArrowLeft" && index > 0) setIndex(i => i - 1);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [finished, q, pickMcq, next, prev]);
+  }, [quiz, index, picks, finished]);
 
-  const stats = useMemo(() => {
-    const mcq     = deck.filter(x => x.question_type === "mcq");
-    const theory  = deck.filter(x => x.question_type === "theory");
-    const correct = mcq.filter(x => results[x.id] === "correct").length;
-    const got     = theory.filter(x => results[x.id] === "got").length;
-    const scored  = mcq.length + theory.length;
-    const pct     = scored ? Math.round(((correct + got) / scored) * 100) : 0;
-    const missed  = deck.filter(x => {
-      const r = results[x.id];
-      return r !== "correct" && r !== "got";
-    });
-    return { correct, got, pct, missed };
-  }, [deck, results]);
-
-  function restart(nextDeck: ProcessedQuestion[]) {
-    setDeck(nextDeck); setIndex(0); setPicks({}); setResults({}); setFinished(false);
+  function handlePick(opt: string) {
+    if (!quiz) return;
+    const q = quiz.questions[index];
+    if (picks[q.question_number]) return; // already answered
+    setPicks(p => ({ ...p, [q.question_number]: opt }));
+    setRevealed(r => ({ ...r, [q.question_number]: true }));
   }
 
-  const answered = deck.filter(x => results[x.id]).length;
+  function handleNext() {
+    if (!quiz) return;
+    if (index === quiz.questions.length - 1) setFinished(true);
+    else setIndex(i => i + 1);
+  }
 
+  function restart() {
+    setIndex(0); setPicks({}); setRevealed({}); setFinished(false);
+  }
+
+  // ── Loading screen ──────────────────────────────────────────────────────────
+  if (!quiz && !loadError) {
+    return <QuizLoadingScreen stage={loadStage} />;
+  }
+
+  // ── Error screen ────────────────────────────────────────────────────────────
+  if (loadError) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 px-8 text-center"
+        style={{ background: "var(--sp-bg)" }}>
+        <AlertCircle className="h-8 w-8 text-red-400" />
+        <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>{loadError}</p>
+        <button onClick={onClose}
+          className="rounded-xl border px-5 py-2.5 text-sm font-semibold transition"
+          style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }}>
+          Close
+        </button>
+      </div>
+    );
+  }
+
+  const questions   = quiz!.questions;
+  const q           = questions[index];
+  const picked      = picks[q.question_number];
+  const isCorrect   = picked === q.correct_answer;
+  const isAnswered  = !!picked;
+  const isLast      = index === questions.length - 1;
+  const answered    = Object.keys(picks).length;
+  const correctCount = questions.filter(qq => picks[qq.question_number] === qq.correct_answer).length;
+  const pct         = Math.round((correctCount / questions.length) * 100);
+
+  function optStyle(opt: string): React.CSSProperties {
+    if (!isAnswered) return {
+      borderColor: "var(--sp-border)", background: "var(--sp-bg-card)", color: "var(--sp-text-2)",
+    };
+    if (opt === q.correct_answer)
+      return { borderColor: "rgba(16,185,129,0.6)", background: "rgba(16,185,129,0.10)", color: "var(--sp-text)" };
+    if (opt === picked)
+      return { borderColor: "rgba(239,68,68,0.6)", background: "rgba(239,68,68,0.08)", color: "var(--sp-text)" };
+    return { borderColor: "var(--sp-border)", background: "var(--sp-bg-card)", color: "var(--sp-text-2)", opacity: 0.45 };
+  }
+
+  function badgeStyle(opt: string): React.CSSProperties {
+    if (isAnswered && opt === q.correct_answer) return { background: "#10b981", borderColor: "#10b981", color: "#fff" };
+    if (isAnswered && opt === picked)           return { background: "#ef4444", borderColor: "#ef4444", color: "#fff" };
+    return { borderColor: "var(--sp-border)", color: "var(--sp-text-3)" };
+  }
+
+  // ── Results screen ──────────────────────────────────────────────────────────
+  if (finished) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "var(--sp-bg)" }}>
+        <div className="flex items-center gap-3 px-4 py-3 border-b shrink-0"
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
+          <button onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-full border transition"
+            style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)" }}>
+            <X size={16} />
+          </button>
+          <span className="text-sm font-bold" style={{ color: "var(--sp-text)" }}>Quiz results</span>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-6">
+          <div className="mx-auto max-w-md space-y-5">
+            <div className="rounded-3xl border p-6 text-center space-y-5"
+              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+              <div className="flex items-center justify-center gap-2">
+                <Trophy size={18} className="text-amber-500" />
+                <p className="text-base font-bold" style={{ color: "var(--sp-text)" }}>
+                  {pct >= 70 ? "Excellent! You crushed it 🔥" : pct >= 40 ? "Good effort — keep pushing" : "Let's go over these again"}
+                </p>
+              </div>
+              <ScoreRing pct={pct} />
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { label: "Correct", v: correctCount,                           c: "#10b981" },
+                  { label: "Wrong",   v: answered - correctCount,                c: "#ef4444" },
+                  { label: "Total",   v: questions.length,                       c: "#6366f1" },
+                ].map(s => (
+                  <div key={s.label} className="rounded-2xl py-3" style={{ background: "var(--sp-bg-muted)" }}>
+                    <p className="text-xl font-extrabold" style={{ color: s.c }}>{s.v}</p>
+                    <p className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>{s.label}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={restart}
+                  className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hover:bg-indigo-500 transition">
+                  <RotateCcw size={14} /> Try again
+                </button>
+                <button onClick={onClose}
+                  className="flex-1 rounded-2xl border px-5 py-3 text-sm font-semibold transition"
+                  style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }}>
+                  Done
+                </button>
+              </div>
+            </div>
+
+            {/* Per-question review */}
+            <p className="text-xs font-semibold px-1" style={{ color: "var(--sp-text-3)" }}>Question breakdown</p>
+            {questions.map((qq, i) => {
+              const userPick = picks[qq.question_number];
+              const correct  = userPick === qq.correct_answer;
+              return (
+                <div key={i} className="rounded-2xl border p-4 space-y-2"
+                  style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+                  <div className="flex items-start gap-2">
+                    <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${correct ? "bg-emerald-500" : "bg-red-500"} text-white`}>
+                      {correct ? <Check size={10} strokeWidth={3} /> : <X size={10} strokeWidth={3} />}
+                    </span>
+                    <p className="text-sm leading-6" style={{ color: "var(--sp-text)" }}>
+                      <MathRenderer content={qq.question_text} />
+                    </p>
+                  </div>
+                  {!correct && (
+                    <p className="text-xs pl-7" style={{ color: "var(--sp-text-3)" }}>
+                      Your answer: <strong className="text-red-400">{userPick?.toUpperCase() ?? "—"}</strong>
+                      {" · "}Correct: <strong className="text-emerald-400">{qq.correct_answer.toUpperCase()}</strong>
+                    </p>
+                  )}
+                  <div className="rounded-xl p-3 text-xs leading-relaxed pl-7"
+                    style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
+                    <MathRenderer content={qq.explanation} />
+                  </div>
+                </div>
+              );
+            })}
+
+            {!isPaid && (
+              <div className="rounded-3xl border p-6 text-center"
+                style={{ borderColor: "rgba(99,102,241,0.25)", background: "rgba(99,102,241,0.06)" }}>
+                <Lock className="h-5 w-5 text-indigo-500 mx-auto mb-2" />
+                <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+                  Free plan — 2 questions per quiz
+                </p>
+                <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+                  Upgrade to unlock all questions and unlimited quiz attempts.
+                </p>
+                <Link href="/dashboard/subscribe"
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition">
+                  <Crown className="h-3.5 w-3.5" /> Unlock everything <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Active quiz screen ──────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "var(--sp-bg)" }}>
       {/* Top bar */}
-      <div
-        className="flex items-center gap-3 px-4 py-3 shrink-0 border-b"
-        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
-      >
-        <button
-          onClick={onClose}
-          aria-label="Close quiz"
+      <div className="flex items-center gap-3 px-4 py-3 shrink-0 border-b"
+        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
+        <button onClick={onClose} aria-label="Close quiz"
           className="flex h-9 w-9 items-center justify-center rounded-full border transition"
-          style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)" }}
-        >
+          style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)" }}>
           <X size={16} />
         </button>
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs font-semibold" style={{ color: "var(--sp-text-2)" }}>
-              {finished ? "Results" : `${index + 1} / ${deck.length}`}
+              Question {index + 1} of {questions.length}
             </span>
             <span className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>
               {answered} answered
             </span>
           </div>
+          {/* Progress bar */}
           <div className="flex gap-[3px]">
-            {deck.map((d, i) => {
-              const r = results[d.id];
-              const bg =
-                r === "correct" || r === "got" ? "#10b981"
-                : r === "wrong" ? "#ef4444"
-                : r === "skipped" || r === "review" ? "#f59e0b"
-                : i === index && !finished ? "#6366f1"
-                : "var(--sp-bg-muted)";
+            {questions.map((qq, i) => {
+              const p = picks[qq.question_number];
+              const bg = p
+                ? p === qq.correct_answer ? "#10b981" : "#ef4444"
+                : i === index ? "#6366f1" : "var(--sp-bg-muted)";
               return (
-                <button
-                  key={d.id}
-                  onClick={() => { setFinished(false); setIndex(i); }}
-                  aria-label={`Go to question ${i + 1}`}
-                  className="h-1.5 flex-1 rounded-full transition-colors"
-                  style={{ background: bg, minWidth: 4 }}
-                />
+                <div key={i} className="h-1.5 flex-1 rounded-full transition-colors"
+                  style={{ background: bg, minWidth: 4 }} />
               );
             })}
           </div>
         </div>
       </div>
 
-      {/* Body */}
+      {/* Question body */}
       <div className="flex-1 overflow-y-auto px-4 py-5">
-        <div className="mx-auto max-w-2xl space-y-5">
-          {!finished && q && (
-            <SecureWrap userEmail={userEmail} enabled={isPaid}>
-              <div
-                className="rounded-3xl border p-5"
-                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-              >
-                <div className="flex items-center gap-2 mb-4 flex-wrap">
-                  <span className="flex items-center gap-1.5 text-sm font-bold text-indigo-500">
-                    <Sparkles size={14} /> Question {q.question_number ?? index + 1}
+        <div className="mx-auto max-w-2xl space-y-4">
+          <div className="rounded-3xl border p-5 space-y-5"
+            style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+            {/* Question header */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="flex items-center gap-1.5 text-sm font-bold text-indigo-500">
+                <Sparkles size={14} /> Q{q.question_number}
+              </span>
+              <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold text-blue-500">
+                MCQ
+              </span>
+            </div>
+
+            {/* Question text */}
+            <div className="text-[17px] leading-8 whitespace-pre-wrap" style={{ color: "var(--sp-text)" }}>
+              <MathRenderer content={q.question_text} />
+            </div>
+
+            {/* Options */}
+            <div className="space-y-2.5">
+              {(["a", "b", "c", "d"] as const).map(opt => (
+                <button key={opt} onClick={() => handlePick(opt)} disabled={isAnswered}
+                  className="w-full flex items-center gap-3 rounded-2xl border px-3.5 py-3 text-left text-[15px] leading-6 transition-all active:scale-[0.99] disabled:cursor-default"
+                  style={optStyle(opt)}>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold uppercase"
+                    style={badgeStyle(opt)}>
+                    {isAnswered && opt === q.correct_answer ? <Check size={14} strokeWidth={3} />
+                      : isAnswered && opt === picked ? <X size={14} strokeWidth={3} />
+                      : opt}
                   </span>
-                  <span
-                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                      q.question_type === "mcq"
-                        ? "border-blue-500/20 bg-blue-500/10 text-blue-500"
-                        : "border-slate-500/20 bg-slate-500/10 text-slate-500"
-                    }`}
-                  >
-                    {q.question_type === "mcq" ? "MCQ" : "Theory"}
-                  </span>
-                  {q.topic_tag && (
-                    <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-500">
-                      {q.topic_tag}
-                    </span>
-                  )}
-                  {q.marks ? (
-                    <span className="ml-auto text-[11px]" style={{ color: "var(--sp-text-3)" }}>
-                      {q.marks} marks
-                    </span>
-                  ) : null}
-                </div>
+                  <MathRenderer content={q.options[opt]} className="flex-1 min-w-0 break-words" />
+                </button>
+              ))}
+            </div>
 
-                <div
-                  className="text-[17px] leading-8 whitespace-pre-wrap mb-5"
-                  style={{ color: "var(--sp-text)" }}
-                >
-                  <MathRenderer content={q.question_text} />
-                </div>
-
-                {q.question_type === "mcq" ? (
-                  <PracticeMCQ
-                    key={q.id}
-                    q={q}
-                    pick={picks[q.id]}
-                    result={results[q.id]}
-                    onPick={pickMcq}
-                    onSkip={skipMcq}
-                  />
-                ) : (
-                  <PracticeTheory
-                    key={q.id}
-                    q={q}
-                    result={results[q.id]}
-                    onGrade={r => setResults(prev => ({ ...prev, [q.id]: r }))}
-                  />
-                )}
-              </div>
-            </SecureWrap>
-          )}
-
-          {/* Results */}
-          {finished && (
-            <>
-              <div
-                className="rounded-3xl border p-6 text-center space-y-5"
-                style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
-              >
-                <div className="flex items-center justify-center gap-2">
-                  <Trophy size={18} className="text-amber-500" />
-                  <p className="text-base font-bold" style={{ color: "var(--sp-text)" }}>
-                    {stats.pct >= 70 ? "Great work!" : stats.pct >= 40 ? "Good effort — keep going" : "Let's go over these again"}
-                  </p>
-                </div>
-
-                <ScoreRing pct={stats.pct} />
-
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  {[
-                    { label: "Correct", v: stats.correct + stats.got, c: "#10b981" },
-                    { label: "Missed",  v: deck.filter(x => results[x.id] === "wrong" || results[x.id] === "review").length, c: "#ef4444" },
-                    { label: "Skipped", v: deck.filter(x => !results[x.id] || results[x.id] === "skipped").length, c: "#f59e0b" },
-                  ].map(s => (
-                    <div key={s.label} className="rounded-2xl py-3" style={{ background: "var(--sp-bg-muted)" }}>
-                      <p className="text-xl font-extrabold" style={{ color: s.c }}>{s.v}</p>
-                      <p className="text-[11px]" style={{ color: "var(--sp-text-3)" }}>{s.label}</p>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-2">
-                  {stats.missed.length > 0 && (
-                    <button
-                      onClick={() => restart(stats.missed)}
-                      className="flex-1 inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hover:bg-indigo-500 transition"
-                    >
-                      <RotateCcw size={14} /> Retry {stats.missed.length} missed
-                    </button>
-                  )}
-                  <button
-                    onClick={() => restart(baseDeck)}
-                    className="flex-1 rounded-2xl border px-5 py-3 text-sm font-semibold transition"
-                    style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }}
-                  >
-                    Start over
-                  </button>
+            {/* Explanation — shown after answering */}
+            {isAnswered && (
+              <div className="rounded-2xl border p-4 space-y-1"
+                style={{
+                  borderColor: isCorrect ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)",
+                  background:  isCorrect ? "rgba(16,185,129,0.06)" : "rgba(239,68,68,0.06)",
+                }}>
+                <p className={`text-sm font-bold ${isCorrect ? "text-emerald-500" : "text-red-400"}`}>
+                  {isCorrect ? "✓ Correct!" : `✗ The answer is ${q.correct_answer.toUpperCase()}`}
+                </p>
+                <div className="text-sm leading-6" style={{ color: "var(--sp-text-2)" }}>
+                  <MathRenderer content={q.explanation} />
                 </div>
               </div>
-
-              {isGated && (
-                <div
-                  className="rounded-3xl border p-6 text-center"
-                  style={{ borderColor: "rgba(99,102,241,0.25)", background: "rgba(99,102,241,0.06)" }}
-                >
-                  <div
-                    className="flex h-10 w-10 items-center justify-center rounded-xl mx-auto mb-3"
-                    style={{ background: "rgba(99,102,241,0.14)" }}
-                  >
-                    <Lock className="h-4 w-4 text-indigo-500" />
-                  </div>
-                  <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-                    {hidden} more question{hidden !== 1 ? "s" : ""} locked
-                  </p>
-                  <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
-                    Free plan shows {freeLimit} of {questions.length} questions.
-                  </p>
-                  <Link
-                    href="/dashboard/subscribe"
-                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition"
-                  >
-                    <Crown className="h-3.5 w-3.5" /> Unlock all questions <ArrowRight className="h-3.5 w-3.5" />
-                  </Link>
-                </div>
-              )}
-            </>
-          )}
+            )}
+          </div>
         </div>
       </div>
 
       {/* Footer nav */}
-      {!finished && (
-        <div
-          className="flex items-center gap-3 px-4 py-3 shrink-0 border-t"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}
-        >
-          <button
-            onClick={prev}
-            disabled={index === 0}
-            className="flex items-center gap-1.5 rounded-2xl border px-4 py-3 text-sm font-semibold transition disabled:opacity-30"
-            style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }}
-          >
-            <ArrowLeft size={14} /> Prev
-          </button>
+      <div className="flex items-center gap-3 px-4 py-3 shrink-0 border-t"
+        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-card)" }}>
+        <button onClick={() => setIndex(i => Math.max(0, i - 1))} disabled={index === 0}
+          className="flex items-center gap-1.5 rounded-2xl border px-4 py-3 text-sm font-semibold transition disabled:opacity-30"
+          style={{ borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }}>
+          <ArrowLeft size={14} /> Prev
+        </button>
 
-          <button
-            onClick={next}
-            className={`flex-1 flex items-center justify-center gap-1.5 rounded-2xl px-4 py-3 text-sm font-bold transition ${
-              q && results[q.id] ? "bg-indigo-600 text-white hover:bg-indigo-500" : "border"
-            }`}
-            style={
-              q && results[q.id]
-                ? undefined
-                : { borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" }
-            }
-          >
-            {isLast ? "See results" : "Next"} <ArrowRight size={14} />
-          </button>
-        </div>
-      )}
+        <button onClick={isAnswered ? handleNext : undefined}
+          disabled={!isAnswered}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-2xl px-4 py-3 text-sm font-bold transition ${
+            isAnswered ? "bg-indigo-600 text-white hover:bg-indigo-500" : "border opacity-40 cursor-not-allowed"
+          }`}
+          style={!isAnswered ? { borderColor: "var(--sp-border)", color: "var(--sp-text-2)", background: "var(--sp-bg-card)" } : undefined}>
+          {isLast ? "See results" : "Next question"} <ArrowRight size={14} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -985,9 +970,9 @@ export default function QuestionDetailPage() {
   const [submissions, setSubmissions]       = useState<Submission[]>([]);
   const [subsLoading, setSubsLoading]       = useState(true);
 
-  const [tab, setTab]                   = useState<Tab>("paper");
-  const [showPractice, setShowPractice] = useState(false);
-  const [showPreview, setShowPreview]   = useState(true);
+  const [tab, setTab]               = useState<Tab>("paper");
+  const [showQuiz, setShowQuiz]     = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
 
   // Load question detail + limits
   useEffect(() => {
@@ -1085,12 +1070,12 @@ export default function QuestionDetailPage() {
 
   return (
     <>
-      {showPractice && hasProcessed && (
-        <PracticeModal
-          questions={processedQuestions}
+      {showQuiz && (
+        <QuizModal
+          questionId={questionId}
+          paperTitle={data.title}
           isPaid={limits.is_paid}
-          userEmail={userEmail}
-          onClose={() => setShowPractice(false)}
+          onClose={() => setShowQuiz(false)}
         />
       )}
 
@@ -1246,38 +1231,28 @@ export default function QuestionDetailPage() {
         </div>
       </div>
 
-      {/* Floating quiz button */}
-      {(hasProcessed || questionsLoading) && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 px-4 w-full max-w-xs">
-          {questionsLoading ? (
-            <div className="flex items-center gap-3 rounded-2xl border px-5 py-3.5 shadow-xl backdrop-blur-sm"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <Loader2 size={16} className="animate-spin text-indigo-500 shrink-0" />
-              <span className="text-sm font-medium" style={{ color: "var(--sp-text-2)" }}>Loading questions…</span>
-            </div>
-          ) : (
-            <button onClick={() => setShowPractice(true)}
-              className="w-full flex items-center gap-3 rounded-2xl px-5 py-3.5 shadow-2xl transition active:scale-95"
-              style={{
-                background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
-                boxShadow:  "0 8px 32px rgba(99,102,241,0.45)",
-              }}>
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/20">
-                <Play size={14} className="text-white" fill="white" />
-              </div>
-              <div className="text-left min-w-0 flex-1">
-                <p className="text-sm font-bold text-white leading-none">Take Quiz</p>
-                <p className="text-[11px] text-indigo-200 mt-0.5">
-                  {processedQuestions.length} question{processedQuestions.length !== 1 ? "s" : ""}
-                  {mcqCount > 0 && ` · ${mcqCount} MCQ`}
-                  {theoryCount > 0 && ` · ${theoryCount} Theory`}
-                </p>
-              </div>
-              <Sparkles size={16} className="text-indigo-200 shrink-0" />
-            </button>
-          )}
-        </div>
-      )}
+      {/* Floating quiz button — always visible once paper is loaded */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 px-4 w-full max-w-xs">
+        <button
+          onClick={() => setShowQuiz(true)}
+          className="w-full flex items-center gap-3 rounded-2xl px-5 py-3.5 shadow-2xl transition active:scale-95"
+          style={{
+            background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+            boxShadow:  "0 8px 32px rgba(99,102,241,0.45)",
+          }}
+        >
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/20">
+            <Play size={14} className="text-white" fill="white" />
+          </div>
+          <div className="text-left min-w-0 flex-1">
+            <p className="text-sm font-bold text-white leading-none">Take Quiz</p>
+            <p className="text-[11px] text-indigo-200 mt-0.5">
+              AI-generated · interactive MCQ
+            </p>
+          </div>
+          <Sparkles size={16} className="text-indigo-200 shrink-0" />
+        </button>
+      </div>
     </>
   );
 }
