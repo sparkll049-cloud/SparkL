@@ -1,29 +1,7 @@
 """
 SparkL Cram: AI study assistant.
 Storage-optimised: messages deleted with sessions, per-session cap, shorter TTL.
-YouTube: Gemini url_context (if SDK >= 0.8.0) with yt-dlp subtitle fallback.
-
-v3 fixes:
-  - Guards google-genai UrlContext behind _GEMINI_HAS_URL_CONTEXT flag
-  - yt-dlp fallback for YouTube when url_context unavailable or returns empty
-  - All previous storage + singleton + timeout fixes retained
-
---- DB MIGRATIONS (run once in Supabase SQL editor) ---
-CREATE INDEX IF NOT EXISTS idx_cram_messages_session_created
-  ON cram_messages (session_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_cram_messages_user_role_created
-  ON cram_messages (user_id, role, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_cram_sessions_user_created
-  ON cram_sessions (user_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_cram_sessions_last_active
-  ON cram_sessions (last_active_at);
-
-ALTER TABLE cram_sessions
-  ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ DEFAULT NOW();
-------------------------------------------------------
+YouTube: youtube-transcript-api (primary) → yt-dlp (fallback) → Gemini url_context (if available)
 """
 
 from __future__ import annotations
@@ -69,13 +47,21 @@ except ImportError:
 try:
     from google import genai as genai_sdk
     from google.genai import types as genai_types
-    # UrlContext was added in google-genai 0.8.0.
-    # Guard it so older installs degrade to yt-dlp gracefully.
     _GEMINI_HAS_URL_CONTEXT = hasattr(genai_types, "UrlContext")
+    print(f"[genai] loaded, HAS_URL_CONTEXT={_GEMINI_HAS_URL_CONTEXT}")
 except ImportError:
     genai_sdk = None
     genai_types = None
     _GEMINI_HAS_URL_CONTEXT = False
+    print("[genai] not installed")
+
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+    _HAS_TRANSCRIPT_API = True
+    print("[youtube-transcript-api] available")
+except ImportError:
+    _HAS_TRANSCRIPT_API = False
+    print("[youtube-transcript-api] not installed")
 
 router = APIRouter(prefix="/api/study", tags=["study"])
 
@@ -97,7 +83,8 @@ SESSION_INACTIVE_DAYS     = 30
 # ── AI knobs ───────────────────────────────────────────────────────────────────
 GROQ_MODEL              = "openai/gpt-oss-120b"
 GEMINI_MODEL            = "gemini-3.5-flash"
-GEMINI_REQUEST_TIMEOUT  = 30
+GEMINI_FALLBACK_MODEL   = "gemini-3.1-flash-lite"
+GEMINI_REQUEST_TIMEOUT  = 45
 
 VALID_SOURCE_TYPES = {"pdf", "docx", "image", "text", "url", "youtube"}
 
@@ -147,7 +134,6 @@ def _get_gemini_client():
 
 
 async def _gemini_with_timeout(coro, timeout: int = GEMINI_REQUEST_TIMEOUT):
-    """Hard timeout so hanging Gemini calls don't tie up Render workers."""
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
@@ -155,6 +141,33 @@ async def _gemini_with_timeout(coro, timeout: int = GEMINI_REQUEST_TIMEOUT):
             status_code=504,
             detail="The AI took too long to respond. Please try again.",
         )
+
+
+async def _gemini_generate(contents, config, timeout: int = GEMINI_REQUEST_TIMEOUT) -> str:
+    """Call Gemini with automatic fallback to GEMINI_FALLBACK_MODEL on 503."""
+    client = _get_gemini_client()
+    for model in [GEMINI_MODEL, GEMINI_FALLBACK_MODEL]:
+        try:
+            resp = await _gemini_with_timeout(
+                client.aio.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=config,
+                ),
+                timeout=timeout,
+            )
+            return resp.text or ""
+        except HTTPException:
+            raise
+        except Exception as exc:
+            if "503" in str(exc) or "UNAVAILABLE" in str(exc):
+                print(f"[Gemini] {model} unavailable, trying fallback...")
+                continue
+            raise
+    raise HTTPException(
+        status_code=503,
+        detail="AI is temporarily unavailable. Please try again in a moment.",
+    )
 
 
 # ── YouTube helpers ────────────────────────────────────────────────────────────
@@ -173,8 +186,49 @@ def _extract_youtube_id(url: str) -> str | None:
     return None
 
 
+def _fetch_transcript_sync(video_id: str) -> str | None:
+    """
+    Fetch transcript using youtube-transcript-api (sync, run in executor).
+    Tries English first, then any available language.
+    """
+    if not _HAS_TRANSCRIPT_API:
+        return None
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
+        # Try manual English first
+        for lang in ["en", "en-US", "en-GB"]:
+            try:
+                transcript = transcript_list.find_transcript([lang])
+                entries = transcript.fetch()
+                return " ".join(e["text"] for e in entries).strip()
+            except Exception:
+                continue
+
+        # Try auto-generated English
+        try:
+            transcript = transcript_list.find_generated_transcript(["en"])
+            entries = transcript.fetch()
+            return " ".join(e["text"] for e in entries).strip()
+        except Exception:
+            pass
+
+        # Try any available language and translate to English
+        try:
+            transcript = next(iter(transcript_list))
+            if transcript.language_code != "en":
+                transcript = transcript.translate("en")
+            entries = transcript.fetch()
+            return " ".join(e["text"] for e in entries).strip()
+        except Exception:
+            pass
+
+    except Exception as e:
+        print(f"[youtube-transcript-api] failed for {video_id}: {e}")
+    return None
+
+
 def _clean_vtt(vtt: str) -> str:
-    """Strip VTT timing/positioning lines and deduplicate repeated caption lines."""
     lines, seen, out = vtt.splitlines(), set(), []
     for line in lines:
         line = line.strip()
@@ -190,16 +244,12 @@ def _clean_vtt(vtt: str) -> str:
     return " ".join(out)
 
 
-async def _extract_youtube_subtitles(video_id: str) -> str | None:
-    """
-    Pull auto-generated or manual English subtitles via yt-dlp.
-    Runs subprocess in executor so it doesn't block the event loop.
-    Returns cleaned plain text or None.
-    """
+async def _extract_youtube_subtitles_ytdlp(video_id: str) -> str | None:
+    """yt-dlp fallback — only used when youtube-transcript-api fails."""
     loop = asyncio.get_running_loop()
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            await loop.run_in_executor(
+            result = await loop.run_in_executor(
                 None,
                 lambda: subprocess.run(
                     [
@@ -217,13 +267,17 @@ async def _extract_youtube_subtitles(video_id: str) -> str | None:
                     timeout=30,
                 ),
             )
+            if result.returncode != 0:
+                print(f"[yt-dlp] failed: {result.stderr[:300]}")
+                return None
             vtt_files = glob.glob(f"{tmp}/*.vtt")
             if not vtt_files:
+                print(f"[yt-dlp] no VTT files found")
                 return None
             with open(vtt_files[0], encoding="utf-8", errors="replace") as f:
                 return _clean_vtt(f.read())
     except Exception as e:
-        print(f"[yt-dlp subtitle extraction failed] {e}")
+        print(f"[yt-dlp] exception: {e}")
         return None
 
 
@@ -231,117 +285,142 @@ async def _extract_url_with_gemini(url: str, is_youtube: bool) -> str:
     """
     Extract content from a URL or YouTube video.
 
-    YouTube path:
-      1. Gemini url_context (if SDK >= 0.8.0 and returns enough text)
-      2. yt-dlp subtitles → Gemini cleanup pass
-      3. Raw subtitles as fallback if Gemini cleanup fails
-      4. 422 if all three fail
+    YouTube path (in order):
+      1. youtube-transcript-api → Gemini cleanup
+      2. yt-dlp subtitles → Gemini cleanup
+      3. Gemini url_context (if SDK supports it)
+      4. 422 hard fail
 
     Regular URL path:
-      Gemini url_context only (no yt-dlp fallback).
+      Gemini url_context only.
     """
     client = _get_gemini_client()
 
     if is_youtube:
-        # ── Step 1: Gemini url_context ─────────────────────────────────────────
-        if _GEMINI_HAS_URL_CONTEXT:
-            try:
-                resp = await _gemini_with_timeout(
-                    client.aio.models.generate_content(
-                        model=GEMINI_MODEL,
+        video_id = _extract_youtube_id(url)
+
+        # ── Step 1: youtube-transcript-api ─────────────────────────────────────
+        if video_id and _HAS_TRANSCRIPT_API:
+            print(f"[YouTube] trying youtube-transcript-api for {video_id}")
+            loop = asyncio.get_running_loop()
+            raw_transcript = await loop.run_in_executor(
+                None, _fetch_transcript_sync, video_id
+            )
+            if raw_transcript and len(raw_transcript) > 100:
+                print(f"[YouTube] transcript-api got {len(raw_transcript)} chars")
+                try:
+                    cleaned = await _gemini_generate(
                         contents=(
-                            f"Read this YouTube video and extract ALL educational content: {url}\n\n"
-                            "Return a full transcript or detailed summary covering every topic, "
-                            "example, definition and explanation from the video. Use clear headings. "
-                            "Do not add your own opinions — only what is in the video."
+                            "Below is a raw transcript from a YouTube video. "
+                            "Rewrite it as clean, structured study notes with clear headings. "
+                            "Preserve all facts, definitions and examples exactly. "
+                            "Do not add any information not in the transcript.\n\n"
+                            f"{raw_transcript[:MAX_CONTEXT_CHARS]}"
                         ),
                         config=genai_types.GenerateContentConfig(
-                            tools=[genai_types.Tool(url_context=genai_types.UrlContext())],
                             max_output_tokens=8192,
                             temperature=0.0,
                         ),
                     )
-                )
-                text = (resp.text or "").strip()
-                if len(text) >= 50:
-                    return text
-                print("[Gemini url_context returned too little — falling back to yt-dlp]")
-            except HTTPException:
-                raise
-            except Exception as e:
-                print(f"[Gemini url_context failed] {e}")
-        else:
-            print("[Gemini url_context unavailable in this SDK version — using yt-dlp]")
-
-        # ── Step 2: yt-dlp subtitles ───────────────────────────────────────────
-        video_id = _extract_youtube_id(url)
-        if video_id:
-            subtitle_text = await _extract_youtube_subtitles(video_id)
-
-            if subtitle_text and len(subtitle_text) > 100:
-                # Ask Gemini to rewrite raw captions as structured study notes.
-                try:
-                    resp = await _gemini_with_timeout(
-                        client.aio.models.generate_content(
-                            model=GEMINI_MODEL,
-                            contents=(
-                                "Below are raw captions from a YouTube video. "
-                                "Rewrite them as clean, structured study notes with headings. "
-                                "Preserve all facts, definitions and examples exactly. "
-                                "Do not add any information that is not in the captions.\n\n"
-                                f"{subtitle_text[:MAX_CONTEXT_CHARS]}"
-                            ),
-                            config=genai_types.GenerateContentConfig(
-                                max_output_tokens=8192,
-                                temperature=0.0,
-                            ),
-                        )
-                    )
-                    cleaned = (resp.text or "").strip()
-                    if len(cleaned) >= 50:
+                    if cleaned and len(cleaned) >= 50:
                         return cleaned
                 except Exception as e:
-                    print(f"[Gemini caption cleanup failed] {e}")
+                    print(f"[YouTube] Gemini cleanup failed: {e}")
+                # Return raw transcript as fallback
+                if len(raw_transcript) >= 50:
+                    return raw_transcript
 
-                # ── Step 3: raw subtitles as last resort ───────────────────────
+        # ── Step 2: yt-dlp ─────────────────────────────────────────────────────
+        if video_id:
+            print(f"[YouTube] trying yt-dlp for {video_id}")
+            subtitle_text = await _extract_youtube_subtitles_ytdlp(video_id)
+            if subtitle_text and len(subtitle_text) > 100:
+                try:
+                    cleaned = await _gemini_generate(
+                        contents=(
+                            "Below are raw captions from a YouTube video. "
+                            "Rewrite them as clean, structured study notes with headings. "
+                            "Preserve all facts, definitions and examples exactly. "
+                            "Do not add any information that is not in the captions.\n\n"
+                            f"{subtitle_text[:MAX_CONTEXT_CHARS]}"
+                        ),
+                        config=genai_types.GenerateContentConfig(
+                            max_output_tokens=8192,
+                            temperature=0.0,
+                        ),
+                    )
+                    if cleaned and len(cleaned) >= 50:
+                        return cleaned
+                except Exception as e:
+                    print(f"[YouTube] yt-dlp Gemini cleanup failed: {e}")
                 if len(subtitle_text) >= 50:
                     return subtitle_text
 
-        # ── Step 4: hard fail ──────────────────────────────────────────────────
+        # ── Step 3: Gemini url_context ──────────────────────────────────────────
+        if _GEMINI_HAS_URL_CONTEXT:
+            print(f"[YouTube] trying Gemini url_context")
+            try:
+                text = await _gemini_generate(
+                    contents=(
+                        f"Read this YouTube video and extract ALL educational content: {url}\n\n"
+                        "Return a full transcript or detailed summary covering every topic, "
+                        "example, definition and explanation from the video. Use clear headings. "
+                        "Do not add your own opinions — only what is in the video."
+                    ),
+                    config=genai_types.GenerateContentConfig(
+                        tools=[genai_types.Tool(url_context=genai_types.UrlContext())],
+                        max_output_tokens=8192,
+                        temperature=0.0,
+                    ),
+                )
+                if text and len(text) >= 50:
+                    return text
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"[YouTube] Gemini url_context failed: {e}")
+
+        # ── Step 4: hard fail ───────────────────────────────────────────────────
         raise HTTPException(
             status_code=422,
             detail=(
                 "Could not extract this YouTube video. "
-                "Try a video that has captions, or paste the transcript as text instead."
+                "Try a video that has captions enabled, or paste the transcript as text instead."
             ),
         )
 
     else:
-        # ── Regular URL — Gemini url_context only ──────────────────────────────
+        # ── Regular URL ─────────────────────────────────────────────────────────
         if _GEMINI_HAS_URL_CONTEXT:
             try:
-                resp = await _gemini_with_timeout(
-                    client.aio.models.generate_content(
-                        model=GEMINI_MODEL,
-                        contents=(
-                            f"Read this web page and extract ALL readable text and educational content: {url}\n\n"
-                            "Return the full text, preserving headings and structure. "
-                            "Do not add your own opinions — only what is on the page."
-                        ),
-                        config=genai_types.GenerateContentConfig(
-                            tools=[genai_types.Tool(url_context=genai_types.UrlContext())],
-                            max_output_tokens=8192,
-                            temperature=0.0,
-                        ),
-                    )
+                text = await _gemini_generate(
+                    contents=(
+                        f"Read this web page and extract ALL readable text and educational content: {url}\n\n"
+                        "Return the full text, preserving headings and structure. "
+                        "Do not add your own opinions — only what is on the page."
+                    ),
+                    config=genai_types.GenerateContentConfig(
+                        tools=[genai_types.Tool(url_context=genai_types.UrlContext())],
+                        max_output_tokens=8192,
+                        temperature=0.0,
+                    ),
                 )
-                text = (resp.text or "").strip()
-                if len(text) >= 50:
+                if text and len(text) >= 50:
                     return text
             except HTTPException:
                 raise
             except Exception as e:
-                print(f"[Gemini URL extraction failed] {e}")
+                print(f"[URL] Gemini url_context failed: {e}")
+
+        # Try fetching the page text directly as a last resort
+        try:
+            page_text = await asyncio.get_running_loop().run_in_executor(
+                None, fetch_url_text, url
+            )
+            if page_text and len(page_text) >= 50:
+                return page_text[:MAX_TEXT_CHARS]
+        except Exception as e:
+            print(f"[URL] safe_fetch failed: {e}")
 
         raise HTTPException(
             status_code=422,
@@ -434,10 +513,6 @@ def _sync_cleanup_old_messages() -> None:
 
 
 def _sync_cleanup_inactive_sessions() -> None:
-    """
-    Delete sessions (and their messages) that have had no activity
-    for SESSION_INACTIVE_DAYS days.
-    """
     try:
         cutoff = (
             datetime.now(timezone.utc) - timedelta(days=SESSION_INACTIVE_DAYS)
@@ -474,7 +549,6 @@ def _sync_delete_session_messages(session_id: str) -> None:
 
 
 def _sync_prune_session_messages(session_id: str) -> None:
-    """Keep only the most recent MAX_MESSAGES_PER_SESSION rows per session."""
     try:
         res = (
             supabase.table("cram_messages")
@@ -559,15 +633,11 @@ async def _run(fn, *args):
     return await asyncio.get_running_loop().run_in_executor(None, partial(fn, *args))
 
 
-async def _save_messages(
-    session_id: str, user_id: str, messages: list[dict]
-) -> None:
+async def _save_messages(session_id: str, user_id: str, messages: list[dict]) -> None:
     await _run(_sync_save_messages, session_id, user_id, messages)
 
 
-async def _load_messages(
-    session_id: str, limit: int = MAX_HISTORY_MSGS
-) -> list[dict]:
+async def _load_messages(session_id: str, limit: int = MAX_HISTORY_MSGS) -> list[dict]:
     return await _run(_sync_load_messages, session_id, limit)
 
 
@@ -654,20 +724,28 @@ async def _stream_gemini_text(
 ) -> AsyncGenerator[str, None]:
     client = _get_gemini_client()
     full = f"{history_text}\n\nStudent: {prompt}" if history_text else prompt
-    stream = await _gemini_with_timeout(
-        client.aio.models.generate_content_stream(
-            model=GEMINI_MODEL,
-            contents=full,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=TUTOR_SYSTEM_PROMPT,
-                max_output_tokens=MAX_ANSWER_TOKENS,
-                temperature=0.3,
-            ),
-        )
-    )
-    async for chunk in stream:
-        if chunk.text:
-            yield chunk.text
+    for model in [GEMINI_MODEL, GEMINI_FALLBACK_MODEL]:
+        try:
+            stream = await _gemini_with_timeout(
+                client.aio.models.generate_content_stream(
+                    model=model,
+                    contents=full,
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=TUTOR_SYSTEM_PROMPT,
+                        max_output_tokens=MAX_ANSWER_TOKENS,
+                        temperature=0.3,
+                    ),
+                )
+            )
+            async for chunk in stream:
+                if chunk.text:
+                    yield chunk.text
+            return
+        except Exception as exc:
+            if "503" in str(exc) or "UNAVAILABLE" in str(exc):
+                print(f"[Gemini stream] {model} unavailable, trying fallback...")
+                continue
+            raise
 
 
 async def _stream_gemini_image(
@@ -681,28 +759,36 @@ async def _stream_gemini_image(
     text = "\n\n".join(
         p for p in (context_block, history_text, f"Student: {prompt}") if p
     )
-    stream = await _gemini_with_timeout(
-        client.aio.models.generate_content_stream(
-            model=GEMINI_MODEL,
-            contents=[
-                genai_types.Part(
-                    inline_data=genai_types.Blob(
-                        mime_type=mime_type,
-                        data=base64.b64decode(image_b64),
-                    )
-                ),
-                genai_types.Part(text=text),
-            ],
-            config=genai_types.GenerateContentConfig(
-                system_instruction=TUTOR_SYSTEM_PROMPT,
-                max_output_tokens=MAX_ANSWER_TOKENS,
-                temperature=0.3,
-            ),
-        )
-    )
-    async for chunk in stream:
-        if chunk.text:
-            yield chunk.text
+    for model in [GEMINI_MODEL, GEMINI_FALLBACK_MODEL]:
+        try:
+            stream = await _gemini_with_timeout(
+                client.aio.models.generate_content_stream(
+                    model=model,
+                    contents=[
+                        genai_types.Part(
+                            inline_data=genai_types.Blob(
+                                mime_type=mime_type,
+                                data=base64.b64decode(image_b64),
+                            )
+                        ),
+                        genai_types.Part(text=text),
+                    ],
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=TUTOR_SYSTEM_PROMPT,
+                        max_output_tokens=MAX_ANSWER_TOKENS,
+                        temperature=0.3,
+                    ),
+                )
+            )
+            async for chunk in stream:
+                if chunk.text:
+                    yield chunk.text
+            return
+        except Exception as exc:
+            if "503" in str(exc) or "UNAVAILABLE" in str(exc):
+                print(f"[Gemini image stream] {model} unavailable, trying fallback...")
+                continue
+            raise
 
 
 async def _stream_text_with_fallback(
@@ -747,27 +833,23 @@ async def _guard_stream(
 
 
 async def _extract_image_text(data: bytes, mime: str) -> str:
-    client = _get_gemini_client()
-    resp = await _gemini_with_timeout(
-        client.aio.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                genai_types.Part(
-                    inline_data=genai_types.Blob(mime_type=mime, data=data)
-                ),
-                genai_types.Part(
-                    text=(
-                        "Transcribe all text, formulas and diagram labels in this image "
-                        "faithfully. Output only the transcription."
-                    )
-                ),
-            ],
-            config=genai_types.GenerateContentConfig(
-                max_output_tokens=2048, temperature=0.0
+    text = await _gemini_generate(
+        contents=[
+            genai_types.Part(
+                inline_data=genai_types.Blob(mime_type=mime, data=data)
             ),
-        )
+            genai_types.Part(
+                text=(
+                    "Transcribe all text, formulas and diagram labels in this image "
+                    "faithfully. Output only the transcription."
+                )
+            ),
+        ],
+        config=genai_types.GenerateContentConfig(
+            max_output_tokens=2048, temperature=0.0
+        ),
     )
-    return (resp.text or "").strip()
+    return text.strip()
 
 
 # ── Quiz ───────────────────────────────────────────────────────────────────────
@@ -812,19 +894,15 @@ async def _generate_quiz_groq(messages: list[dict]) -> dict:
 
 
 async def _generate_quiz_gemini(context_block: str) -> dict:
-    client = _get_gemini_client()
-    resp = await _gemini_with_timeout(
-        client.aio.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=f"Generate a quiz from these study notes:\n\n{context_block}",
-            config=genai_types.GenerateContentConfig(
-                system_instruction=QUIZ_SYSTEM_PROMPT,
-                max_output_tokens=2048,
-                temperature=0.5,
-            ),
-        )
+    text = await _gemini_generate(
+        contents=f"Generate a quiz from these study notes:\n\n{context_block}",
+        config=genai_types.GenerateContentConfig(
+            system_instruction=QUIZ_SYSTEM_PROMPT,
+            max_output_tokens=2048,
+            temperature=0.5,
+        ),
     )
-    return _parse_quiz(resp.text)
+    return _parse_quiz(text)
 
 
 async def _generate_quiz(context_block: str) -> dict:
@@ -1047,7 +1125,6 @@ async def study_chat(
 
     _maybe_schedule_cleanup()
 
-    # Bump last_active_at in the background.
     asyncio.create_task(_run(_sync_touch_session, session_id))
 
     if mode != "quiz":
@@ -1097,7 +1174,6 @@ async def study_chat(
                 status_code=502, detail="Quiz generation failed. Please try again."
             )
 
-        # Store a compact stub — not the full JSON blob.
         await _save_messages(session_id, user_id, [
             {"role": "user",      "content": "[Quiz requested]"},
             {"role": "assistant", "content": QUIZ_MESSAGE_STUB},
