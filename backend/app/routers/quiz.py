@@ -12,6 +12,7 @@ import logging
 import os
 import random
 import re
+import time
 from typing import Any, Optional
 from uuid import UUID
 
@@ -26,11 +27,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quiz", tags=["quiz"])
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MIN_POOL    = 3
-TARGET_POOL = 10
+MIN_POOL        = 3
+TARGET_POOL     = 10
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL   = os.getenv("GEMINI_TEXT_MODEL", os.getenv("GEMINI_VISION_MODEL", "gemini-3.5-flash"))
+GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL    = os.getenv("GEMINI_TEXT_MODEL", os.getenv("GEMINI_VISION_MODEL", "gemini-3.5-flash"))
+GEMINI_FALLBACK = "gemini-3.1-flash-lite"
 
 _gemini_client: genai.Client | None = (
     genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
@@ -67,7 +69,7 @@ Output format:
 }
 """
 
-# ── Auth (matches your questions.py pattern exactly) ──────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 async def get_current_user(
     authorization: Optional[str] = Header(None),
@@ -87,7 +89,7 @@ async def get_current_user(
         "email": user.email or str(user.id),
     }
 
-# ── Gemini call (matches your question_processor.py pattern exactly) ──────────
+# ── Gemini call with fallback ─────────────────────────────────────────────────
 
 def _clean_raw_response(raw: str) -> str:
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
@@ -102,28 +104,42 @@ def _call_gemini_sync(user_prompt: str) -> str:
 
     full_prompt = f"{SYSTEM_PROMPT}\n\n{user_prompt}"
 
-    response = _gemini_client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=full_prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.7,   # higher than processor so variants differ
-            max_output_tokens=8000,
-        ),
-    )
-    return response.text or ""
+    for model in [GEMINI_MODEL, GEMINI_FALLBACK]:
+        try:
+            response = _gemini_client.models.generate_content(
+                model=model,
+                contents=full_prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.7,
+                    max_output_tokens=8000,
+                ),
+            )
+            return response.text or ""
+        except Exception as exc:
+            err = str(exc)
+            if "503" in err or "UNAVAILABLE" in err:
+                logger.warning(
+                    "Model %s unavailable, trying fallback %s...",
+                    model, GEMINI_FALLBACK,
+                )
+                time.sleep(1)
+                continue
+            raise
+
+    raise RuntimeError("All Gemini models unavailable. Try again later.")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 async def _fetch_processed_questions(question_id: str) -> list[dict]:
     result = (
-        supabase.table("processed_questions")
+        supabase.table("questions")
         .select(
             "question_number, question_text, question_type, "
             "option_a, option_b, option_c, option_d, correct_answer, model_answer"
         )
-        .eq("question_id", question_id)
+        .eq("past_question_id", question_id)
         .order("question_number")
         .execute()
     )
@@ -223,11 +239,6 @@ async def get_quiz(
     question_id: str,
     user: dict = Depends(get_current_user),
 ):
-    """
-    Return a quiz for the given question paper.
-    Picks the least-used cached variant; generates one on-the-fly if none exist.
-    Triggers a background pool fill if pool is running low.
-    """
     result = (
         supabase.table("question_quiz_cache")
         .select("id, quiz_json, used_count")
@@ -251,17 +262,7 @@ async def get_quiz(
         ).eq("id", chosen_id).execute()
 
     else:
-        # Cache miss — fetch from questions table (matches your actual table name)
-        processed_qs = (
-            supabase.table("questions")
-            .select(
-                "question_number, question_text, question_type, "
-                "option_a, option_b, option_c, option_d, correct_answer, model_answer"
-            )
-            .eq("past_question_id", question_id)
-            .order("question_number")
-            .execute()
-        ).data or []
+        processed_qs = await _fetch_processed_questions(question_id)
 
         if not processed_qs:
             raise HTTPException(
@@ -288,9 +289,5 @@ async def prefill_quiz_cache(
     question_id: str,
     user: dict = Depends(get_current_user),
 ):
-    """
-    Admin/cron endpoint: pre-fill the cache for a question paper.
-    Call this after a paper is uploaded and processed.
-    """
     asyncio.ensure_future(_background_fill(question_id))
     return {"status": "fill_started", "question_id": question_id}
