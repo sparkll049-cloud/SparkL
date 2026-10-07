@@ -9,7 +9,7 @@ import {
   Send, CheckCircle2,
   Paperclip, X, Clock, Eye, EyeOff, Crown,
   ChevronDown, Zap,
-  Check, HelpCircle, RotateCcw, Trophy,
+  Check, HelpCircle, RotateCcw, Trophy, ClipboardList,
 } from "lucide-react";
 
 import InlinePaperViewer from "@/components/InlinePaperViewer";
@@ -68,15 +68,12 @@ interface Submission {
 
 const LOW_QUALITY_THRESHOLD = 0.5;
 
-type Tab = "paper" | "submit";
+type Tab = "paper" | "submit" | "answers";
 
 // ── Math renderer ─────────────────────────────────────────────────────────────
-// Renders $...$ / $$...$$ AND auto-detects plain-text math such as
-// x^2, (a+b)^2, x^-1, a_n, x_{10}, sqrt(x+1), \frac{a}{b}.
 
 const MATH_SPLIT = /(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)/g;
 
-// Run `fn` only on the parts that are NOT already inside $...$ / $$...$$
 function mapText(str: string, fn: (s: string) => string): string {
   return str
     .split(MATH_SPLIT)
@@ -88,32 +85,22 @@ const LATEX_CMD =
   /(\\(?:d?frac|sqrt|sum|int|lim|times|div|cdot|pm|leq|geq|neq|approx|infty|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|omega|log|ln|sin|cos|tan|rightarrow|to)\b(?:\{[^{}]*\})*(?:[\^_](?:\{[^{}]*\}|[A-Za-z0-9]))*)/g;
 
 function autoWrapMath(raw: string): string {
-  // 1. normalise \( \) and \[ \]
   let t = raw
     .replace(/\\\[/g, "$$$$").replace(/\\\]/g, "$$$$")
     .replace(/\\\(/g, "$").replace(/\\\)/g, "$");
-
-  // 2. bare LaTeX commands: \frac{a}{b}, \sqrt{x}, \times ...
   t = mapText(t, s => s.replace(LATEX_CMD, "$$$1$$"));
-
-  // 3. sqrt(x+1) -> \sqrt{x+1}
   t = mapText(t, s => s.replace(/\bsqrt\(([^()]+)\)/g, (_m, a) => `$\\sqrt{${a}}$`));
-
-  // 4. powers & subscripts: x^2, (a+b)^2, 2^n, x^-1, a_n, x_{10}, x_1^2
   t = mapText(t, s =>
     s.replace(
       /(^|[^\w$\\{}])([A-Za-z0-9]+|\([^()]+\))((?:[\^_](?:\{[^{}]+\}|[+-]?[A-Za-z0-9]+))+)/g,
       (m, pre, base, ops) => {
         const hasCaret = ops.includes("^");
-        // underscores alone only count for short math-like vars (x_1, a_n),
-        // so snake_case words in normal text are left alone
         if (!hasCaret && (base.startsWith("(") || base.length > 2)) return m;
         const fixed = ops.replace(/([\^_])([+-]?[A-Za-z0-9]+)/g, "$1{$2}");
         return `${pre}$${base}${fixed}$`;
       },
     ),
   );
-
   return t;
 }
 
@@ -129,7 +116,6 @@ function MathRenderer({ content, className = "" }: { content: string | null; cla
     <span className={className}>
       {parts.map((part, index) => {
         if (!part) return null;
-
         if (part.startsWith("$$") && part.endsWith("$$") && part.length > 4) {
           const math = part.slice(2, -2).trim();
           if (!math) return null;
@@ -139,14 +125,11 @@ function MathRenderer({ content, className = "" }: { content: string | null; cla
             </span>
           );
         }
-
         if (part.startsWith("$") && part.endsWith("$") && part.length > 2) {
           const math = part.slice(1, -1).trim();
           if (!math) return null;
-          // if KaTeX can't parse it, fall back to plain text instead of a red error
           return <InlineMath key={index} math={math} renderError={() => <span>{math}</span>} />;
         }
-
         return <span key={index}>{part}</span>;
       })}
     </span>
@@ -506,7 +489,6 @@ function PracticeModal({
 
   const prev = useCallback(() => setIndex(i => Math.max(0, i - 1)), []);
 
-  // keyboard: a–d answer, arrows navigate
   useEffect(() => {
     if (finished) return;
     const onKey = (e: KeyboardEvent) => {
@@ -761,37 +743,126 @@ function PracticeModal({
   );
 }
 
-// ── Submit solution section ───────────────────────────────────────────────────
+// ── View answers section (read-only) ─────────────────────────────────────────
 
-function SubmitSolutionSection({ questionId }: { questionId: string }) {
+function ViewAnswersSection({
+  questionId,
+  submissions,
+  loading,
+  onGoSubmit,
+}: {
+  questionId: string;
+  submissions: Submission[];
+  loading: boolean;
+  onGoSubmit: () => void;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
+      </div>
+    );
+  }
+
+  if (submissions.length === 0) {
+    return (
+      <div className="rounded-2xl border p-10 text-center"
+        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl"
+          style={{ background: "rgba(99,102,241,0.1)" }}>
+          <ClipboardList size={22} className="text-indigo-400" />
+        </div>
+        <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>No answers submitted yet</p>
+        <p className="mt-1 text-xs" style={{ color: "var(--sp-text-3)" }}>
+          Submit your answers and they&apos;ll appear here with feedback.
+        </p>
+        <button
+          onClick={onGoSubmit}
+          className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-500 transition"
+        >
+          <Send size={12} /> Submit answers
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs font-semibold px-1" style={{ color: "var(--sp-text-3)" }}>
+        Your submissions ({submissions.length})
+      </p>
+      {submissions.map(sub => (
+        <div key={sub.id} className="rounded-2xl border p-4 space-y-3"
+          style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-xs" style={{ color: "var(--sp-text-3)" }}>
+              {new Date(sub.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}
+            </span>
+            {sub.status === "reviewed" ? (
+              <span className="flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold text-emerald-500"
+                style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.08)" }}>
+                <CheckCircle2 size={10} /> Reviewed
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold"
+                style={{ borderColor: "rgba(245,158,11,0.2)", background: "rgba(245,158,11,0.08)", color: "#f59e0b" }}>
+                <Clock size={10} /> Pending review
+              </span>
+            )}
+          </div>
+          {sub.extracted_text && (
+            <div className="rounded-xl p-3 text-sm leading-relaxed whitespace-pre-wrap"
+              style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
+              <MathRenderer content={sub.extracted_text.length > 400 ? sub.extracted_text.slice(0, 400) + "…" : sub.extracted_text} />
+            </div>
+          )}
+          {sub.mime_type && !sub.extracted_text && (
+            <div className="flex items-center gap-2 rounded-xl p-3 text-xs"
+              style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}>
+              <Paperclip size={12} />
+              File attached ({sub.mime_type.split("/")[1]?.toUpperCase() ?? "FILE"}
+              {sub.file_size ? ` · ${(sub.file_size / 1024).toFixed(0)} KB` : ""})
+            </div>
+          )}
+          {sub.status === "reviewed" && sub.feedback && (
+            <div className="rounded-xl border p-3 space-y-1"
+              style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.05)" }}>
+              <p className="text-[10px] font-semibold text-emerald-500">Feedback from SparkL</p>
+              <div className="text-sm leading-6 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
+                <MathRenderer content={sub.feedback} />
+              </div>
+            </div>
+          )}
+          {sub.status === "pending" && (
+            <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
+              Your submission is being reviewed. Check back soon.
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Submit answers section (form only) ───────────────────────────────────────
+
+function SubmitAnswersSection({
+  questionId,
+  existingCount,
+  onSubmitted,
+}: {
+  questionId: string;
+  existingCount: number;
+  onSubmitted: (sub: Submission) => void;
+}) {
   const supabase = createClient();
   const router   = useRouter();
 
-  const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [subsLoading, setSubsLoading] = useState(true);
-  const [text, setText]               = useState("");
-  const [file, setFile]               = useState<File | null>(null);
-  const [submitting, setSubmitting]   = useState(false);
+  const [text, setText]           = useState("");
+  const [file, setFile]           = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    async function load() {
-      setSubsLoading(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/answers/my/${questionId}`,
-          { headers: { Authorization: `Bearer ${session.access_token}` } },
-        );
-        if (res.ok) setSubmissions(await res.json());
-      } finally {
-        setSubsLoading(false);
-      }
-    }
-    load();
-  }, [questionId]);
 
   async function handleSubmit() {
     if (!text.trim() && !file) return;
@@ -812,9 +883,8 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.detail || "Failed to submit. Please try again.");
       }
-      // parse JSON before entering setState callback
       const newId = (await res.json()).id;
-      setSubmissions(prev => [{
+      const newSub: Submission = {
         id: newId,
         status: "pending",
         feedback: null,
@@ -823,7 +893,8 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
         file_size: file?.size ?? null,
         created_at: new Date().toISOString(),
         reviewed_at: null,
-      }, ...prev]);
+      };
+      onSubmitted(newSub);
       setText(""); setFile(null);
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "Something went wrong.");
@@ -833,110 +904,61 @@ function SubmitSolutionSection({ questionId }: { questionId: string }) {
   }
 
   return (
-    <div className="space-y-4">
-      {subsLoading ? (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
-        </div>
-      ) : submissions.length > 0 && (
-        <div className="space-y-3">
-          <p className="text-xs font-semibold px-1" style={{ color: "var(--sp-text-3)" }}>
-            Your submissions ({submissions.length})
-          </p>
-          {submissions.map(sub => (
-            <div key={sub.id} className="rounded-2xl border p-4 space-y-3"
-              style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <span className="text-xs" style={{ color: "var(--sp-text-3)" }}>
-                  {new Date(sub.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}
-                </span>
-                {sub.status === "reviewed" ? (
-                  <span className="flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold text-emerald-500"
-                    style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.08)" }}>
-                    <CheckCircle2 size={10} /> Reviewed
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold"
-                    style={{ borderColor: "rgba(245,158,11,0.2)", background: "rgba(245,158,11,0.08)", color: "#f59e0b" }}>
-                    <Clock size={10} /> Pending review
-                  </span>
-                )}
-              </div>
-              {sub.extracted_text && (
-                <div className="rounded-xl p-3 text-sm leading-relaxed whitespace-pre-wrap"
-                  style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
-                  <MathRenderer content={sub.extracted_text.length > 400 ? sub.extracted_text.slice(0, 400) + "…" : sub.extracted_text} />
-                </div>
-              )}
-              {sub.mime_type && !sub.extracted_text && (
-                <div className="flex items-center gap-2 rounded-xl p-3 text-xs"
-                  style={{ background: "var(--sp-bg-muted)", color: "var(--sp-text-3)" }}>
-                  <Paperclip size={12} />
-                  File attached ({sub.mime_type.split("/")[1]?.toUpperCase() ?? "FILE"}
-                  {sub.file_size ? ` · ${(sub.file_size / 1024).toFixed(0)} KB` : ""})
-                </div>
-              )}
-              {sub.status === "reviewed" && sub.feedback && (
-                <div className="rounded-xl border p-3 space-y-1"
-                  style={{ borderColor: "rgba(16,185,129,0.2)", background: "rgba(16,185,129,0.05)" }}>
-                  <p className="text-[10px] font-semibold text-emerald-500">Feedback from SparkL</p>
-                  <div className="text-sm leading-6 whitespace-pre-wrap" style={{ color: "var(--sp-text-2)" }}>
-                    <MathRenderer content={sub.feedback} />
-                  </div>
-                </div>
-              )}
-              {sub.status === "pending" && (
-                <p className="text-[10px]" style={{ color: "var(--sp-text-3)" }}>
-                  Your submission is being reviewed. Check back soon.
-                </p>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="rounded-2xl border p-5 space-y-4"
-        style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
-        <div>
-          <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
-            {submissions.length > 0 ? "Submit another solution" : "Submit your solution"}
-          </p>
-          <p className="mt-0.5 text-xs" style={{ color: "var(--sp-text-3)" }}>Share your worked answers for feedback.</p>
-        </div>
-        <textarea value={text} onChange={e => setText(e.target.value)}
-          placeholder="Type your solution here…" rows={5}
-          className="w-full rounded-xl border px-4 py-3 text-sm outline-none transition resize-none"
-          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text)" }} />
-        <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition"
-            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}>
-            <Paperclip size={13} />
-            {file ? "Change file" : "Attach file"}
-          </button>
-          {file && (
-            <div className="flex items-center gap-2 rounded-xl border px-3 py-1.5"
-              style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
-              <span className="text-xs truncate max-w-[160px]" style={{ color: "var(--sp-text-2)" }}>{file.name}</span>
-              <button onClick={() => setFile(null)}><X size={12} style={{ color: "var(--sp-text-3)" }} /></button>
-            </div>
-          )}
-          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
-            onChange={e => setFile(e.target.files?.[0] ?? null)} />
-        </div>
-        {submitError && (
-          <div className="flex items-start gap-2 rounded-xl border px-3 py-2.5"
-            style={{ borderColor: "rgba(239,68,68,0.2)", background: "rgba(239,68,68,0.05)" }}>
-            <AlertCircle size={13} className="mt-0.5 shrink-0 text-red-400" />
-            <p className="text-xs text-red-400">{submitError}</p>
+    <div className="rounded-2xl border p-5 space-y-4"
+      style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}>
+      <div>
+        <p className="text-sm font-semibold" style={{ color: "var(--sp-text)" }}>
+          {existingCount > 0 ? "Submit another answer" : "Submit your answers"}
+        </p>
+        <p className="mt-0.5 text-xs" style={{ color: "var(--sp-text-3)" }}>Share your worked answers for feedback.</p>
+      </div>
+      <textarea
+        value={text}
+        onChange={e => setText(e.target.value)}
+        placeholder="Type your answers here…"
+        rows={5}
+        className="w-full rounded-xl border px-4 py-3 text-sm outline-none transition resize-none"
+        style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text)" }}
+      />
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition"
+          style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)", color: "var(--sp-text-2)" }}
+        >
+          <Paperclip size={13} />
+          {file ? "Change file" : "Attach file"}
+        </button>
+        {file && (
+          <div className="flex items-center gap-2 rounded-xl border px-3 py-1.5"
+            style={{ borderColor: "var(--sp-border)", background: "var(--sp-bg-muted)" }}>
+            <span className="text-xs truncate max-w-[160px]" style={{ color: "var(--sp-text-2)" }}>{file.name}</span>
+            <button onClick={() => setFile(null)}><X size={12} style={{ color: "var(--sp-text-3)" }} /></button>
           </div>
         )}
-        <button onClick={handleSubmit} disabled={(!text.trim() && !file) || submitting}
-          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed">
-          {submitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-          {submitting ? "Submitting…" : "Submit solution"}
-        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*,application/pdf"
+          className="hidden"
+          onChange={e => setFile(e.target.files?.[0] ?? null)}
+        />
       </div>
+      {submitError && (
+        <div className="flex items-start gap-2 rounded-xl border px-3 py-2.5"
+          style={{ borderColor: "rgba(239,68,68,0.2)", background: "rgba(239,68,68,0.05)" }}>
+          <AlertCircle size={13} className="mt-0.5 shrink-0 text-red-400" />
+          <p className="text-xs text-red-400">{submitError}</p>
+        </div>
+      )}
+      <button
+        onClick={handleSubmit}
+        disabled={(!text.trim() && !file) || submitting}
+        className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {submitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+        {submitting ? "Submitting…" : "Submit answers"}
+      </button>
     </div>
   );
 }
@@ -959,10 +981,15 @@ export default function QuestionDetailPage() {
 
   const [limits, setLimits] = useState<QuestionLimits>({ is_paid: false, plan: "free" });
 
+  // Submissions — loaded once, shared between ViewAnswers and SubmitAnswers tabs
+  const [submissions, setSubmissions]       = useState<Submission[]>([]);
+  const [subsLoading, setSubsLoading]       = useState(true);
+
   const [tab, setTab]                   = useState<Tab>("paper");
   const [showPractice, setShowPractice] = useState(false);
   const [showPreview, setShowPreview]   = useState(true);
 
+  // Load question detail + limits
   useEffect(() => {
     if (!questionId) return;
     async function load() {
@@ -999,6 +1026,14 @@ export default function QuestionDetailPage() {
           .catch(() => {})
           .finally(() => setQuestionsLoading(false));
 
+        // Load submissions once here so both tabs share the same data
+        fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/answers/my/${questionId}`,
+          { headers: { Authorization: `Bearer ${session.access_token}` } })
+          .then(r => r.ok ? r.json() : [])
+          .then(setSubmissions)
+          .catch(() => {})
+          .finally(() => setSubsLoading(false));
+
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong.");
       } finally {
@@ -1019,6 +1054,12 @@ export default function QuestionDetailPage() {
     `;
     document.head.appendChild(style);
     return () => { document.getElementById("sp-global-sec")?.remove(); };
+  }, []);
+
+  // Called when a new submission is made — prepend to shared list and switch to view tab
+  const handleNewSubmission = useCallback((sub: Submission) => {
+    setSubmissions(prev => [sub, ...prev]);
+    setTab("answers");
   }, []);
 
   if (loading) return (
@@ -1102,9 +1143,21 @@ export default function QuestionDetailPage() {
                   </span>
                 )}
               </TabBtn>
+
               <TabBtn active={tab === "submit"} onClick={() => setTab("submit")}>
-                <Send size={12} /> Submit solution
+                <Send size={12} /> Submit answers
               </TabBtn>
+
+              <TabBtn active={tab === "answers"} onClick={() => setTab("answers")}>
+                <ClipboardList size={12} /> View answers
+                {submissions.length > 0 && (
+                  <span className="rounded-full px-1.5 py-0.5 text-[8px] font-bold"
+                    style={{ background: "rgba(99,102,241,0.15)", color: "#6366f1" }}>
+                    {submissions.length}
+                  </span>
+                )}
+              </TabBtn>
+
               {hasProcessed && (
                 <div className="ml-auto flex items-center gap-3">
                   {mcqCount > 0 && (
@@ -1173,7 +1226,22 @@ export default function QuestionDetailPage() {
               />
             )}
 
-            {tab === "submit" && <SubmitSolutionSection questionId={questionId} />}
+            {tab === "submit" && (
+              <SubmitAnswersSection
+                questionId={questionId}
+                existingCount={submissions.length}
+                onSubmitted={handleNewSubmission}
+              />
+            )}
+
+            {tab === "answers" && (
+              <ViewAnswersSection
+                questionId={questionId}
+                submissions={submissions}
+                loading={subsLoading}
+                onGoSubmit={() => setTab("submit")}
+              />
+            )}
           </div>
         </div>
       </div>
