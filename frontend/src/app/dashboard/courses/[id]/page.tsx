@@ -528,7 +528,7 @@ export default function CourseDetailPage() {
                     </p>
                     <Link href={`/questions/${q.id}`}
                       className="flex items-center gap-1 text-xs font-semibold text-indigo-500 hover:text-indigo-400">
-                      Open full paper <ExternalLink className="h-3 w-3" />
+                      Open full past question<ExternalLink className="h-3 w-3" />
                     </Link>
                   </div>
                 )}
