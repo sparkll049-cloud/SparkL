@@ -22,6 +22,15 @@
  * 13. CSS: -webkit-user-select none, touch-action none on container
  * 14. MutationObserver watches for canvas removal/replacement attacks
  * 15. Short-lived token — viewer re-fetches session before every page
+ *
+ * Caching:
+ * - Rendered pages are cached as ImageBitmap objects in a module-level
+ *   Map keyed by `${questionId}:${page}`. The watermark is re-painted
+ *   on top after restoring from cache, so pixel data from cache never
+ *   leaves the canvas without the mark.
+ * - Cache is bounded to MAX_CACHED_PAGES entries (LRU eviction).
+ * - Cache is in-memory only and cleared on page reload — it is never
+ *   persisted to localStorage, IndexedDB, or any storage API.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -52,6 +61,51 @@ interface PageMeta {
   viewable_pages: number;
 }
 
+// ── In-memory page cache ──────────────────────────────────────────────────────
+// Stores fully-composited ImageBitmaps (tiles assembled, NO watermark baked in
+// — watermark is always re-painted live so userEmail is always current).
+
+const MAX_CACHED_PAGES = 20;
+
+interface CacheEntry {
+  bitmap:    ImageBitmap;
+  accessedAt: number;
+}
+
+// Module-level so it survives tab switches within the same session
+const pageCache = new Map<string, CacheEntry>();
+
+function cacheKey(questionId: string, page: number): string {
+  return `${questionId}:${page}`;
+}
+
+function cacheGet(questionId: string, page: number): ImageBitmap | null {
+  const key   = cacheKey(questionId, page);
+  const entry = pageCache.get(key);
+  if (!entry) return null;
+  entry.accessedAt = Date.now(); // refresh LRU timestamp
+  return entry.bitmap;
+}
+
+function cacheSet(questionId: string, page: number, bitmap: ImageBitmap): void {
+  const key = cacheKey(questionId, page);
+
+  // Evict least-recently-used if at cap
+  if (pageCache.size >= MAX_CACHED_PAGES && !pageCache.has(key)) {
+    let oldest: string | null = null;
+    let oldestTime = Infinity;
+    for (const [k, v] of pageCache) {
+      if (v.accessedAt < oldestTime) { oldestTime = v.accessedAt; oldest = k; }
+    }
+    if (oldest) {
+      pageCache.get(oldest)?.bitmap.close(); // release GPU memory
+      pageCache.delete(oldest);
+    }
+  }
+
+  pageCache.set(key, { bitmap, accessedAt: Date.now() });
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function blurCanvas(canvas: HTMLCanvasElement) {
@@ -63,11 +117,9 @@ function blurCanvas(canvas: HTMLCanvasElement) {
   ctx.restore();
   ctx.filter = "none";
 
-  // Grey veil
   ctx.fillStyle = "rgba(15,15,15,0.72)";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Lock icon text
   ctx.fillStyle = "#ffffff";
   ctx.font      = "bold 15px system-ui";
   ctx.textAlign = "center";
@@ -113,7 +165,7 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
       .finally(() => setMetaLoading(false));
   }, [token, questionId]);
 
-  // ── Watermark (baked into pixels) ──────────────────────────────────────
+  // ── Watermark (baked into pixels, always re-painted live) ──────────────
   const paintWatermark = useCallback((ctx: CanvasRenderingContext2D, w: number, h: number) => {
     const label1 = "SparkL · sparkl.com.ng";
     const label2 = userEmail ? userEmail.slice(0, 42) : "sparkl.com.ng";
@@ -142,6 +194,26 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
   const renderPage = useCallback(async (page: number) => {
     if (!canvasRef.current) return;
 
+    const canvas = canvasRef.current;
+    const ctx    = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // ── Cache hit: draw bitmap + watermark, skip all fetches ────────────
+    const cached = cacheGet(questionId, page);
+    if (cached) {
+      setLoading(false);
+      setLoadError("");
+      setIsGated(false);
+      setObscured(false);
+      setTilesLoaded(TILE_COUNT);
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(cached, 0, 0, canvas.width, canvas.height);
+      paintWatermark(ctx, canvas.width, canvas.height);
+      return;
+    }
+
+    // ── Cache miss: fetch tiles ──────────────────────────────────────────
     // Refresh token before every page load
     const { data: { session } } = await supabase.auth.getSession();
     const tok = session?.access_token ?? token;
@@ -152,10 +224,6 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
     setIsGated(false);
     setObscured(false);
     setTilesLoaded(0);
-
-    const canvas = canvasRef.current;
-    const ctx    = canvas.getContext("2d");
-    if (!ctx) return;
 
     // Clear + light bg
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -193,9 +261,6 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
               URL.revokeObjectURL(imgUrl);
               landed += 1;
               setTilesLoaded(landed);
-              if (landed === TILE_COUNT) {
-                paintWatermark(ctx, canvas.width, canvas.height);
-              }
               resolve();
             };
             img.onerror = () => { URL.revokeObjectURL(imgUrl); anyError = true; resolve(); };
@@ -205,7 +270,22 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
       })
     );
 
-    if (gated)             setIsGated(true);
+    if (!gated && !anyError) {
+      // Paint watermark then snapshot the composited canvas into cache
+      paintWatermark(ctx, canvas.width, canvas.height);
+      try {
+        // createImageBitmap from the canvas captures current pixels
+        const bitmap = await createImageBitmap(canvas);
+        cacheSet(questionId, page, bitmap);
+      } catch {
+        // createImageBitmap not available — just skip caching, no crash
+      }
+    } else if (!gated && anyError) {
+      // Still paint watermark on partial renders
+      paintWatermark(ctx, canvas.width, canvas.height);
+    }
+
+    if (gated)              setIsGated(true);
     if (anyError && !gated) setLoadError("Some tiles failed to load. Try again.");
     setLoading(false);
   }, [token, questionId, paintWatermark, supabase.auth]);
@@ -218,7 +298,6 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
   useEffect(() => {
     const canvas = canvasRef.current;
 
-    // 1. Tab hidden → blur
     const onVis = () => {
       if (document.visibilityState === "hidden" && canvas && !loading) {
         setObscured(true);
@@ -229,11 +308,9 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
       }
     };
 
-    // 2. Window blur (alt-tab, mobile home) → blur
     const onBlur  = () => { if (canvas && !loading) { setObscured(true); blurCanvas(canvas); } };
     const onFocus = () => { if (obscured) { setObscured(false); if (meta) renderPage(currentPage); } };
 
-    // 3. DevTools size heuristic
     let devToolsTimer: ReturnType<typeof setInterval>;
     const checkDevTools = () => {
       const threshold = 160;
@@ -246,7 +323,6 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
     };
     devToolsTimer = setInterval(checkDevTools, 1500);
 
-    // 4. Keyboard blocks
     const blockKeys = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
       const sh   = e.shiftKey;
@@ -261,15 +337,12 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
       ) { e.preventDefault(); e.stopPropagation(); }
     };
 
-    // 5. No context menu / drag
     const noCtx  = (e: MouseEvent) => e.preventDefault();
     const noDrag = (e: DragEvent)  => e.preventDefault();
 
-    // 6. Silence window.print
     const origPrint = window.print;
     window.print    = () => {};
 
-    // 7. Print CSS
     const style = document.createElement("style");
     style.id    = "__sp_np__";
     style.textContent = `
@@ -286,10 +359,8 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
     `;
     document.head.appendChild(style);
 
-    // 8. MutationObserver — detect canvas tampering
     const observer = new MutationObserver(() => {
       if (canvasRef.current && !document.contains(canvasRef.current)) {
-        // Canvas was removed from DOM — re-add blur state
         setObscured(true);
       }
     });
@@ -345,12 +416,11 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
   return (
     <div id="__sp_viewer__" ref={containerRef} className="flex flex-col gap-0 select-none">
 
-      {/* ── Top toolbar (pastqhub style) ── */}
+      {/* ── Top toolbar ── */}
       <div
         className="flex items-center justify-between rounded-t-2xl border border-b-0 px-4 py-2.5"
         style={{ background: "var(--sp-bg-card)", borderColor: "var(--sp-border)" }}
       >
-        {/* Prev */}
         <button
           onClick={() => setCurrentPage(p => p - 1)}
           disabled={!canGoPrev || loading}
@@ -360,7 +430,6 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
           <ChevronLeft size={13}/> Prev
         </button>
 
-        {/* Page counter */}
         <div className="flex items-center gap-2">
           {loading && (
             <div className="h-1 w-20 overflow-hidden rounded-full" style={{ background: "var(--sp-border)" }}>
@@ -378,7 +447,6 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
           </span>
         </div>
 
-        {/* Next */}
         <button
           onClick={() => setCurrentPage(p => p + 1)}
           disabled={!canGoNext || loading}
@@ -389,7 +457,7 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
         </button>
       </div>
 
-      {/* ── Canvas card (flat white paper look) ── */}
+      {/* ── Canvas card ── */}
       <div
         className="relative w-full overflow-hidden rounded-b-2xl border"
         style={{
@@ -399,7 +467,6 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
           boxShadow:    "0 2px 16px rgba(0,0,0,0.07)",
         }}
       >
-        {/* Canvas — always mounted */}
         <canvas
           ref={canvasRef}
           width={CANVAS_WIDTH}
@@ -416,7 +483,7 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
           onContextMenu={e => e.preventDefault()}
         />
 
-        {/* Loading overlay */}
+        {/* Loading overlay — hidden instantly on cache hit */}
         {loading && (
           <div
             className="absolute inset-0 flex flex-col items-center justify-center gap-3"
@@ -464,7 +531,7 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
           </div>
         )}
 
-        {/* Obscured overlay (tab hidden / devtools) */}
+        {/* Obscured overlay */}
         {obscured && !loading && (
           <div
             className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-b-2xl"
@@ -477,7 +544,7 @@ export default function InlinePaperViewer({ questionId, isPaid, userEmail, maxPa
         )}
       </div>
 
-      {/* ── Dot page indicators (below card) ── */}
+      {/* ── Dot page indicators ── */}
       {meta && effectiveViewable > 1 && !isGated && (
         <div className="mt-3 flex items-center justify-center gap-1.5">
           {Array.from({ length: Math.min(effectiveViewable, 8) }, (_, i) => {
