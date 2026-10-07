@@ -21,6 +21,7 @@ from app.routers import (
     questions,
     answers,
     community,
+    quiz,
 )
 
 
@@ -58,6 +59,8 @@ app.include_router(answers.router)
 app.include_router(community.router)
 app.include_router(payments_router)
 app.include_router(study.router)
+app.include_router(quiz.router)
+
 
 @app.get("/")
 def root():
