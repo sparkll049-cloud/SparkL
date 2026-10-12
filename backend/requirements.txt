@@ -30,7 +30,7 @@ httpcore==1.0.5
 
 groq>=0.9.0
 reportlab==4.2.2
-pymupdf==1.24.9
+pymupdf==1.25.5
 python-docx==1.1.0
 redis==5.0.8
 youtube-transcript-api==0.6.2
