@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Literal, Optional
+from typing import Optional
 from uuid import UUID
 
 from google import genai
@@ -13,7 +13,7 @@ from google.genai import types
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from app.supabase_client import supabase
-from app.config import settings  # expects settings.GEMINI_API_KEY
+from app.config import GEMINI_API_KEY
 
 router = APIRouter(prefix="/api/questions", tags=["Questions"])
 
@@ -25,7 +25,7 @@ PROCESSED_COLUMNS = (
 
 # ── Configure Gemini ───────────────────────────────────────────────────────────
 
-_gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+_gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 GEMINI_MODEL = "gemini-2.0-flash"
 
@@ -118,6 +118,7 @@ class _EmptyResult:
     data = []
     count = 0
 
+
 def _safe(fn):
     try:
         return fn()
@@ -126,7 +127,7 @@ def _safe(fn):
         return _EmptyResult()
 
 
-# ── Quiz: helpers ──────────────────────────────────────────────────────────────
+# ── Quiz helpers ───────────────────────────────────────────────────────────────
 
 def _get_paper_text(question_id: str) -> tuple[str, str]:
     paper_res = (
@@ -344,8 +345,8 @@ async def search_questions(
     ))
 
     dept_ids: list[str] = [d["id"] for d in (depts_res.data or [])]
-
     inst_ids = [i["id"] for i in (inst_res.data or [])]
+
     if inst_ids:
         depts_from_inst = _safe(lambda: (
             supabase.table("departments")
