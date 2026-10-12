@@ -9,7 +9,7 @@ import {
   LogOut, Menu, X, BookOpen, Upload, GraduationCap,
   Crown, Sparkles, Timer, Flame, Zap, ShieldAlert,
   Home, Bell, Moon, Sun, ChevronRight, Search,
-  FileText, ArrowRight,
+  FileText, ArrowRight, Send, Users2,
 } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createClient } from "@/utils/supabase/client";
@@ -57,12 +57,14 @@ const TIER_COLORS: Record<string, string> = {
 const LEVEL_NAMES = ["Newcomer","Explorer","Scholar","Achiever","Expert","Master","Legend"];
 
 const NAV_LINKS = [
-  { href: "/dashboard",           icon: Home,          label: "Home"            },
-  { href: "/dashboard/courses",   icon: BookOpen,      label: "Browse courses"  },
-  { href: "/study",               icon: Sparkles,      label: "SparkL Cram"     },
-  { href: "/dashboard/upload",    icon: Upload,        label: "Upload paper"    },
-  { href: "/dashboard/subscribe", icon: Crown,         label: "Plans & billing" },
-  { href: "/dashboard/profile",   icon: GraduationCap, label: "My profile"      },
+  { href: "/dashboard",                    icon: Home,          label: "Home"              },
+  { href: "/dashboard/courses",            icon: BookOpen,      label: "Browse courses"    },
+  { href: "/community",                    icon: Users2,        label: "Community"         },
+  { href: "/study",                        icon: Sparkles,      label: "SparkL Cram"       },
+  { href: "/dashboard/upload",             icon: Upload,        label: "Upload paper"      },
+  { href: "/dashboard/submit-answers",     icon: Send,          label: "Submit answers"    },
+  { href: "/dashboard/subscribe",          icon: Crown,         label: "Plans & billing"   },
+  { href: "/dashboard/profile",            icon: GraduationCap, label: "My profile"        },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -375,18 +377,12 @@ function Topbar({
           .limit(20);
 
         if (error) {
-          console.error("[search] Supabase error:", error.message, error.code);
           setApiCourses([]);
         } else {
           const mapped: ApiCourse[] = (courseData ?? []).map((r: any) => {
             const dept = r.department || {};
             const inst = dept.institution || {};
-            return {
-              id:          r.id,
-              name:        r.name,
-              department:  dept.name ?? undefined,
-              institution: inst.name ?? undefined,
-            };
+            return { id: r.id, name: r.name, department: dept.name ?? undefined, institution: inst.name ?? undefined };
           });
           setApiCourses(mapped);
         }
@@ -402,8 +398,7 @@ function Topbar({
             setQResults(j.results ?? []);
           }
         }
-      } catch (err) {
-        console.error("[search] unexpected error:", err);
+      } catch {
         setQResults([]);
         setApiCourses([]);
       } finally {
@@ -541,6 +536,7 @@ function SidebarContent({
 
   return (
     <div className="flex h-full flex-col" style={{ background: "var(--sp-bg-card)" }}>
+      {/* Logo */}
       <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: "var(--sp-border)" }}>
         <div className="flex items-center gap-2.5">
           <Image alt="SparkL" className="rounded-xl object-cover shadow-md" height={30} src="/images/logo.jpg" width={30}/>
@@ -555,6 +551,7 @@ function SidebarContent({
         )}
       </div>
 
+      {/* Profile block */}
       <div className="px-5 py-4 border-b" style={{ borderColor: "var(--sp-border)" }}>
         <div className="flex items-center gap-3 mb-3">
           {user?.avatarUrl ? (
@@ -575,6 +572,7 @@ function SidebarContent({
           )}
         </div>
 
+        {/* XP bar */}
         <div className="mb-3">
           <div className="flex justify-between mb-1">
             <span className="flex items-center gap-1 text-[10px] font-bold" style={{ color: "var(--sp-text-3)" }}>
@@ -602,6 +600,7 @@ function SidebarContent({
         )}
       </div>
 
+      {/* Streak block */}
       <div className="px-5 py-3 border-b" style={{ borderColor: "var(--sp-border)" }}>
         <div className="flex items-center gap-3">
           <div className="relative flex items-center justify-center shrink-0" style={{ width: size, height: size }}>
@@ -640,6 +639,7 @@ function SidebarContent({
         </div>
       </div>
 
+      {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
         <p className="px-3 pb-1 text-[9px] font-black uppercase tracking-widest" style={{ color: "var(--sp-text-3)" }}>Navigate</p>
         {NAV_LINKS.map(({ href, icon: Icon, label }) => {
@@ -659,6 +659,9 @@ function SidebarContent({
               {label}
               {href === "/study" && (
                 <span className="ml-1 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[8px] font-black text-violet-500">AI</span>
+              )}
+              {href === "/dashboard/submit-answers" && (
+                <span className="ml-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[8px] font-black text-emerald-500">New</span>
               )}
               {active && <ChevronRight className="ml-auto h-3 w-3"/>}
             </Link>
@@ -685,6 +688,7 @@ function SidebarContent({
         )}
       </nav>
 
+      {/* Bottom controls */}
       <div className="border-t px-4 py-4 space-y-2" style={{ borderColor: "var(--sp-border)" }}>
         <button onClick={onToggleDark}
           className="flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-sm font-semibold transition-all hover:border-indigo-500/30"
@@ -740,13 +744,7 @@ function MobileDrawer({
           transform: open ? "translateX(0)" : "translateX(-100%)",
         }}
       >
-        <SidebarContent
-          user={user}
-          onLogout={onLogout}
-          darkMode={darkMode}
-          onToggleDark={onToggleDark}
-          onClose={onClose}
-        />
+        <SidebarContent user={user} onLogout={onLogout} darkMode={darkMode} onToggleDark={onToggleDark} onClose={onClose}/>
       </div>
     </>
   );
@@ -810,9 +808,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
       try {
         const [profileRes, avatarRes, subRes] = await Promise.allSettled([
-          fetch(`${base}/api/dashboard/summary`,              { headers: h }),
-          fetch(`${base}/api/avatar/me`,                      { headers: h }),
-          fetch(`${base}/api/payments/subscription/status`,   { headers: h }),
+          fetch(`${base}/api/dashboard/summary`,            { headers: h }),
+          fetch(`${base}/api/avatar/me`,                    { headers: h }),
+          fetch(`${base}/api/payments/subscription/status`, { headers: h }),
         ]);
 
         let fullName: string | null   = null;
@@ -880,12 +878,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:w-64 lg:flex-col"
         style={{ borderRight: "1px solid var(--sp-border)" }}
       >
-        <SidebarContent
-          user={sidebarUser}
-          onLogout={manualLogout}
-          darkMode={darkMode}
-          onToggleDark={toggleDark}
-        />
+        <SidebarContent user={sidebarUser} onLogout={manualLogout} darkMode={darkMode} onToggleDark={toggleDark}/>
       </div>
 
       <div className="flex flex-col lg:pl-64">
