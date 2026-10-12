@@ -20,13 +20,8 @@ router = APIRouter(prefix="/api/payments", tags=["payments"])
 PAYVESSEL_SECRET_KEY = os.getenv("PAYVESSEL_SECRET_KEY")
 PAYVESSEL_PUBLIC_KEY = os.getenv("PAYVESSEL_PUBLIC_KEY")
 
-# ✅ FIXED: correct verify endpoint (was /api/externals/transactions/verify/{ref})
 PAYVESSEL_VERIFY_URL = "https://api.payvessel.com/pms/transactions/{reference}/confirm/"
-
-# ✅ FIXED: correct webhook signature header name (was x-payvessel-signature)
 PAYVESSEL_SIGNATURE_HEADER = "HTTP_PAYVESSEL_HTTP_SIGNATURE"
-
-# Trusted PayVessel IPs (from their docs)
 PAYVESSEL_TRUSTED_IPS = {"3.255.23.38", "162.246.254.36"}
 
 
@@ -85,22 +80,15 @@ async def initiate_payment(
 async def payvessel_webhook(request: Request):
     body = await request.body()
 
-    # ✅ FIXED: correct header name
     signature = request.headers.get(PAYVESSEL_SIGNATURE_HEADER, "")
-
-    # Optional IP check — uncomment if your server sees real client IPs
-    # client_ip = request.client.host
-    # if client_ip not in PAYVESSEL_TRUSTED_IPS:
-    #     raise HTTPException(status_code=403, detail="Untrusted IP")
 
     if not PAYVESSEL_SECRET_KEY:
         raise HTTPException(status_code=500, detail="Payment secret not configured")
 
-    # ✅ FIXED: secret key used as-is (PVSECRET-xxxxx), not encoded separately
     expected = hmac.new(
-        key=PAYVESSEL_SECRET_KEY.encode("utf-8"),
-        msg=body,
-        digestmod=hashlib.sha512,
+        PAYVESSEL_SECRET_KEY.encode("utf-8"),
+        body,
+        hashlib.sha512,
     ).hexdigest()
 
     if not hmac.compare_digest(expected, signature):
@@ -111,8 +99,6 @@ async def payvessel_webhook(request: Request):
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    # ✅ FIXED: correct webhook payload shape per PayVessel docs
-    # payload = { "order": { "amount": "..." }, "transaction": { "reference": "...", "status": "successful" } }
     order = payload.get("order", {})
     transaction = payload.get("transaction", {})
 
@@ -169,7 +155,7 @@ async def payvessel_webhook(request: Request):
         await _activate_subscription(
             user_id=txn["user_id"],
             plan_slug=txn["plan"],
-            pv_data=payload,  # pass full webhook payload
+            pv_data=payload,
             reference=reference,
         )
         print(f"[Webhook] Activated user={txn['user_id']} plan={txn['plan']} ref={reference}")
@@ -189,12 +175,11 @@ async def verify_payment(
 ):
     reference = body.get("reference")
     our_reference = body.get("our_reference", reference)
-    pv_data: dict | None = body.get("pv_data")  # pre-verified data from Next.js proxy
+    pv_data: dict | None = body.get("pv_data")
 
     if not reference:
         raise HTTPException(status_code=400, detail="Reference is required")
 
-    # Find transaction
     txn = None
     for ref in list(dict.fromkeys([our_reference, reference])):
         try:
@@ -218,11 +203,9 @@ async def verify_payment(
     if txn["status"] == "success":
         return {"status": "already_verified", "message": "Subscription already active"}
 
-    # If Next.js proxy already verified with PayVessel, use that data
     if pv_data:
         print(f"[Verify] Using pre-verified pv_data from proxy for ref={reference}")
     else:
-        # Direct verify from backend
         if not PAYVESSEL_SECRET_KEY or not PAYVESSEL_PUBLIC_KEY:
             raise HTTPException(status_code=500, detail="Payment keys not configured")
 
@@ -230,7 +213,6 @@ async def verify_payment(
             async with httpx.AsyncClient() as client:
                 pv_res = await client.get(
                     PAYVESSEL_VERIFY_URL.format(reference=reference),
-                    # ✅ FIXED: correct auth headers (was Bearer token)
                     headers={
                         "api-key": PAYVESSEL_PUBLIC_KEY,
                         "api-secret": PAYVESSEL_SECRET_KEY,
@@ -241,7 +223,6 @@ async def verify_payment(
             print(f"[PayVessel verify] status={pv_res.status_code} body={pv_res.text}")
             pv_json = pv_res.json()
 
-            # ✅ FIXED: correct response field (was requestSuccessful)
             if not pv_json.get("status") == "success":
                 raise HTTPException(
                     status_code=502,
@@ -256,7 +237,6 @@ async def verify_payment(
             print(f"[PayVessel verify error] {str(e)}")
             raise HTTPException(status_code=502, detail=f"Could not reach PayVessel: {str(e)}")
 
-    # ✅ FIXED: correct status field path in verify response
     pv_status = str(pv_data.get("status", "")).lower()
     pv_amount = pv_data.get("amount")
 
@@ -271,7 +251,6 @@ async def verify_payment(
 
     if pv_amount:
         try:
-            # ✅ PayVessel verify returns amount in kobo (integer), not naira
             pv_amount_kobo = int(pv_amount)
             if pv_amount_kobo != txn["amount_kobo"]:
                 supabase.table("payment_transactions").update({
