@@ -2,7 +2,15 @@
 routers/quiz.py
 ───────────────
 AI-powered quiz generation with a shared Supabase cache pool.
-Supports difficulty (easy | medium | hard), question count, and fresh mode.
+
+Modes:
+  fresh=False → rotate cached variants, least-used first.
+                Background-fill pool when running low.
+  fresh=True  → generate brand-new questions every time,
+                skip cache entirely, do NOT save to cache.
+
+Correct answer is always reshuffled after generation so it is
+never stuck on option A.
 """
 
 from __future__ import annotations
@@ -28,12 +36,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quiz", tags=["quiz"])
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
 MIN_POOL        = 3
 TARGET_POOL     = 10
 
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL    = "gemini-3.1-flash-lite"   # stable since May 2026, fast + cheap
-GEMINI_FALLBACK = "gemini-3.1-pro-preview"  # stronger fallback if lite fails
+GEMINI_MODEL    = "gemini-3.1-flash-lite"   # GA May 2026
+GEMINI_FALLBACK = "gemini-3.1-pro-preview"  # stronger fallback
 
 _gemini_client: genai.Client | None = (
     genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
@@ -56,27 +65,42 @@ DIFFICULTY_INSTRUCTIONS: dict[str, str] = {
     ),
 }
 
+# ── Format rotations — keeps questions feeling different across sessions ───────
+
+FORMAT_ROTATIONS = [
+    "Focus on definitions and direct recall: 'What is X?' and 'Which of the following defines Y?'",
+    "Focus on application and examples: 'Which scenario best illustrates X?' and 'A student does Y — what concept applies?'",
+    "Focus on comparisons: 'What is the difference between X and Y?' and 'Which of the following is NOT a feature of Z?'",
+    "Focus on cause-and-effect: 'Why does X happen?' and 'What would result if Y occurred?'",
+]
+
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-def _build_system_prompt(difficulty: str, count: int) -> str:
-    diff_instruction = DIFFICULTY_INSTRUCTIONS.get(difficulty, DIFFICULTY_INSTRUCTIONS["medium"])
+def _build_system_prompt(difficulty: str, count: int, rotation: int = 0) -> str:
+    diff_instruction   = DIFFICULTY_INSTRUCTIONS.get(
+        difficulty, DIFFICULTY_INSTRUCTIONS["medium"]
+    )
+    format_instruction = FORMAT_ROTATIONS[rotation % len(FORMAT_ROTATIONS)]
+
     return f"""You are an expert Nigerian university exam question generator for SparkL, a student exam-prep platform.
 
-Given a list of exam questions (theory or MCQ), generate {count} fresh multiple-choice questions
-based on the same topics and concepts.
+Given source exam questions, generate {count} completely FRESH multiple-choice questions
+covering the same topics and concepts — but written in entirely new words every time.
 
 STRICT RULES:
-1. DO NOT copy questions word-for-word — REPHRASE and reframe every question.
-   Students may have already seen the originals; fresh wording is essential.
+1. NEVER copy any question word-for-word from the source material.
+   Every question must use different sentence structure, different wording,
+   and a different angle from the original. Students have already seen the originals —
+   your job is to make them think, not recognise.
 2. {diff_instruction}
-3. Every question must have exactly 4 options (A–D) with only ONE correct answer.
-4. Distractors must be plausible — not obviously wrong.
-5. Write a clear 2–3 sentence explanation for each correct answer.
-6. Vary question formats: definition, application, "which of the following", scenario-based.
+3. {format_instruction}
+4. Every question must have exactly 4 options (A, B, C, D) with only ONE correct answer.
+5. Distractors must be plausible and require thought — not obviously wrong.
+6. Write a clear, helpful 2–3 sentence explanation for each correct answer.
 7. Do NOT number the question_text itself — use question_number instead.
-8. Return ONLY valid JSON — no markdown fences, no commentary, no preamble.
+8. Return ONLY valid JSON — no markdown fences, no preamble, no commentary.
 
-Output format:
+Output format (strict):
 {{
   "questions": [
     {{
@@ -109,7 +133,7 @@ async def get_current_user(
         "email": user.email or str(user.id),
     }
 
-# ── Gemini call with fallback ─────────────────────────────────────────────────
+# ── Gemini call ───────────────────────────────────────────────────────────────
 
 def _clean_raw_response(raw: str) -> str:
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
@@ -131,26 +155,68 @@ def _call_gemini_sync(system_prompt: str, user_prompt: str) -> str:
                 contents=full_prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.85,      # higher = more varied rephrasing each call
+                    temperature=0.92,
                     max_output_tokens=8000,
                 ),
             )
             return response.text or ""
         except Exception as exc:
             err = str(exc)
-            if "503" in err or "UNAVAILABLE" in err:
-                logger.warning(
-                    "Model %s unavailable, trying fallback %s...",
-                    model, GEMINI_FALLBACK,
-                )
+            if "503" in err or "UNAVAILABLE" in err or "not found" in err.lower():
+                logger.warning("Model %s unavailable, trying fallback...", model)
                 time.sleep(1)
                 continue
             raise
 
     raise RuntimeError("All Gemini models unavailable. Try again later.")
 
+# ── Option reshuffler ─────────────────────────────────────────────────────────
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+def _reshuffle_options(questions: list[dict]) -> list[dict]:
+    """
+    Randomly reorder options A-D for every question and update correct_answer
+    to match the new position. Guarantees the correct answer is never always A.
+    Called after every generation — both fresh and cached variants.
+    """
+    keys = ["a", "b", "c", "d"]
+    reshuffled = []
+
+    for q in questions:
+        opts    = q.get("options") or {}
+        correct = (q.get("correct_answer") or "a").lower().strip()
+
+        # Build (old_key, text) pairs for all four slots
+        pairs = [(k, opts.get(k, "")) for k in keys]
+
+        # Need all four options present to reshuffle safely
+        if len(pairs) < 4 or any(text == "" for _, text in pairs):
+            reshuffled.append(q)
+            continue
+
+        # Remember the correct answer text so we can track it after shuffle
+        correct_text = opts.get(correct, "")
+
+        # Shuffle
+        random.shuffle(pairs)
+
+        # Rebuild options dict and find the new key for the correct answer
+        new_opts    = {}
+        new_correct = correct  # fallback — should always be overwritten below
+
+        for new_key, (_, text) in zip(keys, pairs):
+            new_opts[new_key] = text
+            if text == correct_text:
+                new_correct = new_key
+
+        reshuffled.append({
+            **q,
+            "options":        new_opts,
+            "correct_answer": new_correct,
+        })
+
+    return reshuffled
+
+# ── Source questions fetch ────────────────────────────────────────────────────
 
 async def _fetch_processed_questions(question_id: str) -> list[dict]:
     result = (
@@ -166,25 +232,8 @@ async def _fetch_processed_questions(question_id: str) -> list[dict]:
     return result.data or []
 
 
-async def _count_available(question_id: str, difficulty: str) -> int:
-    result = (
-        supabase.table("question_quiz_cache")
-        .select("id", count="exact")
-        .eq("question_id", question_id)
-        .eq("difficulty", difficulty)
-        .execute()
-    )
-    return result.count or 0
-
-
-async def _generate_variant(
-    question_id: str,
-    processed_qs: list[dict],
-    variant_index: int,
-    difficulty: str,
-    count: int,
-) -> dict[str, Any] | None:
-    questions_payload = json.dumps(
+def _build_questions_payload(processed_qs: list[dict]) -> str:
+    return json.dumps(
         [
             {
                 "question_number": q["question_number"],
@@ -204,10 +253,60 @@ async def _generate_variant(
         ensure_ascii=False,
     )
 
-    system_prompt = _build_system_prompt(difficulty, count)
-    user_prompt = (
-        f"Generate {count} fresh quiz questions (variant #{variant_index + 1}, "
-        f"difficulty: {difficulty}) based on these source questions:\n\n{questions_payload}"
+# ── Generate fresh (no cache) ─────────────────────────────────────────────────
+
+async def _generate_fresh(
+    processed_qs: list[dict],
+    difficulty: str,
+    count: int,
+    rotation: int,
+) -> dict[str, Any]:
+    """
+    Generate brand-new questions without touching the cache at all.
+    Called when fresh=True. High temperature + rotating format instruction
+    ensures every call produces genuinely different questions.
+    Options are reshuffled after generation so correct answer is randomised.
+    """
+    questions_payload = _build_questions_payload(processed_qs)
+    system_prompt     = _build_system_prompt(difficulty, count, rotation)
+    user_prompt       = (
+        f"Generate {count} completely fresh MCQ questions "
+        f"(difficulty: {difficulty}, session seed: {rotation}) "
+        f"based on these source questions. "
+        f"Make every question feel new — different wording, different angle:\n\n"
+        f"{questions_payload}"
+    )
+
+    raw     = await run_in_threadpool(_call_gemini_sync, system_prompt, user_prompt)
+    cleaned = _clean_raw_response(raw)
+    data    = json.loads(cleaned)
+
+    if "questions" in data and isinstance(data["questions"], list):
+        data["questions"] = _reshuffle_options(data["questions"][:count])
+
+    return data
+
+# ── Generate and cache (for pool building) ────────────────────────────────────
+
+async def _generate_and_cache(
+    question_id: str,
+    processed_qs: list[dict],
+    variant_index: int,
+    difficulty: str,
+    count: int,
+) -> dict[str, Any] | None:
+    """
+    Generate a variant, reshuffle its options, and save it to the cache pool.
+    Called for background pool filling and cache-miss scenarios.
+    """
+    rotation          = variant_index % len(FORMAT_ROTATIONS)
+    questions_payload = _build_questions_payload(processed_qs)
+    system_prompt     = _build_system_prompt(difficulty, count, rotation)
+    user_prompt       = (
+        f"Generate {count} fresh quiz questions "
+        f"(variant #{variant_index + 1}, difficulty: {difficulty}, "
+        f"format rotation: {rotation}) "
+        f"based on these source questions:\n\n{questions_payload}"
     )
 
     try:
@@ -221,9 +320,11 @@ async def _generate_variant(
         )
         return None
 
-    # Enforce count limit
     if "questions" in quiz_data and isinstance(quiz_data["questions"], list):
-        quiz_data["questions"] = quiz_data["questions"][:count]
+        # Reshuffle before caching so stored variants are already randomised
+        quiz_data["questions"] = _reshuffle_options(
+            quiz_data["questions"][:count]
+        )
 
     try:
         supabase.table("question_quiz_cache").insert({
@@ -243,9 +344,20 @@ async def _generate_variant(
     return quiz_data
 
 
+async def _count_cached(question_id: str, difficulty: str) -> int:
+    result = (
+        supabase.table("question_quiz_cache")
+        .select("id", count="exact")
+        .eq("question_id", question_id)
+        .eq("difficulty", difficulty)
+        .execute()
+    )
+    return result.count or 0
+
+
 async def _background_fill(question_id: str, difficulty: str, count: int) -> None:
     try:
-        current = await _count_available(question_id, difficulty)
+        current = await _count_cached(question_id, difficulty)
         needed  = TARGET_POOL - current
         if needed <= 0:
             return
@@ -255,11 +367,12 @@ async def _background_fill(question_id: str, difficulty: str, count: int) -> Non
             return
 
         for i in range(needed):
-            await _generate_variant(question_id, processed_qs, current + i, difficulty, count)
-            await asyncio.sleep(0.5)
+            await _generate_and_cache(
+                question_id, processed_qs, current + i, difficulty, count
+            )
+            await asyncio.sleep(0.6)
     except Exception as exc:
         logger.error("Background fill error for %s: %s", question_id, exc)
-
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -267,33 +380,54 @@ async def _background_fill(question_id: str, difficulty: str, count: int) -> Non
 async def get_quiz(
     question_id: str,
     difficulty: Literal["easy", "medium", "hard"] = Query(default="medium"),
-    count: int = Query(default=10, ge=1, le=20),
-    fresh: bool = Query(default=False),
+    count:      int  = Query(default=10, ge=1, le=20),
+    fresh:      bool = Query(default=False),
     user: dict = Depends(get_current_user),
 ):
     """
     Get or generate an AI quiz for a past question paper.
 
-    - difficulty: easy | medium | hard  (default: medium)
-    - count: number of questions 1–20   (default: 10; free users capped to 5 on frontend)
-    - fresh: if True, skip cache and always generate a brand-new variant
+    - difficulty : easy | medium | hard  (default: medium)
+    - count      : 1–20 questions        (default: 10)
+    - fresh      : True  → always generate brand-new questions, skip cache
+                   False → rotate through cached variants, least-used first
     """
-    quiz_data: dict | None = None
-    chosen_id: str | None  = None
-    variants: list[dict]   = []
 
-    if not fresh:
-        result = (
-            supabase.table("question_quiz_cache")
-            .select("id, quiz_json, used_count")
-            .eq("question_id", question_id)
-            .eq("difficulty", difficulty)
-            .execute()
+    # Always fetch source questions first — needed for both paths
+    processed_qs = await _fetch_processed_questions(question_id)
+    if not processed_qs:
+        raise HTTPException(
+            status_code=404,
+            detail="No processed questions found for this paper.",
         )
-        variants = result.data or []
 
-    if variants and not fresh:
-        # Pick the least-used variant so students get variety
+    # ── fresh=True: generate live, never touch cache ──────────────────────────
+    if fresh:
+        rotation = random.randint(0, len(FORMAT_ROTATIONS) - 1)
+        try:
+            quiz_data = await _generate_fresh(
+                processed_qs, difficulty, count, rotation
+            )
+        except Exception as exc:
+            logger.error("Fresh generation failed for %s: %s", question_id, exc)
+            raise HTTPException(
+                status_code=500,
+                detail="Quiz generation failed. Please try again.",
+            )
+        return quiz_data
+
+    # ── fresh=False: try cache first ──────────────────────────────────────────
+    result   = (
+        supabase.table("question_quiz_cache")
+        .select("id, quiz_json, used_count")
+        .eq("question_id", question_id)
+        .eq("difficulty", difficulty)
+        .execute()
+    )
+    variants = result.data or []
+
+    if variants:
+        # Pick the least-used variant for variety
         min_used   = min(v["used_count"] for v in variants)
         candidates = [v for v in variants if v["used_count"] == min_used]
         chosen     = random.choice(candidates)
@@ -302,24 +436,19 @@ async def get_quiz(
 
         # Enforce requested count from cached data
         if quiz_data and "questions" in quiz_data:
-            quiz_data = {**quiz_data, "questions": quiz_data["questions"][:count]}
+            # Reshuffle again on serve so repeated views of the same
+            # cached variant still get randomised option order
+            qs = _reshuffle_options(quiz_data["questions"][:count])
+            quiz_data = {**quiz_data, "questions": qs}
 
         supabase.table("question_quiz_cache").update(
             {"used_count": chosen["used_count"] + 1}
         ).eq("id", chosen_id).execute()
 
     else:
-        # Generate fresh — either cache was empty or fresh=True was requested
-        processed_qs = await _fetch_processed_questions(question_id)
-
-        if not processed_qs:
-            raise HTTPException(
-                status_code=404,
-                detail="No processed questions found for this paper.",
-            )
-
-        variant_index = len(variants)  # next index after existing cached variants
-        quiz_data = await _generate_variant(
+        # Cache empty — generate and store one variant synchronously
+        variant_index = 0
+        quiz_data     = await _generate_and_cache(
             question_id, processed_qs, variant_index, difficulty, count
         )
         if not quiz_data:
@@ -328,10 +457,12 @@ async def get_quiz(
                 detail="Quiz generation failed. Please try again.",
             )
 
-    # Background-fill the pool for this difficulty if running low
+    # Background-fill the pool if running low
     current_count = len(variants) if variants else 1
     if current_count < MIN_POOL:
-        asyncio.ensure_future(_background_fill(question_id, difficulty, count))
+        asyncio.ensure_future(
+            _background_fill(question_id, difficulty, count)
+        )
 
     return quiz_data
 
@@ -344,5 +475,11 @@ async def prefill_quiz_cache(
     user: dict = Depends(get_current_user),
 ):
     """Kick off background pool fill for a given paper and difficulty level."""
-    asyncio.ensure_future(_background_fill(question_id, difficulty, count))
-    return {"status": "fill_started", "question_id": question_id, "difficulty": difficulty}
+    asyncio.ensure_future(
+        _background_fill(question_id, difficulty, count)
+    )
+    return {
+        "status":      "fill_started",
+        "question_id": question_id,
+        "difficulty":  difficulty,
+    }
