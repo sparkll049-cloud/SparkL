@@ -54,12 +54,12 @@ function PaperSearch({
   onSelect: (paper: PaperResult) => void;
   getToken: () => Promise<string | null>;
 }) {
-  const [query, setQuery]       = useState("");
-  const [results, setResults]   = useState<PaperResult[]>([]);
+  const [query, setQuery]         = useState("");
+  const [results, setResults]     = useState<PaperResult[]>([]);
   const [searching, setSearching] = useState(false);
-  const [open, setOpen]         = useState(false);
-  const debounceRef             = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const wrapRef                 = useRef<HTMLDivElement>(null);
+  const [open, setOpen]           = useState(false);
+  const debounceRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wrapRef                   = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -84,7 +84,6 @@ function PaperSearch({
     }, 350);
   }, [query]);
 
-  // Close on outside click
   useEffect(() => {
     const h = (e: PointerEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
@@ -285,7 +284,6 @@ export default function SubmitAnswersPage() {
   const [submissions, setSubmissions]     = useState<Submission[]>([]);
   const [subsLoading, setSubsLoading]     = useState(false);
 
-  // Loading paper from URL query param
   const [paperLoading, setPaperLoading]   = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
@@ -296,7 +294,6 @@ export default function SubmitAnswersPage() {
     return session.access_token;
   }, [supabase]);
 
-  // If ?questionId= is in the URL, auto-load that paper
   useEffect(() => {
     const qid = searchParams.get("questionId");
     if (!qid) return;
@@ -324,7 +321,6 @@ export default function SubmitAnswersPage() {
     });
   }, [searchParams, getToken]);
 
-  // When a paper is selected, load previous submissions for it
   useEffect(() => {
     if (!selectedPaper) { setSubmissions([]); return; }
     setSubsLoading(true);
@@ -505,7 +501,6 @@ export default function SubmitAnswersPage() {
               </p>
             </div>
 
-            {/* Success banner */}
             {submitted && (
               <div
                 className="flex items-start gap-3 rounded-2xl border p-4"
@@ -539,7 +534,6 @@ export default function SubmitAnswersPage() {
               }}
             />
 
-            {/* File attach */}
             <div className="flex items-center gap-3 flex-wrap">
               <button
                 onClick={() => fileRef.current?.click()}
@@ -610,7 +604,7 @@ export default function SubmitAnswersPage() {
           </div>
         )}
 
-        {/* Previous submissions for this paper */}
+        {/* Previous submissions */}
         {selectedPaper && (
           <div className="space-y-3">
             <p className="text-xs font-bold px-1" style={{ color: "var(--sp-text-3)" }}>
@@ -633,7 +627,7 @@ export default function SubmitAnswersPage() {
           </div>
         )}
 
-        {/* Empty state — no paper selected */}
+        {/* Empty state */}
         {!selectedPaper && !paperLoading && (
           <div
             className="rounded-2xl border-2 border-dashed px-8 py-14 text-center"
