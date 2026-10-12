@@ -15,17 +15,17 @@ python-multipart==0.0.9
 python-dotenv==1.0.1
 python-jose[cryptography]==3.3.0
 
-# Google AI — one SDK only
+# Google AI
 google-genai>=2.0.0
 
 Pillow==10.4.0
 pypdfium2==4.30.0
 boto3==1.34.69
 
-# httpx — the pin that resolves everything
+# httpx — resolves supabase + google-genai conflict
 httpx==0.28.1
 h2==4.1.0
-hpack==4.0.1
+hpack==4.2.0
 httpcore==1.0.5
 
 groq>=0.9.0
