@@ -8,7 +8,8 @@ import re
 from typing import Literal, Optional
 from uuid import UUID
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from app.supabase_client import supabase
@@ -24,9 +25,9 @@ PROCESSED_COLUMNS = (
 
 # ── Configure Gemini ───────────────────────────────────────────────────────────
 
-genai.configure(api_key=settings.GEMINI_API_KEY)
+_gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
-GEMINI_MODEL = "gemini-3.1-flash-lite"  # stable since May 2026, fast + cheap
+GEMINI_MODEL = "gemini-2.0-flash"
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
@@ -118,7 +119,6 @@ class _EmptyResult:
     count = 0
 
 def _safe(fn):
-    """Call fn() which should return a Supabase result; return _EmptyResult on any error."""
     try:
         return fn()
     except Exception as exc:
@@ -129,10 +129,6 @@ def _safe(fn):
 # ── Quiz: helpers ──────────────────────────────────────────────────────────────
 
 def _get_paper_text(question_id: str) -> tuple[str, str]:
-    """
-    Returns (paper_title, source_text) for the given past question.
-    source_text is built from extracted_text + any processed questions.
-    """
     paper_res = (
         supabase.table("past_questions")
         .select("id, title, extracted_text, status, uploaded_by")
@@ -201,7 +197,9 @@ DIFFICULTY_INSTRUCTIONS = {
 
 
 def _build_prompt(title: str, source_text: str, difficulty: str, count: int) -> str:
-    difficulty_instruction = DIFFICULTY_INSTRUCTIONS.get(difficulty, DIFFICULTY_INSTRUCTIONS["medium"])
+    difficulty_instruction = DIFFICULTY_INSTRUCTIONS.get(
+        difficulty, DIFFICULTY_INSTRUCTIONS["medium"]
+    )
     return f"""You are an expert Nigerian university exam question writer for SparkL, a student exam-prep platform.
 
 Your task: Generate {count} original MCQ questions based on the academic content below.
@@ -255,9 +253,40 @@ def _extract_json(raw: str) -> dict:
         )
 
 
+def _generate_quiz_questions(
+    title: str,
+    source_text: str,
+    difficulty: str,
+    count: int,
+) -> list[dict]:
+    prompt = _build_prompt(title, source_text, difficulty, count)
+    try:
+        response = _gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.7,
+                max_output_tokens=4096,
+            ),
+        )
+        raw = response.text
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI generation failed: {str(e)}",
+        )
+
+    data = _extract_json(raw)
+    questions = data.get("questions", [])
+    if not questions:
+        raise HTTPException(
+            status_code=500,
+            detail="AI returned no questions. Please try again.",
+        )
+    return questions
+
+
 # ── Global search ──────────────────────────────────────────────────────────────
-# NOTE: This MUST stay before /{question_id} so FastAPI doesn't treat
-#       "search" as a UUID param.
 
 @router.get("/search")
 async def search_questions(
@@ -425,15 +454,6 @@ async def get_processed_questions(
         .execute()
     )
     return response.data or []
-
-
-# ── Quiz endpoint ──────────────────────────────────────────────────────────────
-# Must stay AFTER /{question_id} and /{question_id}/processed but the path
-# /api/quiz/{question_id} lives under a separate prefix in quiz.py normally.
-# If you want it here instead, register it as shown below.
-# Frontend calls: GET /api/quiz/{questionId}?difficulty=medium&count=10&fresh=true
-# So keep this in a separate quiz router (quiz.py) OR mount it here with a
-# different prefix. Recommended: keep quiz.py separate and register both routers.
 
 
 # ── Section routes ─────────────────────────────────────────────────────────────
