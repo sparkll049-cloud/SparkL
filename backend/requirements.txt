@@ -1,33 +1,38 @@
-fastapi>=0.110.0
-uvicorn>=0.28.0
+fastapi==0.115.0
+uvicorn==0.30.6
 
-# Supabase — let pip resolve sub-packages automatically
+# Supabase — fully pinned
 supabase==2.15.0
+gotrue==2.12.0
+postgrest==0.18.0
+realtime==2.0.6
+storage3==0.11.3
+supafunc==0.9.4
 
-pydantic>=2.0,<3.0
-pypdf>=4.0.0
-python-multipart>=0.0.9
-python-dotenv>=1.0.1
-python-jose[cryptography]>=3.3.0
+pydantic==2.10.6
+pypdf==4.3.1
+python-multipart==0.0.9
+python-dotenv==1.0.1
+python-jose[cryptography]==3.3.0
 
-# Google AI — only one SDK
+# Google AI — one SDK only
 google-genai>=2.0.0
 
-Pillow
-pypdfium2
-boto3>=1.34.69
+Pillow==10.4.0
+pypdfium2==4.30.0
+boto3==1.34.69
 
-# httpx — satisfies both google-genai (>=0.28.1) and supabase 2.15
+# httpx — the pin that resolves everything
 httpx==0.28.1
-h2>=4.0.0,<5
-hpack>=4.0.0,<5
-httpcore>=1.0.0,<2
+h2==4.1.0
+hpack==4.0.1
+httpcore==1.0.5
 
 groq>=0.9.0
-reportlab
-pymupdf
-python-docx>=1.1.0
-redis>=5.0.0
-youtube-transcript-api
+reportlab==4.2.2
+pymupdf==1.24.9
+python-docx==1.1.0
+redis==5.0.8
+youtube-transcript-api==0.6.2
 yt-dlp>=2024.11.4
-websockets>=11,<16
+websockets==13.1
