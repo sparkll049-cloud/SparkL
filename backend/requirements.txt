@@ -1,13 +1,13 @@
 fastapi>=0.110.0
 uvicorn>=0.28.0
 
-# Supabase stack — upgraded to support httpx>=0.28
+# Supabase stack — all versions confirmed on PyPI
 supabase==2.15.0
 gotrue==2.12.0
 postgrest==0.18.0
 realtime==2.0.6
 storage3==0.11.3
-supafunc==0.7.1
+supafunc==0.10.2
 
 pydantic>=2.0,<3.0
 pypdf>=4.0.0
@@ -15,7 +15,7 @@ python-multipart>=0.0.9
 python-dotenv>=1.0.1
 python-jose[cryptography]==3.4.0
 
-# Google AI — needs httpx>=0.28.1
+# Google AI
 google-genai>=2.0.0
 google-generativeai
 
@@ -23,7 +23,7 @@ Pillow
 pypdfium2
 boto3==1.34.69
 
-# httpx pinned to satisfy google-genai AND new supabase stack
+# httpx — satisfies both google-genai and new supabase stack
 httpx==0.28.1
 h2>=4.0.0,<5
 hpack>=4.0.0,<5
