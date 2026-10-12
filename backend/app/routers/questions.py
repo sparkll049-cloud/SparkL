@@ -1,14 +1,18 @@
 """
-Student-facing past-question API.
+Student-facing past-question API + AI quiz generation.
 """
 from __future__ import annotations
 
-from typing import Optional
+import json
+import re
+from typing import Literal, Optional
 from uuid import UUID
 
+import google.generativeai as genai
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from app.supabase_client import supabase
+from app.config import settings  # expects settings.GEMINI_API_KEY
 
 router = APIRouter(prefix="/api/questions", tags=["Questions"])
 
@@ -17,6 +21,12 @@ PROCESSED_COLUMNS = (
     "option_a, option_b, option_c, option_d, "
     "correct_answer, model_answer, explanation, topic_tag, difficulty, marks"
 )
+
+# ── Configure Gemini ───────────────────────────────────────────────────────────
+
+genai.configure(api_key=settings.GEMINI_API_KEY)
+
+GEMINI_MODEL = "gemini-3.1-flash-lite"  # stable since May 2026, fast + cheap
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
@@ -102,9 +112,6 @@ def _user_enrolled_in_course(user_id: UUID, course_id: str) -> bool:
 
 
 # ── Safe Supabase query helper ─────────────────────────────────────────────────
-# Wraps any Supabase execute() call and returns an empty-data result on any
-# error (including the Cloudflare 1101 "Worker threw exception" HTML responses
-# that the postgrest client re-raises as APIError).
 
 class _EmptyResult:
     data = []
@@ -115,9 +122,137 @@ def _safe(fn):
     try:
         return fn()
     except Exception as exc:
-        # Log but don't crash the endpoint
         print(f"[supabase] query failed (returning empty): {exc}")
         return _EmptyResult()
+
+
+# ── Quiz: helpers ──────────────────────────────────────────────────────────────
+
+def _get_paper_text(question_id: str) -> tuple[str, str]:
+    """
+    Returns (paper_title, source_text) for the given past question.
+    source_text is built from extracted_text + any processed questions.
+    """
+    paper_res = (
+        supabase.table("past_questions")
+        .select("id, title, extracted_text, status, uploaded_by")
+        .eq("id", question_id)
+        .maybe_single()
+        .execute()
+    )
+    if not paper_res.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    row = paper_res.data
+    title = row.get("title", "Past Question Paper")
+    extracted = (row.get("extracted_text") or "").strip()
+
+    processed_res = (
+        supabase.table("questions")
+        .select(
+            "question_number, question_text, option_a, option_b, option_c, option_d, "
+            "correct_answer, explanation, topic_tag"
+        )
+        .eq("past_question_id", question_id)
+        .order("question_number")
+        .execute()
+    )
+    processed = processed_res.data or []
+
+    processed_text = ""
+    if processed:
+        lines = []
+        for q in processed:
+            lines.append(f"Q{q['question_number']}: {q['question_text']}")
+            for opt in ["a", "b", "c", "d"]:
+                val = q.get(f"option_{opt}")
+                if val:
+                    lines.append(f"  ({opt.upper()}) {val}")
+            if q.get("correct_answer"):
+                lines.append(f"  Answer: {q['correct_answer'].upper()}")
+            if q.get("explanation"):
+                lines.append(f"  Explanation: {q['explanation']}")
+        processed_text = "\n".join(lines)
+
+    source_text = "\n\n".join(filter(None, [extracted, processed_text]))
+    if not source_text:
+        raise HTTPException(
+            status_code=422,
+            detail="This paper has no extractable content yet. Try again after processing.",
+        )
+
+    return title, source_text
+
+
+DIFFICULTY_INSTRUCTIONS = {
+    "easy": (
+        "Generate EASY questions — straightforward recall of definitions, basic facts, "
+        "and fundamental concepts. A student who read the material once should get most right."
+    ),
+    "medium": (
+        "Generate MEDIUM difficulty questions — exam-level challenge. Mix direct recall with "
+        "application and understanding. Typical of what appears in Nigerian university exams."
+    ),
+    "hard": (
+        "Generate HARD questions — analytical, tricky distractors, multi-step reasoning. "
+        "Push the student to think critically. Some questions should combine concepts."
+    ),
+}
+
+
+def _build_prompt(title: str, source_text: str, difficulty: str, count: int) -> str:
+    difficulty_instruction = DIFFICULTY_INSTRUCTIONS.get(difficulty, DIFFICULTY_INSTRUCTIONS["medium"])
+    return f"""You are an expert Nigerian university exam question writer for SparkL, a student exam-prep platform.
+
+Your task: Generate {count} original MCQ questions based on the academic content below.
+
+STRICT RULES:
+1. DO NOT copy questions word-for-word from the source material.
+2. REPHRASE, reframe, and vary the wording every time — students may have seen the original.
+3. {difficulty_instruction}
+4. Every question must have exactly 4 options (A, B, C, D) with only ONE correct answer.
+5. Distractors must be plausible, not obviously wrong.
+6. Write clear, concise explanations for the correct answer.
+7. Vary question formats: definition, application, "which of the following", calculation, scenario-based.
+8. Do NOT include question numbers like "1." in the question_text field.
+9. Return ONLY valid JSON — no markdown fences, no preamble, no extra text.
+
+PAPER: {title}
+
+SOURCE CONTENT:
+{source_text[:6000]}
+
+Return this exact JSON structure:
+{{
+  "questions": [
+    {{
+      "question_number": 1,
+      "question_text": "...",
+      "options": {{
+        "a": "...",
+        "b": "...",
+        "c": "...",
+        "d": "..."
+      }},
+      "correct_answer": "a",
+      "explanation": "..."
+    }}
+  ]
+}}"""
+
+
+def _extract_json(raw: str) -> dict:
+    cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`").strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]+\}", cleaned)
+        if match:
+            return json.loads(match.group())
+        raise HTTPException(
+            status_code=500,
+            detail="AI returned an unexpected response. Please try again.",
+        )
 
 
 # ── Global search ──────────────────────────────────────────────────────────────
@@ -126,8 +261,7 @@ def _safe(fn):
 
 @router.get("/search")
 async def search_questions(
-    q: str = Query(..., min_length=2),   # min 2 chars — prevents single-char
-                                          # bursts that overload Supabase Workers
+    q: str = Query(..., min_length=2),
     limit: int = Query(default=10, ge=1, le=30),
     user: dict = Depends(get_current_user),
 ):
@@ -135,7 +269,6 @@ async def search_questions(
     if not term:
         return {"results": [], "courses": [], "query": term}
 
-    # ── Questions matching by title ────────────────────────────────────────────
     questions_res = _safe(lambda: (
         supabase.table("past_questions")
         .select(
@@ -153,7 +286,6 @@ async def search_questions(
         .execute()
     ))
 
-    # ── Courses matching by name ───────────────────────────────────────────────
     courses_res = _safe(lambda: (
         supabase.table("courses")
         .select(
@@ -166,7 +298,6 @@ async def search_questions(
         .execute()
     ))
 
-    # ── Departments matching by name ───────────────────────────────────────────
     depts_res = _safe(lambda: (
         supabase.table("departments")
         .select("id, name, institution:institutions(name)")
@@ -175,7 +306,6 @@ async def search_questions(
         .execute()
     ))
 
-    # ── Institutions matching by name ──────────────────────────────────────────
     inst_res = _safe(lambda: (
         supabase.table("institutions")
         .select("id, name")
@@ -184,7 +314,6 @@ async def search_questions(
         .execute()
     ))
 
-    # ── Collect department IDs from dept + institution matches ─────────────────
     dept_ids: list[str] = [d["id"] for d in (depts_res.data or [])]
 
     inst_ids = [i["id"] for i in (inst_res.data or [])]
@@ -212,7 +341,6 @@ async def search_questions(
         ))
         dept_courses = dept_courses_res.data or []
 
-    # ── Deduplicate and shape course results ───────────────────────────────────
     seen_course_ids: set[str] = set()
     merged_courses: list[dict] = []
 
@@ -229,7 +357,6 @@ async def search_questions(
             "institution": inst.get("name"),
         })
 
-    # ── Shape question results ─────────────────────────────────────────────────
     shaped_questions: list[dict] = []
     for row in (questions_res.data or []):
         course = row.get("course") or {}
@@ -298,6 +425,15 @@ async def get_processed_questions(
         .execute()
     )
     return response.data or []
+
+
+# ── Quiz endpoint ──────────────────────────────────────────────────────────────
+# Must stay AFTER /{question_id} and /{question_id}/processed but the path
+# /api/quiz/{question_id} lives under a separate prefix in quiz.py normally.
+# If you want it here instead, register it as shown below.
+# Frontend calls: GET /api/quiz/{questionId}?difficulty=medium&count=10&fresh=true
+# So keep this in a separate quiz router (quiz.py) OR mount it here with a
+# different prefix. Recommended: keep quiz.py separate and register both routers.
 
 
 # ── Section routes ─────────────────────────────────────────────────────────────
